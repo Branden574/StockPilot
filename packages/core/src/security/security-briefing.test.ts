@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   BRIEFING_FORMER_MEMBER,
   BRIEFING_SUPPORT_ACTOR,
+  BRIEFING_UNNAMED_MEMBER,
   PLATFORM_BRIEFING_ROWS_SHOWN,
+  briefingPersonLabel,
   briefingPersonNotes,
   briefingPolicyDirection,
   briefingPolicyLabel,
@@ -11,10 +13,10 @@ import {
   briefingSeverityLabel,
   buildPlatformSecurityBriefing,
   buildSecurityBriefing,
-  countBriefingChanges,
   describeBriefingChange,
   extractBriefingChanges,
   type BriefingAuditRow,
+  type BriefingChange,
   type BriefingChangeCounts,
   type BriefingEventsInput,
   type BriefingMembersInput,
@@ -55,7 +57,6 @@ function members(over: Partial<BriefingMembersInput> = {}): BriefingMembersInput
     membersWithIdleSignIns: 0,
     idleSignIns: 0,
     idleAfterDays: 30,
-    adminsJoinedThisWeek: 0,
     signInsReportedThisWeek: 0,
     ...over,
   };
@@ -71,7 +72,7 @@ function events(
 
 function changes(over: Partial<BriefingChangeCounts> = {}): BriefingChangeCounts {
   return {
-    adminsPromoted: 0,
+    adminsAdded: 0,
     adminsDemotedOrRemoved: 0,
     ownershipMoved: 0,
     policyLoosened: 0,
@@ -199,6 +200,43 @@ describe('one organization: each rule at its boundary', () => {
     expect(b.goodShape).not.toContain('Blocked activity is steady or down.');
   });
 
+  it('"steady or down" is said only when no category went up at all', () => {
+    const LINE = 'Blocked activity is steady or down.';
+    // The same and down: said.
+    expect(
+      briefing({ events: events({ bots: counts(30) }, { bots: counts(30) }) }).goodShape,
+    ).toContain(LINE);
+    expect(
+      briefing({ events: events({ bots: counts(29) }, { bots: counts(30) }) }).goodShape,
+    ).toContain(LINE);
+    // One more than last week, far below the rising rule: not said, no item,
+    // and the status is still good. The table says "up from 30".
+    const up = briefing({ events: events({ bots: counts(31) }, { bots: counts(30) }) });
+    expect(up.goodShape).not.toContain(LINE);
+    expect(up.items).toEqual([]);
+    expect(up.unchecked).toEqual([]);
+    expect(up.status).toBe('good');
+    expect(up.categories?.[0]?.blockedChange).toBe('up from 30');
+    // The reviewer's two cases.
+    expect(
+      briefing({ events: events({ exploit: counts(55) }, { exploit: counts(30) }) }).goodShape,
+    ).not.toContain(LINE);
+    expect(briefing({ events: events({ exploit: counts(19) }) }).goodShape).not.toContain(LINE);
+    // One category up is enough, whatever the others did.
+    expect(
+      briefing({
+        events: events(
+          { bots: counts(1), exploit: counts(2) },
+          { bots: counts(50), exploit: counts(1) },
+        ),
+      }).goodShape,
+    ).not.toContain(LINE);
+    // Flagged and allowed events going up do not count: the line is about blocked.
+    expect(
+      briefing({ events: events({ bots: counts(3, 9, 9) }, { bots: counts(3, 1, 1) }) }).goodShape,
+    ).toContain(LINE);
+  });
+
   it('rising: twice the week before is, one short of twice is not', () => {
     expect(ids(briefing({ events: events({ bots: counts(40) }, { bots: counts(20) }) }))).toEqual([
       'category_rising:bots',
@@ -277,23 +315,36 @@ describe('one organization: each rule at its boundary', () => {
     ).toBe('1 member has 1 sign-in not used in 30 days.');
   });
 
-  it('admin changes: low, from the members who joined and from the audit counts', () => {
-    const joined = briefing({ members: members({ adminsJoinedThisWeek: 1 }) });
-    expect(ids(joined)).toEqual(['admin_changes']);
-    expect(item(joined, 'admin_changes').severity).toBe('low');
-    expect(item(joined, 'admin_changes').headline).toBe('1 admin change this week');
-    expect(item(joined, 'admin_changes').whatWeSee).toBe('1 admin joined.');
+  it('admin changes: low; admins added is one number of distinct people, each number on its own', () => {
+    const added = briefing({ changes: changes({ adminsAdded: 2 }) });
+    expect(ids(added)).toEqual(['admin_changes']);
+    expect(item(added, 'admin_changes').severity).toBe('low');
+    expect(item(added, 'admin_changes').headline).toBe('2 admins added this week');
+    expect(item(added, 'admin_changes').whatWeSee).toBe('2 members became an admin or the owner.');
+    expect(item(briefing({ changes: changes({ adminsAdded: 1 }) }), 'admin_changes').headline).toBe(
+      '1 admin added this week',
+    );
 
     const all = briefing({
-      members: members({ adminsJoinedThisWeek: 2 }),
-      changes: changes({ adminsPromoted: 1, adminsDemotedOrRemoved: 3, ownershipMoved: 1 }),
+      changes: changes({ adminsAdded: 2, adminsDemotedOrRemoved: 3, ownershipMoved: 1 }),
     });
-    expect(item(all, 'admin_changes').headline).toBe('7 admin changes this week');
-    expect(item(all, 'admin_changes').whatWeSee).toBe(
-      '2 admins joined. 1 member was made an admin. 3 admins were removed or moved to another role. Ownership moved once.',
+    // Never one total: no "6" anywhere.
+    expect(item(all, 'admin_changes').headline).toBe(
+      '2 admins added, 3 admins removed or moved to another role, ownership moved once this week',
     );
+    expect(item(all, 'admin_changes').whatWeSee).toBe(
+      '2 members became an admin or the owner. 3 admins were removed or moved to another role. Ownership moved once.',
+    );
+    expect(JSON.stringify(item(all, 'admin_changes'))).not.toMatch(/\b6\b/);
     expect(all.goodShape).not.toContain('No admin or sign-in policy change this week.');
     expect(all.status).toBe('worth_a_look');
+
+    expect(
+      item(briefing({ changes: changes({ ownershipMoved: 2 }) }), 'admin_changes').headline,
+    ).toBe('Ownership moved twice this week');
+    expect(
+      item(briefing({ changes: changes({ adminsDemotedOrRemoved: 1 }) }), 'admin_changes').headline,
+    ).toBe('1 admin removed or moved to another role this week');
   });
 
   it('policy changes: loosened is medium, tightened or another change is low', () => {
@@ -328,7 +379,7 @@ describe('one organization: a part that could not be read', () => {
     expect(b.items).toEqual([]);
     expect(b.goodShape).toEqual([]);
     expect(b.unchecked).toEqual([
-      'Second steps, reported sign-ins and new admins could not be checked.',
+      'Second steps and reported sign-ins could not be checked.',
       'Blocked and flagged activity could not be checked.',
       'Admin and sign-in policy changes could not be checked.',
     ]);
@@ -338,10 +389,12 @@ describe('one organization: a part that could not be read', () => {
 
   it('members not read: no line about second steps or reported sign-ins, the rest stands', () => {
     const b = briefing({ members: null });
-    expect(b.unchecked).toEqual([
-      'Second steps, reported sign-ins and new admins could not be checked.',
+    expect(b.unchecked).toEqual(['Second steps and reported sign-ins could not be checked.']);
+    // The week's changes are the database's own count: they need no member read.
+    expect(b.goodShape).toEqual([
+      'Blocked activity is steady or down.',
+      'No admin or sign-in policy change this week.',
     ]);
-    expect(b.goodShape).toEqual(['Blocked activity is steady or down.']);
     expect(b.status).toBe('incomplete');
   });
 
@@ -352,19 +405,18 @@ describe('one organization: a part that could not be read', () => {
     expect(b.categories).toBeNull();
   });
 
-  it('changes not read: no "no change" line, and the admins who joined are still shown', () => {
+  it('changes not read: no "no change" line and no admin item, whatever the members read holds', () => {
     const quiet = briefing({ changes: null });
     expect(quiet.unchecked).toEqual(['Admin and sign-in policy changes could not be checked.']);
     expect(quiet.goodShape).not.toContain('No admin or sign-in policy change this week.');
-    const joined = briefing({ members: members({ adminsJoinedThisWeek: 1 }), changes: null });
-    expect(ids(joined)).toEqual(['admin_changes']);
+    expect(ids(quiet)).toEqual([]);
+    expect(quiet.status).toBe('incomplete');
   });
 
-  it('members not read: a promotion from the audit counts is still shown, and no "no change" line', () => {
-    const b = briefing({ members: null, changes: changes({ adminsPromoted: 1 }) });
+  it('members not read: the admins added are still shown, from the counts alone', () => {
+    const b = briefing({ members: null, changes: changes({ adminsAdded: 1 }) });
     expect(ids(b)).toEqual(['admin_changes']);
-    const quiet = briefing({ members: null, changes: changes() });
-    expect(quiet.goodShape).not.toContain('No admin or sign-in policy change this week.');
+    expect(b.goodShape).not.toContain('No admin or sign-in policy change this week.');
   });
 
   it('something found and something unread: the bottom line says both', () => {
@@ -381,10 +433,9 @@ describe('one organization: the sort, the status and the bottom line', () => {
         withoutSecondStep: 6,
         adminsWithoutSecondStep: 1,
         signInsReportedThisWeek: 2,
-        adminsJoinedThisWeek: 1,
       }),
       events: events({ exploit: counts(30, 4), bots: counts(25) }),
-      changes: changes({ policyLoosened: 1 }),
+      changes: changes({ policyLoosened: 1, adminsAdded: 1 }),
     });
     expect(b.items.map((i) => [i.id, i.severity])).toEqual([
       ['admins_without_second_step', 'high'],
@@ -401,7 +452,7 @@ describe('one organization: the sort, the status and the bottom line', () => {
   });
 
   it('only low items: worth a look', () => {
-    const b = briefing({ changes: changes({ policyTightened: 1, adminsPromoted: 1 }) });
+    const b = briefing({ changes: changes({ policyTightened: 1, adminsAdded: 1 }) });
     expect(b.status).toBe('worth_a_look');
     expect(b.bottomLine).toBe('Nothing needs attention. 2 things are worth a look.');
   });
@@ -537,7 +588,6 @@ const LOUD_ORGANIZATION = () =>
       adminsWithoutSecondStep: 3,
       membersWithIdleSignIns: 5,
       idleSignIns: 8,
-      adminsJoinedThisWeek: 2,
       signInsReportedThisWeek: 2,
     }),
     events: events(
@@ -551,7 +601,7 @@ const LOUD_ORGANIZATION = () =>
       { password_guessing: counts(9) },
     ),
     changes: changes({
-      adminsPromoted: 1,
+      adminsAdded: 3,
       adminsDemotedOrRemoved: 2,
       ownershipMoved: 2,
       policyLoosened: 1,
@@ -623,7 +673,6 @@ const LOUD_PLATFORM = () =>
             withoutSecondStep: 9,
             adminsWithoutSecondStep: 3,
             signInsReportedThisWeek: 2,
-            adminsJoinedThisWeek: 1,
           }),
         ],
         { accounts: 1204, accountsWithoutSecondStep: 310, adminAccountsWithoutSecondStep: 4 },
@@ -640,7 +689,9 @@ const LOUD_PLATFORM = () =>
         passkeyCountersWentBack: 1,
       }),
       changes: {
-        organizations: [{ organizationId: ORG_A, ...changes({ policyLoosened: 1 }) }],
+        organizations: [
+          { organizationId: ORG_A, ...changes({ policyLoosened: 1, adminsAdded: 1 }) },
+        ],
         truncated: false,
       },
       passkeyRepair: { accounts: 1000, capped: true },
@@ -947,9 +998,11 @@ describe('admin changes from audit rows', () => {
     expect(kinds([{ ...accepted, role: 'admin', alreadyMember: true }])).toEqual([]);
   });
 
-  it('the invitation wins over a role change of the same member on the same UTC day', () => {
+  describe('an invitation and a role change of the same member on the same UTC day', () => {
+    // The acceptance is seen twice: the database writes the role row first,
+    // then the app writes the acceptance.
     const invite = auditRow({
-      createdAt: '2026-11-22T23:59:58+00:00',
+      createdAt: '2026-11-22T10:00:01+00:00',
       event: 'user.invite.accepted',
       actorUserId: MEMBER,
       targetUserId: null,
@@ -959,38 +1012,133 @@ describe('admin changes from audit rows', () => {
       after: null,
       role: 'admin',
     });
-    const databaseRow = auditRow({
-      createdAt: '2026-11-22T23:59:57+00:00',
+    const echo = auditRow({
+      createdAt: '2026-11-22T10:00:00+00:00',
       actorUserId: null,
       madeAs: 'service_role',
     });
-    expect(kinds([invite, databaseRow])).toEqual(['admin_joined']);
-    // Another member's role change the same day stands.
-    expect(kinds([invite, { ...databaseRow, targetUserId: OTHER }])).toEqual([
-      'admin_joined',
-      'admin_promoted',
-    ]);
-    // The next UTC day stands.
-    expect(kinds([invite, { ...databaseRow, createdAt: '2026-11-23T00:00:00+00:00' }])).toEqual([
-      'admin_promoted',
-      'admin_joined',
-    ]);
-    // The day is the UTC day, whatever offset the time is written with.
-    expect(kinds([invite, { ...databaseRow, createdAt: '2026-11-22T19:00:00-05:00' }])).toEqual([
-      'admin_promoted',
-      'admin_joined',
-    ]);
-    // An "already a member" press folds nothing.
-    expect(kinds([{ ...invite, role: null, alreadyMember: true }, databaseRow])).toEqual([
-      'admin_promoted',
-    ]);
-    // An invitation to any role folds: here it turned an admin row into staff.
-    expect(
-      kinds([
-        { ...invite, role: 'staff' },
-        { ...databaseRow, before: { role: 'admin' }, after: { role: 'staff' } },
-      ]),
-    ).toEqual([]);
+
+    it('the true duplicate folds: the acceptance is one line, "joined as an admin"', () => {
+      expect(kinds([invite, echo])).toEqual(['admin_joined']);
+      // Recorded at the very moment of the acceptance: still its echo.
+      expect(kinds([invite, { ...echo, createdAt: invite.createdAt }])).toEqual(['admin_joined']);
+      // An invitation as staff and its echo: neither is an admin change.
+      expect(
+        kinds([
+          { ...invite, role: 'staff' },
+          { ...echo, before: null, after: { role: 'staff' } },
+        ]),
+      ).toEqual([]);
+    });
+
+    it('invited as staff and made an admin the same day: the promotion is listed, with the member', () => {
+      const promotion = auditRow({ createdAt: '2026-11-22T15:00:00+00:00' });
+      const list = extractBriefingChanges([promotion, { ...invite, role: 'staff' }]);
+      expect(list).toEqual([
+        {
+          kind: 'admin_promoted',
+          at: promotion.createdAt,
+          actorUserId: ACTOR,
+          subjectUserId: MEMBER,
+          fromRole: 'staff',
+          toRole: 'admin',
+        },
+      ]);
+      expect(
+        describeBriefingChange(list[0]!, {
+          actor: 'Dana Example (dana@example.com)',
+          subject: 'Alex Example (alex@example.com)',
+        }),
+      ).toBe(
+        'Alex Example (alex@example.com) was made an admin by Dana Example (dana@example.com).',
+      );
+      // The same when the promotion was recorded before the acceptance row
+      // that day: the invitation gave staff, the change ends at admin.
+      expect(
+        kinds([
+          { ...invite, role: 'staff' },
+          { ...promotion, createdAt: '2026-11-22T09:00:00+00:00' },
+        ]),
+      ).toEqual(['admin_promoted']);
+    });
+
+    it('invited as staff, made an admin and moved back the same day: both are listed', () => {
+      expect(
+        kinds([
+          auditRow({
+            createdAt: '2026-11-22T17:00:00+00:00',
+            before: { role: 'admin' },
+            after: { role: 'staff' },
+          }),
+          auditRow({ createdAt: '2026-11-22T15:00:00+00:00' }),
+          { ...invite, role: 'staff' },
+        ]),
+      ).toEqual(['admin_demoted', 'admin_promoted']);
+    });
+
+    it('invited as an admin and moved to staff the same day: joined and demoted are both listed', () => {
+      expect(
+        kinds([
+          auditRow({
+            createdAt: '2026-11-22T17:00:00+00:00',
+            before: { role: 'admin' },
+            after: { role: 'staff' },
+          }),
+          invite,
+          echo,
+        ]),
+      ).toEqual(['admin_demoted', 'admin_joined']);
+    });
+
+    it('a change to the invited role AFTER the acceptance is a real one: listed', () => {
+      // Invited as an admin, moved to staff, made an admin again that day.
+      expect(
+        kinds([
+          auditRow({ createdAt: '2026-11-22T18:00:00+00:00' }),
+          auditRow({
+            createdAt: '2026-11-22T17:00:00+00:00',
+            before: { role: 'admin' },
+            after: { role: 'staff' },
+          }),
+          invite,
+          echo,
+        ]),
+      ).toEqual(['admin_promoted', 'admin_demoted', 'admin_joined']);
+      // One millisecond after the acceptance is after it.
+      expect(kinds([invite, { ...echo, createdAt: '2026-11-22T10:00:01.001+00:00' }])).toEqual([
+        'admin_promoted',
+        'admin_joined',
+      ]);
+    });
+
+    it('only the same member, the same UTC day and a real acceptance fold', () => {
+      // Another member's role change the same day stands.
+      expect(kinds([invite, { ...echo, targetUserId: OTHER }])).toEqual([
+        'admin_joined',
+        'admin_promoted',
+      ]);
+      // A row that names no member is never folded.
+      expect(kinds([invite, { ...echo, targetUserId: null }])).toEqual([
+        'admin_joined',
+        'admin_promoted',
+      ]);
+      // The day before, by the UTC day, whatever offset the time is written with.
+      expect(kinds([invite, { ...echo, createdAt: '2026-11-21T23:59:59+00:00' }])).toEqual([
+        'admin_joined',
+        'admin_promoted',
+      ]);
+      expect(kinds([invite, { ...echo, createdAt: '2026-11-21T18:59:59-05:00' }])).toEqual([
+        'admin_joined',
+        'admin_promoted',
+      ]);
+      // An "already a member" press folds nothing, whatever role it names.
+      expect(kinds([{ ...invite, alreadyMember: true }, echo])).toEqual(['admin_promoted']);
+      expect(kinds([{ ...invite, role: null, alreadyMember: true }, echo])).toEqual([
+        'admin_promoted',
+      ]);
+      // An acceptance that names no role folds nothing.
+      expect(kinds([{ ...invite, role: null }, echo])).toEqual(['admin_promoted']);
+    });
   });
 
   it('an ownership move is never folded by an invitation the same UTC day', () => {
@@ -1043,14 +1191,15 @@ describe('admin changes from audit rows', () => {
         toRole: 'admin',
       },
     ]);
-    expect(countBriefingChanges(changes, 0)).toMatchObject({
-      ownershipMoved: 1,
-      adminsPromoted: 0,
-      adminsDemotedOrRemoved: 0,
-    });
+    expect(weekTally(changes, 0)).toEqual({ ownershipMoved: 1 });
     // The new owner's row alone is still a move, whatever the invitation gave.
     expect(kinds([toOwner, invite])).toEqual(['ownership_moved', 'admin_joined']);
     expect(kinds([toOwner, { ...invite, role: 'staff' }])).toEqual(['ownership_moved']);
+    // Even an invitation that itself gave owner, recorded after the role
+    // row (the shape of an acceptance seen twice), sets no owner row aside.
+    expect(
+      kinds([{ ...invite, createdAt: '2026-11-22T15:00:01+00:00', role: 'owner' }, toOwner]),
+    ).toEqual(['admin_joined', 'ownership_moved']);
     // The owner who accepted an invitation that day and then handed over: the same.
     expect(kinds([fromOwner, { ...invite, actorUserId: OTHER }])).toEqual([
       'ownership_moved',
@@ -1147,7 +1296,30 @@ describe('admin changes from audit rows', () => {
         inRoleRows: false,
       },
     ]);
-    expect(countBriefingChanges(list, 0).ownershipMoved).toBe(0);
+    expect(weekTally(list, 0)).toEqual({});
+    // The app's row a little BEFORE the database's rows (a web clock running
+    // behind) is still that move's row: one line, with the names.
+    const databaseMove = auditRow({
+      createdAt: '2026-11-10T10:00:00.400+00:00',
+      actorUserId: null,
+      before: { role: 'admin' },
+      after: { role: 'owner' },
+    });
+    expect(extractBriefingChanges([appRow, databaseMove])).toEqual([
+      {
+        kind: 'ownership_moved',
+        at: databaseMove.createdAt,
+        actorUserId: ACTOR,
+        fromUserId: ACTOR,
+        toUserId: MEMBER,
+        inRoleRows: true,
+      },
+    ]);
+    // More than a few seconds before is not.
+    expect(kinds([appRow, { ...databaseMove, createdAt: '2026-11-10T10:00:06+00:00' }])).toEqual([
+      'ownership_moved',
+      'ownership_moved',
+    ]);
     // An app row long after a database move is not that move's.
     const databaseRow = auditRow({
       createdAt: '2026-11-10T09:00:00+00:00',
@@ -1211,7 +1383,40 @@ describe('admin changes from audit rows', () => {
   });
 });
 
-describe("the week's counts from the list: the same numbers the database counts", () => {
+/**
+ * What the lines of a list add up to for the rows at or after `since`, by
+ * the names of the database's counts. A TEST'S TALLY ONLY: the app never
+ * counts the list (it is made from a capped number of rows); it shows the
+ * database's own counts. This pins that a line and a count agree about any
+ * one row. `admins_added_this_week` is not here: it is a count of distinct
+ * people that also reads the membership table.
+ */
+function weekTally(list: readonly BriefingChange[], since: number): Record<string, number> {
+  const tally: Record<string, number> = {};
+  const add = (key: string) => {
+    tally[key] = (tally[key] ?? 0) + 1;
+  };
+  for (const c of list) {
+    if (Date.parse(c.at) < since) continue;
+    if (c.kind === 'admin_promoted') add('adminsPromoted');
+    else if (c.kind === 'admin_demoted' || c.kind === 'admin_removed') {
+      add('adminsDemotedOrRemoved');
+    } else if (c.kind === 'ownership_moved') {
+      if (c.inRoleRows) add('ownershipMoved');
+    } else if (c.kind === 'policy_changed') {
+      add(
+        c.direction === 'loosened'
+          ? 'policyLoosened'
+          : c.direction === 'tightened'
+            ? 'policyTightened'
+            : 'policyChangedOther',
+      );
+    }
+  }
+  return tally;
+}
+
+describe("the list's lines and the database's counts agree about each row", () => {
   const SINCE = NOW - 7 * DAY;
   const inWeek = '2026-11-20T08:00:00+00:00';
 
@@ -1219,7 +1424,7 @@ describe("the week's counts from the list: the same numbers the database counts"
   const CASES: Array<{
     name: string;
     rows: BriefingAuditRow[];
-    want: Partial<BriefingChangeCounts>;
+    want: Record<string, number>;
   }> = [
     { name: 'a promotion', rows: [auditRow({ createdAt: inWeek })], want: { adminsPromoted: 1 } },
     {
@@ -1237,7 +1442,7 @@ describe("the week's counts from the list: the same numbers the database counts"
       want: { adminsDemotedOrRemoved: 2 },
     },
     {
-      name: 'an invitation and the database row of the same member the same day: the invite wins, and is not counted here',
+      name: 'an invitation as admin and its own role row: the invite wins, and is not a promotion',
       rows: [
         auditRow({
           createdAt: inWeek,
@@ -1251,6 +1456,34 @@ describe("the week's counts from the list: the same numbers the database counts"
         auditRow({ createdAt: inWeek, actorUserId: null, madeAs: 'service_role' }),
       ],
       want: {},
+    },
+    {
+      name: 'invited as staff and made an admin the same day: one promotion',
+      rows: [
+        auditRow({
+          createdAt: inWeek,
+          event: 'user.invite.accepted',
+          actorUserId: MEMBER,
+          targetUserId: null,
+          role: 'staff',
+          before: null,
+          after: null,
+        }),
+        auditRow({ createdAt: '2026-11-20T15:00:00+00:00' }),
+      ],
+      want: { adminsPromoted: 1 },
+    },
+    {
+      name: 'made an admin and moved back the same day: one of each',
+      rows: [
+        auditRow({ createdAt: inWeek }),
+        auditRow({
+          createdAt: '2026-11-20T15:00:00+00:00',
+          before: { role: 'admin' },
+          after: { role: 'staff' },
+        }),
+      ],
+      want: { adminsPromoted: 1, adminsDemotedOrRemoved: 1 },
     },
     {
       name: 'a transfer (two rows, one time) and the app row',
@@ -1319,15 +1552,13 @@ describe("the week's counts from the list: the same numbers the database counts"
   ];
 
   it.each(CASES)('$name', ({ rows, want }) => {
-    expect(countBriefingChanges(extractBriefingChanges(rows), SINCE)).toEqual(changes(want));
+    expect(weekTally(extractBriefingChanges(rows), SINCE)).toEqual(want);
   });
 
   it('the week starts seven days back, that moment included', () => {
     const at = (ms: number) => [auditRow({ createdAt: new Date(ms).toISOString() })];
-    expect(countBriefingChanges(extractBriefingChanges(at(SINCE)), SINCE).adminsPromoted).toBe(1);
-    expect(countBriefingChanges(extractBriefingChanges(at(SINCE - 1)), SINCE).adminsPromoted).toBe(
-      0,
-    );
+    expect(weekTally(extractBriefingChanges(at(SINCE)), SINCE)).toEqual({ adminsPromoted: 1 });
+    expect(weekTally(extractBriefingChanges(at(SINCE - 1)), SINCE)).toEqual({});
   });
 });
 
@@ -1385,6 +1616,69 @@ describe('a change in one sentence', () => {
     );
   });
 
+  it('a member is written with their email: the name they chose never stands alone', () => {
+    expect(briefingPersonLabel('Alex Example', 'alex@example.com')).toBe(
+      'Alex Example (alex@example.com)',
+    );
+    expect(briefingPersonLabel('  Alex Example  ', ' alex@example.com ')).toBe(
+      'Alex Example (alex@example.com)',
+    );
+    // No name: the email alone. No email: nothing to write.
+    expect(briefingPersonLabel(null, 'alex@example.com')).toBe('alex@example.com');
+    expect(briefingPersonLabel('   ', 'alex@example.com')).toBe('alex@example.com');
+    expect(briefingPersonLabel('Alex Example', null)).toBeNull();
+    expect(briefingPersonLabel('Alex Example', '  ')).toBeNull();
+    // A member who names themselves after the support label, or after the
+    // words for an unnamed person, still reads as themselves.
+    for (const chosen of [
+      BRIEFING_SUPPORT_ACTOR,
+      BRIEFING_FORMER_MEMBER,
+      BRIEFING_UNNAMED_MEMBER,
+    ]) {
+      const label = briefingPersonLabel(chosen, 'sam@example.com');
+      expect(label).toBe(`${chosen} (sam@example.com)`);
+      expect(label).not.toBe(chosen);
+    }
+    const loosened = {
+      kind: 'policy_changed' as const,
+      at,
+      actorUserId: ACTOR,
+      from: 'all_required',
+      to: 'optional',
+      direction: 'loosened' as const,
+    };
+    const byMember = describeBriefingChange(loosened, {
+      actor: briefingPersonLabel(BRIEFING_SUPPORT_ACTOR, 'sam@example.com'),
+    });
+    const bySupport = describeBriefingChange(loosened, { actor: BRIEFING_SUPPORT_ACTOR });
+    expect(byMember).toBe(
+      'The sign-in policy was loosened: Required for everyone to Optional by StockPilot support (sam@example.com).',
+    );
+    expect(bySupport).toBe(
+      'The sign-in policy was loosened: Required for everyone to Optional by StockPilot support.',
+    );
+    expect(byMember).not.toBe(bySupport);
+  });
+
+  it('a name or an email starts a sentence as it is written; only the stand-in words get a capital', () => {
+    expect(
+      describeBriefingChange({ ...base, kind: 'admin_promoted' }, { subject: 'alex@example.com' }),
+    ).toBe('alex@example.com was made an admin.');
+    expect(
+      describeBriefingChange(
+        { ...base, kind: 'admin_promoted' },
+        { subject: 'de la Example (dana@example.com)' },
+      ),
+    ).toBe('de la Example (dana@example.com) was made an admin.');
+    expect(
+      describeBriefingChange(
+        { ...base, kind: 'admin_promoted' },
+        { subject: BRIEFING_UNNAMED_MEMBER },
+      ),
+    ).toBe('A member was made an admin.');
+    expect(BRIEFING_UNNAMED_MEMBER).toBe('a member');
+  });
+
   it('a person the reader could not name is "a former member"; no actor, no "by"', () => {
     expect(describeBriefingChange({ ...base, kind: 'admin_promoted' })).toBe(
       'A former member was made an admin.',
@@ -1429,6 +1723,60 @@ describe('the platform briefing: its own items', () => {
     expect(b.bottomLine).toBe('No organization needs attention this week.');
     expect(b.organizations).toEqual([]);
     expect(b.organizationsChecked).toBe(true);
+    expect(b.organizationsAllChecked).toBe(true);
+    expect(b.organizationsUnchecked).toEqual([]);
+  });
+
+  it('"no organization ..." is said only when all three organization reads answered, whole', () => {
+    const CLAIM = 'No organization needs attention this week.';
+    const PARTS = {
+      members: 'Second steps and reported sign-ins could not be checked.',
+      events: 'Blocked and flagged activity could not be checked.',
+      changes: 'Admin and sign-in policy changes could not be checked.',
+    } as const;
+    // Each of the three failing alone, the other two quiet.
+    for (const failed of ['members', 'events', 'changes'] as const) {
+      const b = buildPlatformSecurityBriefing(platformInput({ [failed]: null }));
+      expect(b.organizations).toEqual([]);
+      expect(b.organizationsChecked).toBe(true);
+      expect(b.organizationsAllChecked).toBe(false);
+      expect(b.organizationsUnchecked).toEqual([PARTS[failed]]);
+      expect(b.unchecked).toContain(PARTS[failed]);
+      expect(b.bottomLine).not.toContain(CLAIM);
+      expect(b.bottomLine).toBe(
+        'Nothing needs attention in what could be checked. Some checks could not be made.',
+      );
+      // Never "N organizations have nothing to report" either.
+      expect(b.organizationsWithNothingToReport).toBeNull();
+      expect(b.status).toBe('incomplete');
+    }
+    // Two failed: both are named, in their order.
+    expect(
+      buildPlatformSecurityBriefing(platformInput({ members: null, changes: null }))
+        .organizationsUnchecked,
+    ).toEqual([PARTS.members, PARTS.changes]);
+    // A read cut short at its cap is not a whole answer.
+    const cut = buildPlatformSecurityBriefing(
+      platformInput({ events: platformEvents({ truncated: true }) }),
+    );
+    expect(cut.organizationsAllChecked).toBe(false);
+    expect(cut.bottomLine).not.toContain(CLAIM);
+    expect(cut.organizationsWithNothingToReport).toBeNull();
+    // The passkey repair read is not about the organizations: with it failed
+    // the sentence stands, and the bottom line says a check could not be made.
+    const repair = buildPlatformSecurityBriefing(platformInput({ passkeyRepair: null }));
+    expect(repair.organizationsAllChecked).toBe(true);
+    expect(repair.bottomLine).toBe(`${CLAIM} Some checks could not be made.`);
+    // Something found and something unread: the count stands.
+    const found = buildPlatformSecurityBriefing(
+      platformInput({
+        members: platformMembers([orgMembers(ORG_A, 'Example Academy', { withoutSecondStep: 1 })]),
+        events: null,
+      }),
+    );
+    expect(found.bottomLine).toBe(
+      '1 organization needs attention this week. Some checks could not be made.',
+    );
   });
 
   it('an unexplained passkey sign-in or a counter that went back: high, for one of either', () => {
@@ -1445,6 +1793,15 @@ describe('the platform briefing: its own items', () => {
       }),
     );
     expect(both.items[0]?.headline).toBe('3 passkey sign-ins did not look right this week');
+    // The second number is times seen, not passkeys: one passkey may be seen often.
+    expect(both.items[0]?.whatWeSee).toBe(
+      '2 sign-ins passed the passkey step in a way we cannot explain. A passkey looked like a copy of another once.',
+    );
+    expect(
+      buildPlatformSecurityBriefing(
+        platformInput({ events: platformEvents({ passkeyCountersWentBack: 3 }) }),
+      ).items[0]?.whatWeSee,
+    ).toBe('A passkey looked like a copy of another 3 times.');
     expect(both.bottomLine).toBe(
       '1 platform check needs attention. No organization needs attention this week.',
     );
@@ -1503,13 +1860,14 @@ describe('the platform briefing: its own items', () => {
     expect(b.status).toBe('incomplete');
     expect(b.goodShape).toEqual([]);
     expect(b.unchecked).toEqual([
-      'Second steps, reported sign-ins and new admins could not be checked.',
+      'Second steps and reported sign-ins could not be checked.',
       'Blocked and flagged activity could not be checked.',
       'Admin and sign-in policy changes could not be checked.',
       'Passkey set-ups that need repair could not be checked.',
     ]);
     expect(b.bottomLine).toBe('The organizations could not be checked.');
     expect(b.organizationsChecked).toBe(false);
+    expect(b.organizationsAllChecked).toBe(false);
     expect(b.totalsLine).toBeNull();
     expect(b.noOrganizationLine).toBeNull();
     expect(b.organizationsWithNothingToReport).toBeNull();
@@ -1542,7 +1900,6 @@ describe('the platform briefing: the organizations table', () => {
             withoutSecondStep: 5,
             adminsWithoutSecondStep: 1,
             signInsReportedThisWeek: 1,
-            adminsJoinedThisWeek: 1,
           }),
           orgMembers(ORG_B, 'Example Bakery', { withoutSecondStep: 2 }),
           orgMembers(ORG_C, 'Example Clinic'),
@@ -1564,7 +1921,8 @@ describe('the platform briefing: the organizations table', () => {
           {
             organizationId: ORG_A,
             ...changes({
-              adminsPromoted: 1,
+              adminsAdded: 2,
+              adminsDemotedOrRemoved: 3,
               ownershipMoved: 1,
               policyLoosened: 1,
               policyChangedOther: 1,
@@ -1588,7 +1946,10 @@ describe('the platform briefing: the organizations table', () => {
         adminsWithoutSecondStep: 1,
         membersWithoutSecondStep: 4,
         signInsReported: 1,
-        adminChanges: 3,
+        // Each its own number: never 2 + 3 + 1 in one cell.
+        adminsAdded: 2,
+        adminsRemoved: 3,
+        ownershipMoves: 1,
         policyChanges: 2,
       },
       {
@@ -1602,7 +1963,9 @@ describe('the platform briefing: the organizations table', () => {
         adminsWithoutSecondStep: 0,
         membersWithoutSecondStep: 2,
         signInsReported: 0,
-        adminChanges: 0,
+        adminsAdded: 0,
+        adminsRemoved: 0,
+        ownershipMoves: 0,
         policyChanges: 0,
       },
       {
@@ -1615,7 +1978,9 @@ describe('the platform briefing: the organizations table', () => {
         adminsWithoutSecondStep: 0,
         membersWithoutSecondStep: 0,
         signInsReported: 0,
-        adminChanges: 0,
+        adminsAdded: 0,
+        adminsRemoved: 0,
+        ownershipMoves: 0,
         policyChanges: 0,
       },
     ]);
@@ -1648,8 +2013,8 @@ describe('the platform briefing: the organizations table', () => {
       expect(row.adminsWithoutSecondStep).toBeNull();
       expect(row.membersWithoutSecondStep).toBeNull();
       expect(row.signInsReported).toBeNull();
-      // Admins who joined come from the members read: the sum is not whole.
-      expect(row.adminChanges).toBeNull();
+      // The admins added are the changes read's own number: still known.
+      expect(row.adminsAdded).not.toBeNull();
       expect(row.name).toBeNull();
       expect(row.blockedThisWeek).not.toBeNull();
     }
@@ -1657,9 +2022,12 @@ describe('the platform briefing: the organizations table', () => {
 
     const noChanges = buildPlatformSecurityBriefing({ ...three(), changes: null });
     for (const row of noChanges.organizations) {
-      expect(row.adminChanges).toBeNull();
+      expect(row.adminsAdded).toBeNull();
+      expect(row.adminsRemoved).toBeNull();
+      expect(row.ownershipMoves).toBeNull();
       expect(row.policyChanges).toBeNull();
     }
+    expect(noChanges.organizationsWithNothingToReport).toBeNull();
   });
 
   it('a read cut short at its cap: an organization missing from it is not known, not zero', () => {
@@ -1673,7 +2041,9 @@ describe('the platform briefing: the organizations table', () => {
     expect(bakery).toMatchObject({
       blockedThisWeek: null,
       flaggedThisWeek: null,
-      adminChanges: null,
+      adminsAdded: null,
+      adminsRemoved: null,
+      ownershipMoves: null,
       policyChanges: null,
       membersWithoutSecondStep: 2,
     });
@@ -1686,17 +2056,22 @@ describe('the platform briefing: the organizations table', () => {
     expect(cut.organizations.find((r) => r.organizationId === ORG_A)).toMatchObject({
       adminsWithoutSecondStep: null,
       signInsReported: null,
-      adminChanges: null,
+      adminsAdded: 2,
     });
   });
 
   it('an organization with only low items is worth a look, and is listed after the pressing ones', () => {
+    const added = {
+      organizations: [{ organizationId: ORG_B, ...changes({ adminsAdded: 1 }) }],
+      truncated: false,
+    };
     const b = buildPlatformSecurityBriefing(
       platformInput({
         members: platformMembers([
-          orgMembers(ORG_B, 'Example Bakery', { adminsJoinedThisWeek: 1 }),
+          orgMembers(ORG_B, 'Example Bakery'),
           orgMembers(ORG_A, 'Example Academy', { withoutSecondStep: 1 }),
         ]),
+        changes: added,
       }),
     );
     expect(b.organizations.map((r) => [r.name, r.attention])).toEqual([
@@ -1705,13 +2080,13 @@ describe('the platform briefing: the organizations table', () => {
     ]);
     const onlyLow = buildPlatformSecurityBriefing(
       platformInput({
-        members: platformMembers([
-          orgMembers(ORG_B, 'Example Bakery', { adminsJoinedThisWeek: 1 }),
-        ]),
+        members: platformMembers([orgMembers(ORG_B, 'Example Bakery')]),
+        changes: added,
       }),
     );
     expect(onlyLow.status).toBe('worth_a_look');
     expect(onlyLow.organizationsNeedingAttention).toBe(0);
+    expect(onlyLow.organizations[0]).toMatchObject({ adminsAdded: 1, adminsRemoved: 0 });
   });
 
   it('an organization with idle sign-ins and nothing else has nothing to report', () => {

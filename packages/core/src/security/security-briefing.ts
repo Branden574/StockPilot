@@ -6,8 +6,10 @@
  *
  * The item structure (what we see / why it matters / what to do, severity
  * words, a "could not check" state, an "in good shape" line, who can fix it)
- * is adapted from the security-briefing skill in
- * github.com/OCDEkr/Cite-Talk-2026. No text, logo or branding of it is used.
+ * is modelled on the security-briefing skill in
+ * github.com/OCDEkr/Cite-Talk-2026, as read at commit
+ * 7dd84d55626874c07af5586304ec34434d396b2e. No text, logo or branding of it
+ * is used.
  *
  * Pure rules: no I/O, no clock (the caller passes `now`). Every part of an
  * input is `value | null`. Null means "could not be read": it becomes a
@@ -29,8 +31,6 @@ export const BRIEFING_RISING_MIN_BLOCKED = 20;
 export const BRIEFING_RISING_FACTOR = 2;
 /** Two full weeks of history are needed before one week is compared with the other. */
 export const BRIEFING_COMPARE_DAYS = 14;
-/** What "this week" means for the changes list: the last seven days. */
-export const BRIEFING_WEEK_DAYS = 7;
 /** The most organizations the console's table lists. */
 export const PLATFORM_BRIEFING_ROWS_SHOWN = 50;
 
@@ -82,12 +82,21 @@ export interface BriefingMembersInput {
   idleSignIns: number;
   /** After how many days without use a sign-in counts as idle (the database's own number). */
   idleAfterDays: number;
-  adminsJoinedThisWeek: number;
   signInsReportedThisWeek: number;
 }
 
+/**
+ * One organization's admin and sign-in policy changes of the week, as the
+ * database counted them from every audit row of the week (never from a list
+ * that may be cut short).
+ */
 export interface BriefingChangeCounts {
-  adminsPromoted: number;
+  /**
+   * DISTINCT members who became an admin or owner this week, by joining or
+   * by promotion. One person is one, however they got there: this is the
+   * only number of admins added, and it is never added to another.
+   */
+  adminsAdded: number;
   adminsDemotedOrRemoved: number;
   ownershipMoved: number;
   policyLoosened: number;
@@ -159,6 +168,9 @@ const SEVERITY_RANK: Readonly<Record<BriefingSeverity, number>> = { high: 0, med
 const HISTORY_UNCHECKED =
   "There is not enough history yet to compare this week's blocked activity with last week's.";
 const HISTORY_CHANGE = 'not enough history to compare yet';
+const MEMBERS_UNCHECKED = 'Second steps and reported sign-ins could not be checked.';
+const EVENTS_UNCHECKED = 'Blocked and flagged activity could not be checked.';
+const CHANGES_UNCHECKED = 'Admin and sign-in policy changes could not be checked.';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -201,6 +213,13 @@ function hasTwoWeeksOfHistory(events: BriefingEventsInput, now: number): boolean
   if (events.oldestEventAt === null) return false;
   const oldest = Date.parse(events.oldestEventAt);
   return Number.isFinite(oldest) && oldest <= now - BRIEFING_COMPARE_DAYS * DAY_MS;
+}
+
+/** True when any category had more blocked this week than the week before. */
+function anyBlockedRise(events: BriefingEventsInput): boolean {
+  return categoriesOf(events).some(
+    (category) => own(events.thisWeek, category).blocked > own(events.lastWeek, category).blocked,
+  );
 }
 
 /** The rising rule, on BLOCKED events only. A week before of none counts as rising. */
@@ -366,32 +385,34 @@ function memberItems(m: BriefingMembersInput): BriefingItem[] {
 }
 
 /**
- * One item for the week's admin changes, from whichever parts were read:
- * admins who joined (the membership table) and promotions, demotions,
- * removals and ownership moves (the audit rows). Null when the known parts
- * are all zero.
+ * One item for the week's admin changes. Each number stands alone in the
+ * headline: admins added (distinct people), admins removed or moved to
+ * another role, and ownership moves are never added into one total. Null
+ * when all three are zero.
  */
-function adminChangesItem(
-  members: BriefingMembersInput | null,
-  changes: BriefingChangeCounts | null,
-): BriefingItem | null {
-  const joined = members?.adminsJoinedThisWeek ?? 0;
-  const promoted = changes?.adminsPromoted ?? 0;
-  const left = changes?.adminsDemotedOrRemoved ?? 0;
-  const moved = changes?.ownershipMoved ?? 0;
-  const total = joined + promoted + left + moved;
-  if (total === 0) return null;
+function adminChangesItem(changes: BriefingChangeCounts): BriefingItem | null {
+  const added = changes.adminsAdded;
+  const left = changes.adminsDemotedOrRemoved;
+  const moved = changes.ownershipMoved;
+  if (added + left + moved === 0) return null;
+  const headline: string[] = [];
   const seen: string[] = [];
-  if (joined > 0) seen.push(`${counted(joined, 'admin', 'admins')} joined.`);
-  if (promoted > 0) seen.push(`${counted(promoted, 'member was', 'members were')} made an admin.`);
+  if (added > 0) {
+    headline.push(`${counted(added, 'admin', 'admins')} added`);
+    seen.push(`${counted(added, 'member became', 'members became')} an admin or the owner.`);
+  }
   if (left > 0) {
+    headline.push(`${counted(left, 'admin', 'admins')} removed or moved to another role`);
     seen.push(`${counted(left, 'admin was', 'admins were')} removed or moved to another role.`);
   }
-  if (moved > 0) seen.push(`Ownership moved ${times(moved)}.`);
+  if (moved > 0) {
+    headline.push(`ownership moved ${times(moved)}`);
+    seen.push(`Ownership moved ${times(moved)}.`);
+  }
   return {
     id: 'admin_changes',
     severity: 'low',
-    headline: `${counted(total, 'admin change', 'admin changes')} this week`,
+    headline: `${capitalized(headline.join(', '))} this week`,
     whatWeSee: seen.join(' '),
     whyItMatters:
       'An admin has full control of the organization. A change nobody expected is worth a question.',
@@ -463,7 +484,7 @@ export function buildSecurityBriefing(input: SecurityBriefingInput): SecurityBri
   const unchecked: string[] = [];
 
   if (members === null) {
-    unchecked.push('Second steps, reported sign-ins and new admins could not be checked.');
+    unchecked.push(MEMBERS_UNCHECKED);
   } else {
     items.push(...memberItems(members));
     if (members.admins > 0 && members.adminsWithoutSecondStep === 0) {
@@ -475,25 +496,28 @@ export function buildSecurityBriefing(input: SecurityBriefingInput): SecurityBri
   }
 
   if (events === null) {
-    unchecked.push('Blocked and flagged activity could not be checked.');
+    unchecked.push(EVENTS_UNCHECKED);
   } else {
-    const found = eventItems(events, now, ORGANIZATION_EVENT_WORDS);
-    items.push(...found);
+    items.push(...eventItems(events, now, ORGANIZATION_EVENT_WORDS));
     if (!hasTwoWeeksOfHistory(events, now)) {
       unchecked.push(HISTORY_UNCHECKED);
-    } else if (!found.some((i) => i.id.startsWith(`${ORGANIZATION_EVENT_WORDS.risingId}:`))) {
+    } else if (!anyBlockedRise(events)) {
+      // Only when no category went up at all. A rise below the rising rule is
+      // neither an item nor "in good shape": the table shows it ("up from 30").
       goodShape.push('Blocked activity is steady or down.');
     }
   }
 
-  const adminChanges = adminChangesItem(members, changes);
-  if (adminChanges) items.push(adminChanges);
   if (changes === null) {
-    unchecked.push('Admin and sign-in policy changes could not be checked.');
+    unchecked.push(CHANGES_UNCHECKED);
   } else {
+    const adminChanges = adminChangesItem(changes);
+    if (adminChanges) items.push(adminChanges);
     const policy = policyChangesItem(changes);
     if (policy) items.push(policy);
-    if (members !== null && !adminChanges && !policy) {
+    // Only ever from the week's counts, which the database takes from every
+    // audit row of the week.
+    if (!adminChanges && !policy) {
       goodShape.push('No admin or sign-in policy change this week.');
     }
   }
@@ -600,9 +624,9 @@ export type BriefingChange =
       fromUserId: string | null;
       toUserId: string | null;
       /**
-       * True when the database's own role rows record the move. The week's
-       * count reads those rows only, so a move known from the app's row
-       * alone is listed and not counted.
+       * True when the database's own role rows record the move (the rows the
+       * database's weekly count reads). False for a move known from the
+       * app's row alone, one older than the database's rows.
        */
       inRoleRows: boolean;
     }
@@ -666,13 +690,20 @@ const utcDay = (iso: string): string => new Date(timeOf(iso)).toISOString().slic
  * move may come (it is written once the move has returned).
  */
 const OWNERSHIP_APP_ROW_WINDOW_MS = 2 * 60 * 1000;
+/**
+ * ... and how long before: a later try of the app's writer stamps its row
+ * with the web server's clock, which may run a little behind the database's.
+ */
+const OWNERSHIP_APP_ROW_EARLY_MS = 5 * 1000;
 
 type OwnershipMove = Extract<BriefingChange, { kind: 'ownership_moved' }>;
 
 /**
  * The admin and sign-in policy changes in a set of audit rows, newest first.
- * The same rules as the database's weekly counts
- * (platform_security_briefing_changes), so the list and the counts agree:
+ * FOR DISPLAY: the week's numbers are never counted from this list (it is
+ * made from a capped number of rows); they are the database's own counts.
+ * The rules are the ones those counts use, so a line and a count agree
+ * about any one row:
  *
  *   - Promoted: a role change to admin from a role that is not admin or owner.
  *   - Demoted: a role change from admin to a role that is not admin or owner.
@@ -683,25 +714,39 @@ type OwnershipMove = Extract<BriefingChange, { kind: 'ownership_moved' }>;
  *     an admin added or removed, and it is always listed. The database
  *     stamps the rows of one move with one time, so rows with the same time
  *     are one move. The app's own row of a move only adds the two names.
- *   - The invitation wins: a promotion or demotion of a member is left out
- *     when the same member accepted an invitation (to any role) on the same
- *     UTC day. An ownership move is never left out this way.
+ *   - The invitation wins over its own echo only. An acceptance is seen
+ *     twice in the audit rows (the database writes a role row for it, then
+ *     the app writes the acceptance). A role change is left out only when
+ *     it is that echo: the same member, the same UTC day, ending at the
+ *     very role the invitation gave, and recorded no later than the
+ *     acceptance. Any other role change that day is a real one and is
+ *     listed: a member invited as staff and made an admin the same day has
+ *     a "made an admin" line. An ownership move is never left out this way.
  *   - A member who deleted their own account: the row carries no role, so
  *     the line says only that.
  *
  * Two role changes of one member on one day are each listed.
  */
 export function extractBriefingChanges(rows: readonly BriefingAuditRow[]): BriefingChange[] {
-  // Who accepted an invitation, and on which UTC day.
-  const accepted = new Set(
-    rows.flatMap((row) =>
-      row.event === 'user.invite.accepted' && !row.alreadyMember && row.actorUserId
-        ? [`${row.actorUserId}|${utcDay(row.createdAt)}`]
-        : [],
-    ),
-  );
-  const foldedByInvite = (row: BriefingAuditRow): boolean =>
-    row.targetUserId !== null && accepted.has(`${row.targetUserId}|${utcDay(row.createdAt)}`);
+  // Who accepted an invitation, on which UTC day, and the role it gave:
+  // the time of the latest such acceptance.
+  const accepted = new Map<string, number>();
+  for (const row of rows) {
+    if (row.event !== 'user.invite.accepted' || row.alreadyMember) continue;
+    if (!row.actorUserId || !row.role) continue;
+    const key = `${row.actorUserId}|${utcDay(row.createdAt)}|${row.role}`;
+    accepted.set(key, Math.max(accepted.get(key) ?? -Infinity, timeOf(row.createdAt)));
+  }
+  /**
+   * The acceptance seen twice: the same member, the same UTC day, ending at
+   * the role the invitation gave, and recorded no later than the acceptance
+   * (the acceptance writes the role first and its own row after).
+   */
+  const foldedByInvite = (row: BriefingAuditRow, endsAt: string | null): boolean => {
+    if (row.targetUserId === null || endsAt === null) return false;
+    const acceptedAt = accepted.get(`${row.targetUserId}|${utcDay(row.createdAt)}|${endsAt}`);
+    return acceptedAt !== undefined && timeOf(row.createdAt) <= acceptedAt;
+  };
 
   const changes: BriefingChange[] = [];
   /** The database's ownership rows, by their exact time. */
@@ -737,7 +782,7 @@ export function extractBriefingChanges(rows: readonly BriefingAuditRow[]): Brief
         if (from === 'owner') move.fromUserId ??= row.targetUserId;
         if (to === 'owner') move.toUserId ??= row.targetUserId;
         moves.set(row.createdAt, move);
-      } else if (foldedByInvite(row)) {
+      } else if (foldedByInvite(row, to)) {
         continue;
       } else if (to === 'admin' && from !== 'admin') {
         changes.push(roleChange('admin_promoted', row, from, to));
@@ -789,8 +834,13 @@ export function extractBriefingChanges(rows: readonly BriefingAuditRow[]): Brief
   for (const app of appMoves) {
     const at = timeOf(app.at);
     const match = recorded
-      .filter((m) => timeOf(m.at) <= at && at - timeOf(m.at) <= OWNERSHIP_APP_ROW_WINDOW_MS)
-      .sort((a, b) => timeOf(b.at) - timeOf(a.at))[0];
+      .filter(
+        (m) =>
+          at - timeOf(m.at) <= OWNERSHIP_APP_ROW_WINDOW_MS &&
+          timeOf(m.at) - at <= OWNERSHIP_APP_ROW_EARLY_MS,
+      )
+      // The move nearest in time.
+      .sort((a, b) => Math.abs(timeOf(a.at) - at) - Math.abs(timeOf(b.at) - at))[0];
     if (!match) {
       changes.push(app);
       continue;
@@ -820,38 +870,6 @@ function roleChange(
   };
 }
 
-/**
- * The week's counts from a list of changes: those at or after `since`
- * (milliseconds). What the database counts for the same rows.
- */
-export function countBriefingChanges(
-  changes: readonly BriefingChange[],
-  since: number,
-): BriefingChangeCounts {
-  const counts: BriefingChangeCounts = {
-    adminsPromoted: 0,
-    adminsDemotedOrRemoved: 0,
-    ownershipMoved: 0,
-    policyLoosened: 0,
-    policyTightened: 0,
-    policyChangedOther: 0,
-  };
-  for (const c of changes) {
-    if (timeOf(c.at) < since) continue;
-    if (c.kind === 'admin_promoted') counts.adminsPromoted += 1;
-    else if (c.kind === 'admin_demoted' || c.kind === 'admin_removed') {
-      counts.adminsDemotedOrRemoved += 1;
-    } else if (c.kind === 'ownership_moved') {
-      if (c.inRoleRows) counts.ownershipMoved += 1;
-    } else if (c.kind === 'policy_changed') {
-      if (c.direction === 'loosened') counts.policyLoosened += 1;
-      else if (c.direction === 'tightened') counts.policyTightened += 1;
-      else counts.policyChangedOther += 1;
-    }
-  }
-  return counts;
-}
-
 /** The names a change's line uses, as the reader resolved them. Null leaves that part out. */
 export interface BriefingChangeNames {
   actor?: string | null;
@@ -862,7 +880,37 @@ export interface BriefingChangeNames {
 
 /** The words for a person the reader could not name. */
 export const BRIEFING_FORMER_MEMBER = 'a former member';
+/** ... and for one whose name could not be read at all. */
+export const BRIEFING_UNNAMED_MEMBER = 'a member';
+/**
+ * Who made a change when it was StockPilot's own staff acting for the
+ * organization. Never taken from a profile: a member chooses their own name,
+ * so a member is always written with their email (briefingPersonLabel) and
+ * can never read as this.
+ */
 export const BRIEFING_SUPPORT_ACTOR = 'StockPilot support';
+
+/**
+ * A member as the briefing writes them: the name they chose with their email
+ * beside it, or the email alone. The name is the member's own choice, so it
+ * is never shown without the email. Null when there is no email.
+ */
+export function briefingPersonLabel(
+  fullName: string | null | undefined,
+  email: string | null | undefined,
+): string | null {
+  const address = typeof email === 'string' ? email.trim() : '';
+  if (address.length === 0) return null;
+  const name = typeof fullName === 'string' ? fullName.trim() : '';
+  return name.length > 0 ? `${name} (${address})` : address;
+}
+
+/** The words that stand in for a name start a sentence with a capital; a name or an email is left as written. */
+function sentenceStart(person: string): string {
+  return person === BRIEFING_FORMER_MEMBER || person === BRIEFING_UNNAMED_MEMBER
+    ? capitalized(person)
+    : person;
+}
 
 /** One change as one sentence. */
 export function describeBriefingChange(
@@ -870,7 +918,7 @@ export function describeBriefingChange(
   names: BriefingChangeNames = {},
 ): string {
   const by = names.actor ? ` by ${names.actor}` : '';
-  const subject = capitalized(names.subject ?? BRIEFING_FORMER_MEMBER);
+  const subject = sentenceStart(names.subject ?? BRIEFING_FORMER_MEMBER);
   switch (change.kind) {
     case 'admin_joined':
       return `${subject} joined as ${change.toRole === 'owner' ? 'the owner' : 'an admin'}.`;
@@ -974,7 +1022,11 @@ export interface PlatformBriefingRow {
   adminsWithoutSecondStep: number | null;
   membersWithoutSecondStep: number | null;
   signInsReported: number | null;
-  adminChanges: number | null;
+  /** Distinct members who became an admin or owner this week. Never added to another number. */
+  adminsAdded: number | null;
+  /** Admins removed or moved to another role. */
+  adminsRemoved: number | null;
+  ownershipMoves: number | null;
   policyChanges: number | null;
 }
 
@@ -991,12 +1043,23 @@ export interface PlatformSecurityBriefing {
   noOrganizationLine: string | null;
   /** False when none of the three organization reads answered: there is no table to show. */
   organizationsChecked: boolean;
+  /**
+   * True only when all three organization reads answered and none stopped at
+   * its cap. Only then may the page say that no organization has anything to
+   * report.
+   */
+  organizationsAllChecked: boolean;
+  /** Which of the three could not be checked, in words. Empty when all three answered. */
+  organizationsUnchecked: string[];
   /** Organizations with something to show, the ones needing attention first; at most PLATFORM_BRIEFING_ROWS_SHOWN. */
   organizations: PlatformBriefingRow[];
   /** Organizations with something to show that the table does not list. */
   organizationsNotListed: number;
   organizationsNeedingAttention: number;
-  /** Null when the members read failed: how many organizations exist is then not known. */
+  /**
+   * Null unless all three reads answered in full: an organization is only
+   * known to have nothing to report when every part of it was read.
+   */
   organizationsWithNothingToReport: number | null;
   /** True when a read stopped at its cap: organizations beyond it are not counted here. */
   organizationsTruncated: boolean;
@@ -1023,7 +1086,7 @@ function platformItems(input: PlatformSecurityBriefingInput): BriefingItem[] {
         );
       }
       if (copied > 0) {
-        seen.push(`${counted(copied, 'passkey looks', 'passkeys look')} like a copy of another.`);
+        seen.push(`A passkey looked like a copy of another ${times(copied)}.`);
       }
       items.push({
         id: 'passkey_unexplained',
@@ -1075,7 +1138,9 @@ const hasNumber = (row: PlatformBriefingRow): boolean =>
     row.adminsWithoutSecondStep,
     row.membersWithoutSecondStep,
     row.signInsReported,
-    row.adminChanges,
+    row.adminsAdded,
+    row.adminsRemoved,
+    row.ownershipMoves,
     row.policyChanges,
   ].some((n) => n !== null && n > 0);
 
@@ -1096,7 +1161,7 @@ export function buildPlatformSecurityBriefing(
 
   const NO_EVENTS: BriefingWeekCounts = {};
   const NO_CHANGES: BriefingChangeCounts = {
-    adminsPromoted: 0,
+    adminsAdded: 0,
     adminsDemotedOrRemoved: 0,
     ownershipMoved: 0,
     policyLoosened: 0,
@@ -1144,15 +1209,10 @@ export function buildPlatformSecurityBriefing(
           ? 0
           : null,
       signInsReported: m ? m.signInsReportedThisWeek : membersKnown ? 0 : null,
-      // Admins who joined come from the members read, the rest from the
-      // changes read: the number is whole only when both were read.
-      adminChanges:
-        c !== null && membersKnown
-          ? (m?.adminsJoinedThisWeek ?? 0) +
-            c.adminsPromoted +
-            c.adminsDemotedOrRemoved +
-            c.ownershipMoved
-          : null,
+      // Each its own number, all from the changes read.
+      adminsAdded: c ? c.adminsAdded : null,
+      adminsRemoved: c ? c.adminsDemotedOrRemoved : null,
+      ownershipMoves: c ? c.ownershipMoved : null,
       policyChanges: c ? c.policyLoosened + c.policyTightened + c.policyChangedOther : null,
     });
   }
@@ -1172,13 +1232,14 @@ export function buildPlatformSecurityBriefing(
   const goodShape: string[] = [];
   const unchecked: string[] = [];
 
+  const organizationsUnchecked: string[] = [];
   if (members === null) {
-    unchecked.push('Second steps, reported sign-ins and new admins could not be checked.');
+    organizationsUnchecked.push(MEMBERS_UNCHECKED);
   } else if (members.adminAccountsWithoutSecondStep === 0 && members.accounts > 0) {
     goodShape.push('Every owner and admin account has a second step.');
   }
   if (events === null) {
-    unchecked.push('Blocked and flagged activity could not be checked.');
+    organizationsUnchecked.push(EVENTS_UNCHECKED);
   } else {
     if (events.passkeyUnexplainedSignIns + events.passkeyCountersWentBack === 0) {
       goodShape.push('No passkey sign-in looked wrong this week.');
@@ -1189,7 +1250,9 @@ export function buildPlatformSecurityBriefing(
       unchecked.push(HISTORY_UNCHECKED);
     }
   }
-  if (changes === null) unchecked.push('Admin and sign-in policy changes could not be checked.');
+  if (changes === null) organizationsUnchecked.push(CHANGES_UNCHECKED);
+  // The three organization parts first, in their order, then the rest.
+  unchecked.unshift(...organizationsUnchecked);
   if (passkeyRepair === null) {
     unchecked.push('Passkey set-ups that need repair could not be checked.');
   } else if (passkeyRepair !== 'not_configured' && passkeyRepair.accounts === 0) {
@@ -1207,6 +1270,11 @@ export function buildPlatformSecurityBriefing(
           : 'good';
 
   const organizationsRead = members !== null || events !== null || changes !== null;
+  const organizationsTruncated =
+    (members?.truncated ?? false) || (events?.truncated ?? false) || (changes?.truncated ?? false);
+  // "No organization ..." is a statement about every part of every
+  // organization: it needs all three reads, whole.
+  const organizationsAllChecked = organizationsUnchecked.length === 0 && !organizationsTruncated;
   const line: string[] = [];
   if (pressing > 0) {
     line.push(`${counted(pressing, 'platform check needs', 'platform checks need')} attention.`);
@@ -1215,9 +1283,11 @@ export function buildPlatformSecurityBriefing(
     line.push('The organizations could not be checked.');
   } else {
     line.push(
-      needing === 0
-        ? 'No organization needs attention this week.'
-        : `${counted(needing, 'organization needs', 'organizations need')} attention this week.`,
+      needing > 0
+        ? `${counted(needing, 'organization needs', 'organizations need')} attention this week.`
+        : organizationsAllChecked
+          ? 'No organization needs attention this week.'
+          : 'Nothing needs attention in what could be checked.',
     );
     if (unchecked.length > 0) line.push('Some checks could not be made.');
   }
@@ -1244,14 +1314,15 @@ export function buildPlatformSecurityBriefing(
         : `${counted(members.accounts, 'account', 'accounts')} in ${counted(members.totalOrganizations, 'organization', 'organizations')}. ${counted(members.accountsWithoutSecondStep, 'has', 'have')} no second step, ${num(members.adminAccountsWithoutSecondStep)} of them an owner or admin.`,
     noOrganizationLine,
     organizationsChecked: organizationsRead,
+    organizationsAllChecked,
+    organizationsUnchecked,
     organizations: shown.slice(0, PLATFORM_BRIEFING_ROWS_SHOWN),
     organizationsNotListed: Math.max(shown.length - PLATFORM_BRIEFING_ROWS_SHOWN, 0),
     organizationsNeedingAttention: needing,
     organizationsWithNothingToReport:
-      members === null ? null : Math.max(members.totalOrganizations - shown.length, 0),
-    organizationsTruncated:
-      (members?.truncated ?? false) ||
-      (events?.truncated ?? false) ||
-      (changes?.truncated ?? false),
+      members !== null && organizationsAllChecked
+        ? Math.max(members.totalOrganizations - shown.length, 0)
+        : null,
+    organizationsTruncated,
   };
 }
