@@ -229,7 +229,11 @@ export function writeTube(
   }
 }
 
-/** The triangles of a tube made by writeTube, as indexes (the same for every arc). */
+/**
+ * The triangles of a tube made by writeTube, as indexes (the same for every
+ * arc), wound so each faces out of the tube (counter-clockwise seen from
+ * outside), which is the side three.js draws.
+ */
 export function tubeIndexes(segments: number, sides: number): Uint16Array {
   const out = new Uint16Array(segments * sides * 6);
   let n = 0;
@@ -240,11 +244,11 @@ export function tubeIndexes(segments: number, sides: number): Uint16Array {
       const c = a + sides;
       const d = b + sides;
       out[n++] = a;
-      out[n++] = c;
-      out[n++] = b;
       out[n++] = b;
       out[n++] = c;
+      out[n++] = b;
       out[n++] = d;
+      out[n++] = c;
     }
   }
   return out;

@@ -875,7 +875,9 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
       for (const thing of disposables) thing.dispose();
       disposables.length = 0;
       renderer.dispose();
-      renderer.forceContextLoss();
+      // Give the context back at once (browsers allow only a few); a context
+      // already lost has nothing to give back.
+      if (!lost) renderer.forceContextLoss();
     },
   };
 }

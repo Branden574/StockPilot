@@ -252,6 +252,25 @@ describe('arcs', () => {
     expect(along[along.length - 1]).toBe(1);
     const indexes = tubeIndexes(segments, sides);
     expect(indexes).toHaveLength(segments * sides * 6);
+    // Every triangle faces out of the tube: its normal points the way its
+    // vertices' own normals do.
+    const p = (v: number) => [positions[v * 3]!, positions[v * 3 + 1]!, positions[v * 3 + 2]!];
+    for (let t = 0; t < indexes.length; t += 3) {
+      const [a, b, c] = [p(indexes[t]!), p(indexes[t + 1]!), p(indexes[t + 2]!)];
+      const u = [b[0]! - a[0]!, b[1]! - a[1]!, b[2]! - a[2]!];
+      const w = [c[0]! - a[0]!, c[1]! - a[1]!, c[2]! - a[2]!];
+      const face = [
+        u[1]! * w[2]! - u[2]! * w[1]!,
+        u[2]! * w[0]! - u[0]! * w[2]!,
+        u[0]! * w[1]! - u[1]! * w[0]!,
+      ];
+      const v0 = indexes[t]!;
+      const out =
+        face[0]! * normals[v0 * 3]! +
+        face[1]! * normals[v0 * 3 + 1]! +
+        face[2]! * normals[v0 * 3 + 2]!;
+      expect(out, `triangle ${t / 3}`).toBeGreaterThan(0);
+    }
     expect(Math.max(...indexes)).toBe(tubeVertexCount(segments, sides) - 1);
   });
 });
