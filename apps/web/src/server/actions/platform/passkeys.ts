@@ -59,10 +59,9 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  *      (a second insert is a unique violation) or deleted, the delete
  *      returning the rows it removed (service_role has select, insert and
  *      delete on that table, no update).
- *      A write that changed nothing because the switch moved since the read:
- *      nothing was done, and the answer says someone else changed it; an ON's
- *      record is marked not applied. An organization OFF whose delete removed
- *      nothing: already off, no record.
+ *      An ON write that changed nothing because the switch moved since the
+ *      read: nothing was done, the answer says someone else changed it, and
+ *      its record is marked not applied.
  *      An ON whose write answers an error after its record landed: the switch
  *      is read again first. Every write sends this press's own timestamp
  *      (updated_at with updated_by, or the organization row's
@@ -76,17 +75,35 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
  *      is left as it is, the unknown is reported at error level (ids only),
  *      and the answer says the change could not be confirmed.
  *      Turning OFF always proceeds: off is the safe direction and is never
- *      held back by the audit path in an incident. Its record is written
- *      after the switch; when it cannot be written, that is reported at
- *      error level (ids only, never an email) and the answer says the change
- *      was made but its record could not be written (recorded: false).
+ *      held back by the audit path in an incident. It writes only where the
+ *      read found the switch on (the same conditional update, or the delete);
+ *      a switch read as off writes nothing. Then the switch is READ AGAIN,
+ *      and the answer is its state after the press, never a guess:
+ *        - off, and this press turned it off: "Off", and its record is written
+ *          after the switch; when the record cannot be written, that is
+ *          reported at error level (ids only, never an email) and the answer
+ *          says the change was made but its record could not be written
+ *          (recorded: false);
+ *        - off, and this press changed nothing (it was off, or another
+ *          admin's OFF went first): "already off", no record;
+ *        - ON (another admin's ON landed): a conflict that says plainly the
+ *          switch is on and not off;
+ *        - a write that answered an error: reported at error level; read
+ *          again, off and written by this press (its actor and timestamp;
+ *          for an organization, the row gone) is credited and recorded, off
+ *          otherwise is "already off", on is "could not turn it off, it is
+ *          still on", and unreadable is reported at error level again and
+ *          answered "could not confirm whether it is off".
+ *      An OFF that changed nothing writes no audit row.
  *   6. An organization turned off (or already off) answers how many of its
  *      members still hold an active passkey (null when that cannot be read).
  *
  * Two admins pressing at the same moment: each reads, records (an ON), then
  * writes only if the switch still holds what it read, so the second press
  * changes nothing and says so. An organization's second insert is a unique
- * violation: answered "already on", with its record marked not_applied.
+ * violation: answered "already on", with its record marked not_applied. A
+ * second OFF finds it off on its read again and answers "already off". An ON
+ * that lands after an OFF's read again is seen on the next load of the page.
  */
 
 export interface PasskeySwitchSaved {
@@ -280,7 +297,6 @@ async function setPlatformSwitch(
   }
   const row = read.data as Record<string, unknown> | null;
   const from = row?.[setting] === true;
-  if (from === on) return ok({ on, changed: false, recorded: false });
 
   const record = (extra: Record<string, unknown> = {}) =>
     recordPlatformAudit({
@@ -289,6 +305,77 @@ async function setPlatformSwitch(
       action: 'passkeys_switched',
       detail: { setting, from, to: on, ...extra },
     });
+
+  if (!on) {
+    // OFF always proceeds: off is the safe direction, never held back by the
+    // audit path. Written only where the read found it on (and only while it
+    // still is); a switch read as off writes nothing. Then it is read again,
+    // and the answer is the switch as it is after this press.
+    const at = new Date().toISOString();
+    let applied = false;
+    let failed = false;
+    if (from) {
+      const written = await writeSetting(admin, setting, {
+        from,
+        on,
+        rowExists: true,
+        userId: actor.userId,
+        at,
+      });
+      if (written.error) {
+        failed = true;
+        await reportError(new Error(written.error.message), {
+          tag: `${tag}.off_write`,
+          level: 'error',
+          extra: { setting, to: on },
+        });
+      } else {
+        applied = written.applied;
+      }
+    }
+    const again = await readSettings(admin);
+    const now = again.data as Record<string, unknown> | null;
+    if (failed) {
+      if (again.error) {
+        await reportError(new Error('a passkey switch OFF was not confirmed'), {
+          tag: `${tag}.off_unconfirmed`,
+          level: 'error',
+          extra: { setting, to: on },
+        });
+        return err('internal_error', PASSKEYS_COPY.offUnconfirmed);
+      }
+      // Off now and written by this press (its actor and its timestamp): the
+      // answer was lost, not the write.
+      applied =
+        now?.[setting] !== true &&
+        now?.updated_by === actor.userId &&
+        sameInstant(now?.updated_at, at);
+    } else if (again.error) {
+      // The write's own answer stands: off where it was on, or already off.
+      await reportError(new Error(again.error.message), { tag: `${tag}.off_read_again` });
+    }
+    let recorded = false;
+    if (applied) {
+      recorded = await record();
+      if (!recorded) {
+        await reportError(new Error('passkey switch turned off without its audit row'), {
+          tag: `${tag}.off_not_recorded`,
+          level: 'error',
+          extra: { setting, to: on },
+        });
+      }
+    }
+    if (!again.error && now?.[setting] === true) {
+      // On after this press: its write did not land, or another admin's ON
+      // landed after it. Said plainly, so nobody leaves believing it is off.
+      return failed
+        ? err('internal_error', PASSKEYS_COPY.offStillOn)
+        : err('conflict', PASSKEYS_COPY.onAfterOff);
+    }
+    return ok({ on: false, changed: applied, recorded });
+  }
+
+  if (from) return ok({ on, changed: false, recorded: false });
   /** The record already written did not happen: say so in a second row. */
   const markNotApplied = async () => {
     if (!(await record({ not_applied: true }))) {
@@ -300,7 +387,7 @@ async function setPlatformSwitch(
   };
 
   // ON: the record first; without it nothing is switched.
-  if (on && !(await record())) {
+  if (!(await record())) {
     await reportError(new Error('passkey switch refused: its audit row could not be written'), {
       tag: `${tag}.not_recorded`,
       extra: { to: on },
@@ -320,48 +407,37 @@ async function setPlatformSwitch(
   });
   if (written.error) {
     await reportError(new Error(written.error.message), { tag: `${tag}.write`, extra: { to: on } });
-    if (on) {
-      // Its record landed: read again before saying it did not happen. Only
-      // this press's own write (its actor and its timestamp) confirms it; an
-      // ON written by any other press, or an unreadable row, cannot.
-      const again = await readSettings(admin);
-      const now = again.data as Record<string, unknown> | null;
-      if (
-        !again.error &&
-        now?.[setting] === true &&
-        now.updated_by === actor.userId &&
-        sameInstant(now.updated_at, at)
-      ) {
-        return ok({ on, changed: true, recorded: true });
-      }
-      if (again.error || now?.[setting] === true) {
-        await reportError(
-          new Error('a passkey switch write answered an error and was not confirmed'),
-          {
-            tag: `${tag}.write_unconfirmed`,
-            level: 'error',
-            extra: { setting, to: on },
-          },
-        );
-        return err('internal_error', PASSKEYS_COPY.writeUnconfirmed);
-      }
-      await markNotApplied();
+    // Its record landed: read again before saying it did not happen. Only
+    // this press's own write (its actor and its timestamp) confirms it; an
+    // ON written by any other press, or an unreadable row, cannot.
+    const again = await readSettings(admin);
+    const now = again.data as Record<string, unknown> | null;
+    if (
+      !again.error &&
+      now?.[setting] === true &&
+      now.updated_by === actor.userId &&
+      sameInstant(now.updated_at, at)
+    ) {
+      return ok({ on, changed: true, recorded: true });
     }
+    if (again.error || now?.[setting] === true) {
+      await reportError(
+        new Error('a passkey switch write answered an error and was not confirmed'),
+        {
+          tag: `${tag}.write_unconfirmed`,
+          level: 'error',
+          extra: { setting, to: on },
+        },
+      );
+      return err('internal_error', PASSKEYS_COPY.writeUnconfirmed);
+    }
+    await markNotApplied();
     return err('internal_error', PASSKEYS_COPY.writeFailed);
   }
   if (!written.applied) {
     // The switch moved between the read and the write: nothing was done.
-    if (on) await markNotApplied();
+    await markNotApplied();
     return err('conflict', PASSKEYS_COPY.changedElsewhere);
-  }
-  // OFF: switched first, never held back by the audit path; then recorded.
-  if (!on && !(await record())) {
-    await reportError(new Error('passkey switch turned off without its audit row'), {
-      tag: `${tag}.off_not_recorded`,
-      level: 'error',
-      extra: { setting, to: on },
-    });
-    return ok({ on, changed: true, recorded: false });
   }
   return ok({ on, changed: true, recorded: true });
 }
@@ -420,9 +496,6 @@ export async function setOrganizationPasskeysAction(input: {
       membersWithPasskeys: await countOrganizationPasskeyHolders(admin, organizationId),
     });
 
-  if (from === on)
-    return on ? ok({ on, changed: false, recorded: false }) : offAnswer(false, false);
-
   const record = (extra: Record<string, unknown> = {}) =>
     recordPlatformAudit({
       actorUserId: actor.userId,
@@ -444,8 +517,79 @@ export async function setOrganizationPasskeysAction(input: {
     }
   };
 
+  if (!on) {
+    // OFF always proceeds: off is the safe direction, never held back by the
+    // audit path. Deleted only where the read found the row (a switch read as
+    // off deletes nothing); then the row is read again, and the answer is the
+    // switch as it is after this press.
+    let applied = false;
+    let failed = false;
+    if (from) {
+      const removed = await admin
+        .from('organization_passkey_switches')
+        .delete()
+        .eq('organization_id', organizationId)
+        .select('organization_id');
+      if (removed.error) {
+        failed = true;
+        await reportError(new Error(removed.error.message), {
+          tag: `${tag}.off_write`,
+          level: 'error',
+          extra: { organizationId, to: on },
+        });
+      } else {
+        // Nothing removed: another admin's delete went first.
+        applied = ((removed.data as unknown[] | null) ?? []).length > 0;
+      }
+    }
+    const again = await readSwitch();
+    if (failed) {
+      if (again.error) {
+        await reportError(new Error('an organization passkey switch OFF was not confirmed'), {
+          tag: `${tag}.off_unconfirmed`,
+          level: 'error',
+          extra: { organizationId, to: on },
+        });
+        return err('internal_error', PASSKEYS_COPY.offUnconfirmed);
+      }
+      // The row is gone: this press's delete landed and only its answer was
+      // lost (the row records no actor, so the row being gone is the proof).
+      applied = again.data === null;
+    } else if (again.error) {
+      // The delete's own answer stands: removed, or already gone.
+      await reportError(new Error(again.error.message), {
+        tag: `${tag}.off_read_again`,
+        extra: { organizationId },
+      });
+    }
+    let recorded = false;
+    if (applied) {
+      recorded = await record();
+      if (!recorded) {
+        await reportError(
+          new Error('organization passkey switch turned off without its audit row'),
+          {
+            tag: `${tag}.off_not_recorded`,
+            level: 'error',
+            extra: { organizationId, to: on },
+          },
+        );
+      }
+    }
+    if (!again.error && again.data !== null) {
+      // On after this press: its delete did not land, or another admin's ON
+      // landed after it. Said plainly, so nobody leaves believing it is off.
+      return failed
+        ? err('internal_error', PASSKEYS_COPY.offStillOn)
+        : err('conflict', PASSKEYS_COPY.onAfterOff);
+    }
+    return offAnswer(applied, recorded);
+  }
+
+  if (from) return ok({ on, changed: false, recorded: false });
+
   // ON: the record first; without it nothing is switched.
-  if (on && !(await record())) {
+  if (!(await record())) {
     await reportError(
       new Error('organization passkey switch refused: its audit row could not be written'),
       {
@@ -460,17 +604,11 @@ export async function setOrganizationPasskeysAction(input: {
   // records no actor (0475), so on a read again it is what tells this press's
   // row apart from one another press made.
   const at = new Date().toISOString();
-  const written = on
-    ? await admin
-        .from('organization_passkey_switches')
-        .insert({ organization_id: organizationId, switched_on_at: at })
-    : await admin
-        .from('organization_passkey_switches')
-        .delete()
-        .eq('organization_id', organizationId)
-        .select('organization_id');
+  const written = await admin
+    .from('organization_passkey_switches')
+    .insert({ organization_id: organizationId, switched_on_at: at });
   if (written.error) {
-    if (on && (written.error as { code?: string }).code === '23505') {
+    if ((written.error as { code?: string }).code === '23505') {
       // Another admin turned it on first: this press changed nothing.
       await markNotApplied();
       return ok({ on: true, changed: false, recorded: false });
@@ -479,37 +617,23 @@ export async function setOrganizationPasskeysAction(input: {
       tag: `${tag}.write`,
       extra: { organizationId, to: on },
     });
-    if (on) {
-      // Its record landed: read again before saying it did not happen. Only
-      // this press's own row (its timestamp) confirms it; a row another press
-      // made, or an unreadable one, cannot.
-      const again = await readSwitch();
-      const now = again.data as { switched_on_at?: unknown } | null;
-      if (!again.error && now !== null && sameInstant(now.switched_on_at, at)) {
-        return ok({ on, changed: true, recorded: true });
-      }
-      if (again.error || now !== null) {
-        await reportError(
-          new Error('an organization passkey switch write answered an error and was not confirmed'),
-          { tag: `${tag}.write_unconfirmed`, level: 'error', extra: { organizationId, to: on } },
-        );
-        return err('internal_error', PASSKEYS_COPY.writeUnconfirmed);
-      }
-      await markNotApplied();
+    // Its record landed: read again before saying it did not happen. Only
+    // this press's own row (its timestamp) confirms it; a row another press
+    // made, or an unreadable one, cannot.
+    const again = await readSwitch();
+    const now = again.data as { switched_on_at?: unknown } | null;
+    if (!again.error && now !== null && sameInstant(now.switched_on_at, at)) {
+      return ok({ on, changed: true, recorded: true });
     }
+    if (again.error || now !== null) {
+      await reportError(
+        new Error('an organization passkey switch write answered an error and was not confirmed'),
+        { tag: `${tag}.write_unconfirmed`, level: 'error', extra: { organizationId, to: on } },
+      );
+      return err('internal_error', PASSKEYS_COPY.writeUnconfirmed);
+    }
+    await markNotApplied();
     return err('internal_error', PASSKEYS_COPY.writeFailed);
   }
-  if (on) return ok({ on, changed: true, recorded: true });
-  // OFF: another admin's delete went first, so this one removed nothing.
-  if (((written.data as unknown[] | null) ?? []).length === 0) return offAnswer(false, false);
-  // OFF: switched first, never held back by the audit path; then recorded.
-  if (!(await record())) {
-    await reportError(new Error('organization passkey switch turned off without its audit row'), {
-      tag: `${tag}.off_not_recorded`,
-      level: 'error',
-      extra: { organizationId, to: on },
-    });
-    return offAnswer(true, false);
-  }
-  return offAnswer(true, true);
+  return ok({ on, changed: true, recorded: true });
 }

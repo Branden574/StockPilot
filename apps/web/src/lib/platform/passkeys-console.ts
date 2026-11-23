@@ -36,6 +36,14 @@ export const PASSKEYS_COPY = {
   /** Turning ON: the write answered an error and the switch could not be read again. */
   writeUnconfirmed:
     'Could not confirm whether the passkey switch changed. Reload the page to see its state.',
+  /** Turning OFF: read again after the press, the switch is on (another admin's ON landed). */
+  onAfterOff:
+    'This passkey switch is ON. Another admin turned it on at the same moment, so it is not off. Turn it off again if it must be off.',
+  /** Turning OFF: the write answered an error, and read again the switch is still on. */
+  offStillOn: 'Could not turn off this passkey switch. It is still ON. Try again.',
+  /** Turning OFF: the write answered an error, and the switch could not be read again. */
+  offUnconfirmed:
+    'Could not confirm whether this passkey switch is off. Reload the page to see its state, and turn it off again if it is still on.',
 } as const;
 
 /** What the console says after an organization's passkeys are turned off. */

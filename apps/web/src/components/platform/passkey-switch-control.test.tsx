@@ -255,8 +255,20 @@ describe('PasskeySwitchControl', () => {
     await openAndType(user, 'Turn on', 'PASSKEYS');
     await user.click(screen.getByRole('button', { name: 'Turn on passkeys for everyone' }));
     await waitFor(() =>
-      expect(h.toast.info).toHaveBeenCalledWith('Passkeys for everyone was already on.'),
+      expect(h.toast.info).toHaveBeenCalledWith('Passkeys for everyone is already on.'),
     );
+  });
+
+  it('an OFF that found the switch off (read again after the press) says it is off', async () => {
+    h.kill.mockResolvedValue(done({ on: false, changed: false, recorded: false }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(<PasskeySwitchControl target={{ kind: 'platform', setting: 'passkeys_on' }} on />);
+    await openAndType(user, 'Turn off', 'PASSKEYS');
+    await user.click(screen.getByRole('button', { name: 'Turn off passkeys for everyone' }));
+    await waitFor(() =>
+      expect(h.toast.info).toHaveBeenCalledWith('Passkeys for everyone is already off.'),
+    );
+    expect(h.toast.success).not.toHaveBeenCalled();
   });
 
   it('Cancel closes and forgets the typed word', async () => {

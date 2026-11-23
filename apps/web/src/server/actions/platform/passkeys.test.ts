@@ -15,13 +15,15 @@ import {
  * Pinned: checkPlatformAdmin({ requireStepUp: true }) is asked first and a
  * refusal (not an admin, no fresh step-up) reads and writes nothing; the
  * typed word is exactly PASSKEYS or nothing is read or written; the settings
- * row is UPSERTED (it may not exist in production, review F) with only the
- * one column, so the other settings and the deletion passphrase are kept; an
- * audit row with { from, to } for every change and none for a press that
- * changed nothing; an ON whose audit row does not land is refused before
- * anything is switched; an OFF stands without it and says so; a write applies
- * only while the switch still holds the value read; an organization turned
- * off answers how many of its members still hold an active passkey.
+ * row is written with only the one column (an update, or an insert when
+ * there is no row: it may not exist in production, review F), so the other
+ * settings and the deletion passphrase are kept; an audit row with
+ * { from, to } for every change and none for a press that changed nothing;
+ * an ON whose audit row does not land is refused before anything is
+ * switched; an OFF stands without it and says so; a write applies only while
+ * the switch still holds the value read; an OFF's answer is the switch as
+ * read again after the press; an organization turned off answers how many
+ * of its members still hold an active passkey.
  *
  * Made-up ids and addresses only.
  */
@@ -81,7 +83,8 @@ let switchReadError: { message: string } | null = null;
 /** Each switch read answers the next of these first (then switchReadError). */
 let switchReadQueue: Array<{ message: string } | null> = [];
 let switchWriteError: { message: string; code?: string; landed?: boolean } | null = null;
-let switchDeleteErrors: Array<{ message: string } | null> = [];
+/** Each delete answers the next of these (default: success); `landed` as for settings writes. */
+let switchDeleteErrors: Array<{ message: string; landed?: boolean } | null> = [];
 let orgs: Array<{ id: string; name: string }> = [];
 let orgReadError: { message: string } | null = null;
 let members: Array<Record<string, unknown>> = [];
@@ -89,6 +92,10 @@ let passkeys: Array<Record<string, unknown>> = [];
 let membersReadError: { message: string } | null = null;
 /** Another admin's press landing between this press's read and its write. */
 let beforeWrite: (() => void) | null = null;
+/** Another admin's press landing just before this press reads the switch again. */
+let beforeReadAgain: (() => void) | null = null;
+let settingsReadCount = 0;
+let switchReadCount = 0;
 
 /** The order of the audit rows and the switch writes in one press. */
 const order: string[] = [];
@@ -154,6 +161,7 @@ function writeSettings(call: MockCall) {
 
 const adminStub = makeSupabaseStub({
   'platform_settings.select': () => {
+    if (settingsReadCount++ > 0) beforeReadAgain?.();
     const queued = settingsReadQueue.length > 0 ? settingsReadQueue.shift() : settingsReadError;
     return queued ? { data: null, error: queued } : { data: settings, error: null };
   },
@@ -162,6 +170,7 @@ const adminStub = makeSupabaseStub({
   'organizations.select': (call) =>
     orgReadError ? { data: null, error: orgReadError } : servedLikePostgrest(orgs)(call),
   'organization_passkey_switches.select': (call) => {
+    if (switchReadCount++ > 0) beforeReadAgain?.();
     const queued = switchReadQueue.length > 0 ? switchReadQueue.shift() : switchReadError;
     return queued
       ? { data: null, error: queued }
@@ -190,10 +199,11 @@ const adminStub = makeSupabaseStub({
     order.push('write');
     beforeWrite?.();
     const err = switchDeleteErrors.shift() ?? null;
-    if (err) return { data: null, error: err };
+    if (err && !err.landed) return { data: null, error: err };
     const eq = callArgs(call, 'eq') as [string, string];
     const removed =
       eq?.[0] === 'organization_id' && switches.delete(eq[1]) ? [{ organization_id: eq[1] }] : [];
+    if (err) return { data: null, error: err };
     return { data: call.methods.includes('select') ? removed : null, error: null };
   },
   'organization_members.select': (call) =>
@@ -283,6 +293,9 @@ beforeEach(() => {
   settingsReadQueue = [];
   settingsWriteErrors = [];
   beforeWrite = null;
+  beforeReadAgain = null;
+  settingsReadCount = 0;
+  switchReadCount = 0;
   switches = new Set();
   switchedOnAt = new Map();
   switchReadError = null;
@@ -500,10 +513,21 @@ describe.each([
     });
   });
 
-  it('turning OFF: another admin turned it off between the read and the write: nothing done, the answer says so, and nothing recorded', async () => {
+  it('turning OFF: another admin turned it off between the read and the write: read again, it is off, so "already off", and nothing recorded', async () => {
     settings = onRow({ passkeys_on: true, passkey_adds_on: true });
     beforeWrite = () => {
       settings = onRow({ passkeys_on: true, passkey_adds_on: true, [column]: false });
+    };
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: false, recorded: false } });
+    expect(settingsReads()).toBe(2);
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it("turning OFF a switch read as off, while another admin's ON lands: read again, it is ON, and the answer says so plainly", async () => {
+    settings = onRow();
+    beforeReadAgain = () => {
+      settings = onRow({ [column]: true, updated_by: '0a000000-0000-4000-8000-0000000000ee' });
     };
     const res = await action({ on: false, confirm: 'PASSKEYS' });
     expect(res).toEqual({
@@ -511,10 +535,121 @@ describe.each([
       error: {
         code: 'conflict',
         message:
-          'Someone else changed this passkey switch at the same moment, so nothing was done. Check its state and try again.',
+          'This passkey switch is ON. Another admin turned it on at the same moment, so it is not off. Turn it off again if it must be off.',
+      },
+    });
+    // A switch read as off writes nothing and records nothing.
+    expect(writes()).toBe(0);
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it("turning OFF: switched off and recorded, then another admin's ON lands: the answer says it is ON now", async () => {
+    settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    beforeReadAgain = () => {
+      settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    };
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('conflict');
+      expect(res.error.message).toContain('This passkey switch is ON.');
+    }
+    // Its own OFF did happen, and is recorded.
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: { setting: column, from: true, to: false } }),
+    );
+  });
+
+  it('turning OFF a switch that is off: read again, still off, "already off", nothing written or recorded', async () => {
+    settings = onRow();
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: false, recorded: false } });
+    expect(settingsReads()).toBe(2);
+    expect(writes()).toBe(0);
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('turning OFF: a write that answers an error but did land is read again: off by this press, so it is recorded; the error is reported at error level', async () => {
+    settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    settingsWriteErrors = [{ message: 'connection reset', landed: true }];
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: true, recorded: true } });
+    expect(settings![column]).toBe(false);
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
+    expect(h.recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ detail: { setting: column, from: true, to: false } }),
+    );
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: `actions.platform.passkeys.${column}.off_write`,
+      level: 'error',
+      extra: { setting: column, to: false },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it('turning OFF: a write that answers an error, did land, and whose record cannot be written: off, recorded false, both at error level', async () => {
+    settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    settingsWriteErrors = [{ message: 'connection reset', landed: true }];
+    h.recordPlatformAudit.mockImplementation(async () => false);
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: true, recorded: false } });
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: `actions.platform.passkeys.${column}.off_not_recorded`,
+      level: 'error',
+      extra: { setting: column, to: false },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it('turning OFF: a write that fails while another admin\'s OFF lands: read again, off but not by this press, so "already off" and nothing recorded', async () => {
+    settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    settingsWriteErrors = [{ message: 'connection reset' }];
+    beforeWrite = () => {
+      settings = onRow({
+        passkeys_on: true,
+        passkey_adds_on: true,
+        [column]: false,
+        updated_by: '0a000000-0000-4000-8000-0000000000ee',
+        updated_at: '2026-11-22T07:00:00.000+00:00',
+      });
+    };
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: false, recorded: false } });
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('turning OFF: a write that fails and cannot be read again: reported at error level (ids only), and the answer never claims nothing changed', async () => {
+    settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    settingsWriteErrors = [{ message: 'connection reset', landed: true }];
+    settingsReadQueue = [null, { message: 'canceling statement due to statement timeout' }];
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm whether this passkey switch is off. Reload the page to see its state, and turn it off again if it is still on.',
       },
     });
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: `actions.platform.passkeys.${column}.off_unconfirmed`,
+      level: 'error',
+      extra: { setting: column, to: false },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it("turning OFF: switched off, and the read again fails: the write's own answer stands, recorded", async () => {
+    settings = onRow({ passkeys_on: true, passkey_adds_on: true });
+    settingsReadQueue = [null, { message: 'canceling statement due to statement timeout' }];
+    const res = await action({ on: false, confirm: 'PASSKEYS' });
+    expect(res).toEqual({ ok: true, data: { on: false, changed: true, recorded: true } });
+    expect(h.reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: `actions.platform.passkeys.${column}.off_read_again` }),
+    );
   });
 
   it('turning ON with no row, when another admin made the row first: switched only while it still holds the value read', async () => {
@@ -830,7 +965,7 @@ describe.each([
     expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
   });
 
-  it('turning OFF: a write that fails is refused and records nothing', async () => {
+  it('turning OFF: a write that fails is read again: still ON, the answer says so, nothing recorded, reported at error level', async () => {
     settings = {
       id: true,
       passkeys_on: true,
@@ -840,8 +975,20 @@ describe.each([
     };
     settingsWriteErrors = [{ message: 'connection reset' }];
     const res = await action({ on: false, confirm: 'PASSKEYS' });
-    expect(res.ok).toBe(false);
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message: 'Could not turn off this passkey switch. It is still ON. Try again.',
+      },
+    });
+    expect(settingsReads()).toBe(2);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: `actions.platform.passkeys.${column}.off_write`,
+      level: 'error',
+      extra: { setting: column, to: false },
+    });
   });
 
   it('a write that fails after its record refuses, reports, and marks the record not applied', async () => {
@@ -1248,7 +1395,7 @@ describe('setOrganizationPasskeysAction', () => {
     expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
   });
 
-  it('turning off: a delete that fails is refused and records nothing', async () => {
+  it('turning off: a delete that fails is read again: still ON, the answer says so, nothing recorded, reported at error level', async () => {
     switches = new Set([ORG]);
     switchDeleteErrors = [{ message: 'connection reset' }];
     const res = await setOrganizationPasskeysAction({
@@ -1260,11 +1407,98 @@ describe('setOrganizationPasskeysAction', () => {
       ok: false,
       error: {
         code: 'internal_error',
-        message: 'Could not change the passkey switch, so nothing was changed. Try again.',
+        message: 'Could not turn off this passkey switch. It is still ON. Try again.',
       },
     });
     expect(switches.has(ORG)).toBe(true);
     expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: 'actions.platform.passkeys.organization.off_write',
+      level: 'error',
+      extra: { organizationId: ORG, to: false },
+    });
+  });
+
+  it('turning off: a delete that answers an error but did land is read again: the row is gone, so it is recorded and counted', async () => {
+    switches = new Set([ORG]);
+    members = [member(U1, ORG)];
+    passkeys = [{ user_id: U1, removed_at: null }];
+    switchDeleteErrors = [{ message: 'connection reset', landed: true }];
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: false,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({
+      ok: true,
+      data: { on: false, changed: true, recorded: true, membersWithPasskeys: 1 },
+    });
+    expect(h.recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ targetOrganizationId: ORG, detail: { from: true, to: false } }),
+    );
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it('turning off: a delete that fails and cannot be read again: reported at error level (ids only), and the answer never claims nothing changed', async () => {
+    switches = new Set([ORG]);
+    switchDeleteErrors = [{ message: 'connection reset', landed: true }];
+    switchReadQueue = [null, { message: 'canceling statement due to statement timeout' }];
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: false,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm whether this passkey switch is off. Reload the page to see its state, and turn it off again if it is still on.',
+      },
+    });
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+    expect(h.reportError).toHaveBeenCalledWith(expect.anything(), {
+      tag: 'actions.platform.passkeys.organization.off_unconfirmed',
+      level: 'error',
+      extra: { organizationId: ORG, to: false },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('@');
+  });
+
+  it("turning off an organization read as off, while another admin's ON lands: read again, it is ON, and the answer says so plainly", async () => {
+    beforeReadAgain = () => {
+      switches.add(ORG);
+    };
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: false,
+      confirm: 'PASSKEYS',
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message:
+          'This passkey switch is ON. Another admin turned it on at the same moment, so it is not off. Turn it off again if it must be off.',
+      },
+    });
+    expect(writes()).toBe(0);
+    expect(h.recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it("turning off: removed and recorded, then another admin's ON lands: the answer says it is ON now", async () => {
+    switches = new Set([ORG]);
+    beforeReadAgain = () => {
+      switches.add(ORG);
+    };
+    const res = await setOrganizationPasskeysAction({
+      organizationId: ORG,
+      on: false,
+      confirm: 'PASSKEYS',
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('conflict');
+    expect(h.recordPlatformAudit).toHaveBeenCalledTimes(1);
   });
 
   it('the delete names this organization only, and returns the rows it removed', async () => {

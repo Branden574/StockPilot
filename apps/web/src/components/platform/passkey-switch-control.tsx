@@ -125,7 +125,8 @@ export function PasskeySwitchControl({ target, on }: { target: PasskeySwitchTarg
           ? ` ${membersStillHoldingWords(res.data.membersWithPasskeys)}`
           : '';
       if (!res.data.changed) {
-        toast.info(`${words.name} was already ${state}.`);
+        // An OFF's answer is the switch as read again after the press.
+        toast.info(`${words.name} is already ${state}.`);
       } else if (!res.data.recorded) {
         // An OFF is made even when its record cannot be written; say both.
         toast.warning(`${PASSKEYS_COPY.offNotRecorded}${counted}`);
