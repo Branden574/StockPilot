@@ -84,7 +84,8 @@ describe('the Liquid Glass release is a draft at the top, and never leaves the s
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[18]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[19]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[22]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    const block = text.slice(0, text.indexOf(`id: '${RELEASES[23]!.id}'`));
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[23]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    const block = text.slice(0, text.indexOf(`id: '${RELEASES[24]!.id}'`));
     const lines = block.split('\n').filter((l) => l.includes('RECHECK'));
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) expect(line.trim().startsWith('//'), line).toBe(true);

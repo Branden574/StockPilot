@@ -161,7 +161,9 @@ export const RELEASES: Release[] = [
     // placeholder is that same minute.
     // Moved again by docs/whats-new-phone-large-text (2026-11-23; was: '2026-11-22T06:08:00Z'): the phone
     // large text release below is dated 2026-11-23T06:00:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-23T06:00:00Z',
+    // Moved again by docs/whats-new-recovery-code (2026-11-23; was: '2026-11-23T06:00:00Z'): the recovery
+    // code release below is dated 2026-11-23T06:30:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-23T06:30:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -246,6 +248,99 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  // The recovery code for everyone (stage 5 of the security tools, part 2; PR
+  // #642, live in production 2026-11-23 06:20Z). Published with status
+  // 'published' and publishedAt 2026-11-23T06:30:00Z. It names no passkey. A
+  // release is announced once it is in the registry of the deployment
+  // production is serving.
+  {
+    id: 'recovery-code-signs-out-other-devices-2026-11',
+    revision: 1,
+    // Claims checked against c0a8dc3d0 (paths under apps/web/src):
+    // - Other devices signed out, this one kept: server/actions/mfa-recovery.ts
+    //   endOtherSessions (Auth's sign-out of scope others as the held token;
+    //   on failure revoke_my_other_sessions keeping this session's id; the
+    //   broadcast names only the ended sessions). Every other session of the
+    //   account ends: other browsers and the phone app alike. Not at the same
+    //   moment: their refresh tokens end at once, and an access token a device
+    //   already holds keeps working until it expires, within the hour at most;
+    //   an open, honest device hears the broadcast. Not yet checked in the lab: the
+    //   phone app lands on sign-in after the code is used elsewhere.
+    // - Only after the code is accepted: a refused code, a wrong password, a
+    //   limit or a session Auth no longer holds ends nothing and sends nothing
+    //   (mfa-recovery.other-sessions.test.ts "a refused or stopped press ends
+    //   nothing and sends nothing"; mfa-recovery.session-live.test.ts). A
+    //   press whose spend is not known is answered "try again" and sends no
+    //   email (REVIEW-RELEASE-5 finding 3, accepted), which is why the words
+    //   below say "accepted".
+    // - The email: lib/email/es/families/security.ts renderRecoveryCodeUsedEmail,
+    //   sent for every code the action knows it spent, to the account's own
+    //   address as Auth answers it (b50e05a33; mfa-recovery.other-sessions.test.ts
+    //   "a code known spent sends one email" and "the address is the one Auth
+    //   answers"): subject "Your StockPilot sign-in methods were removed", or,
+    //   when a method could not be removed or the code removed nothing, "A
+    //   recovery code was used on your StockPilot account"; from
+    //   security@stockpilotusa.com; the time; which methods were removed only
+    //   when some were, that one could not be only when so; whether the other
+    //   devices were signed out; "If this was not you, reset your password
+    //   now", the reset page as its one link. Rendered and sent by
+    //   server/security/recovery-code-email.ts after the response.
+    // - The words on the code page: lib/auth/recovery-code-words.ts (dialog
+    //   before the press; after it, with the count of authenticator apps that
+    //   were set up, never one never set up, so they agree with the email
+    //   (b50e05a33), e.g. "Recovery code accepted. 1 authenticator app was
+    //   removed, and your other devices were signed out. Set up a new one
+    //   now."), then Settings, Security, as before
+    //   (components/auth/mfa-challenge-form.tsx). When the other devices could
+    //   not be signed out the words say so and to change the password
+    //   (otherSessionsLeft); when a method could not be removed, or the list of
+    //   them could not be read, they say so (which kind, never which one) and
+    //   whom to ask (methodsLeft; reported at error level,
+    //   actions.mfa_recovery.methods_left), and the other devices are still
+    //   signed out. When a method is left, the sign-in gate can bring the
+    //   member back to the code page; the words already say what to do.
+    // - Unchanged: the password is still required, the same limits, every
+    //   authenticator app is removed as before, the same Audit log row
+    //   (mfa.recovery.consumed with the count).
+    // Left out on purpose: when no email is sent, and how the session is
+    // checked. Who is told: every member (no audience): any member with an
+    // authenticator app can hold recovery codes. No link: the code page is
+    // reached by signing in. Platform: the website (the phone app has no
+    // recovery code; it is signed out like any other device).
+    status: 'published',
+    title: 'Using a recovery code now signs you out on your other devices',
+    summary:
+      'On the website, when you use a recovery code because you cannot get a code from your authenticator app, and the code is accepted, StockPilot now signs you out on your other devices, including the phone app, and emails you. You stay signed in where you used the code, and you set up a new authenticator app there.',
+    publishedAt: '2026-11-23T06:30:00Z',
+    entries: [
+      {
+        id: 'recovery-code-other-devices-signed-out',
+        category: 'improved',
+        area: 'Account',
+        title: 'A recovery code signs you out on your other devices',
+        whatChanged:
+          'When a recovery code is accepted on the sign-in page, StockPilot removes your authenticator apps, as before, and now also signs you out on every other device: other browsers and the StockPilot phone app. The browser where you used the code stays signed in.',
+        whyItMatters:
+          'If someone else used your account on another device, they are signed out. A device that is open right now can keep working until its current sign-in expires, within the hour at most. A recovery code is for when you lost your authenticator app, which may mean a lost or stolen phone.',
+        howItAffectsYou:
+          'After you use a code, sign in again on your other devices. The page says what was removed, if anything, and that your other devices were signed out, then opens Settings, Security. If something could not be removed, or your other devices could not be signed out, the page says so and what to do. Nothing changes until you use a code.',
+        whatToDo:
+          'Set up a new authenticator app in Settings, Security right after you use a code, and save your new recovery codes.',
+      },
+      {
+        id: 'recovery-code-email',
+        category: 'new',
+        area: 'Account',
+        title: 'An email when a recovery code is used',
+        whatChanged:
+          'When a recovery code is accepted on your account, we email you. The email says when the code was used and whether your other devices were signed out. If the code removed a sign-in method, it says what was removed. If a sign-in method could not be removed, it says so.',
+        whyItMatters: 'You hear about it even if it was not you who used the code.',
+        howItAffectsYou: 'Nothing changes in how you use a recovery code.',
+        whatToDo:
+          'If you get this email and did not use a recovery code, reset your password now and tell your administrator. If a sign-in method was removed, set it up again in Settings, Security.',
       },
     ],
   },
