@@ -11,11 +11,11 @@ import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-
 import {
   BRIEFING_FORMER_MEMBER,
   BRIEFING_SUPPORT_ACTOR,
-  BRIEFING_WEEK_DAYS,
+  BRIEFING_UNNAMED_MEMBER,
+  briefingPersonLabel,
   briefingPersonNotes,
   buildPlatformSecurityBriefing,
   buildSecurityBriefing,
-  countBriefingChanges,
   describeBriefingChange,
   extractBriefingChanges,
   type BriefingChange,
@@ -54,13 +54,12 @@ export const SECURITY_BRIEFING_READ_BUDGET_MS = 6000;
 /** The most accounts the passkey repair count reads; past it the page says "or more". */
 export const PASSKEY_REPAIR_READ_CAP = 1000;
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
 /* ───────────────────────── the database's answers ───────────────────────── */
 
 /** A count: a whole number, never negative. Event counts can pass 2^31. */
 const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuid = z.string().regex(UUID);
 /** A time as Postgres writes a timestamptz into jsonb. */
 const time = z
   .string()
@@ -132,23 +131,25 @@ export const platformBriefingEventsSchema = z
   })
   .strict();
 
+/**
+ * One organization's admin and sign-in policy changes of the week, counted by
+ * the database from every audit row of the week: the same object in the
+ * all-organizations read and as one organization's `changes_this_week`.
+ */
+const changeCounts = {
+  organization_id: uuid,
+  admins_promoted: count,
+  admins_demoted_or_removed: count,
+  ownership_moved: count,
+  sign_in_policy_loosened: count,
+  sign_in_policy_tightened: count,
+  sign_in_policy_changed_other: count,
+  admins_added_this_week: count,
+};
+
 export const platformBriefingChangesSchema = z
   .object({
-    organizations: z
-      .array(
-        z
-          .object({
-            organization_id: uuid,
-            admins_promoted: count,
-            admins_demoted_or_removed: count,
-            ownership_moved: count,
-            sign_in_policy_loosened: count,
-            sign_in_policy_tightened: count,
-            sign_in_policy_changed_other: count,
-          })
-          .strict(),
-      )
-      .max(MAX_ORGANIZATIONS),
+    organizations: z.array(z.object(changeCounts).strict()).max(MAX_ORGANIZATIONS),
     organizations_truncated: z.boolean(),
   })
   .strict();
@@ -205,6 +206,7 @@ export const platformBriefingOrganizationSchema = z
       )
       .max(MAX_CHANGES),
     changes_truncated: z.boolean(),
+    changes_this_week: z.object(changeCounts).strict(),
   })
   .strict()
   .nullable();
@@ -279,6 +281,24 @@ function readEvents(admin: AdminClient) {
 /* ─────────────────────────── database to core ─────────────────────────── */
 
 type MemberCounts = z.infer<z.ZodObject<typeof memberCounts>>;
+type ChangeCounts = z.infer<z.ZodObject<typeof changeCounts>>;
+
+/**
+ * The week's change counts as core reads them. The number of admins added is
+ * the database's count of distinct people; `admins_promoted` and the members
+ * read's `admins_joined_this_week` are parsed and never used, so the two can
+ * never be added together.
+ */
+function changesInput(row: ChangeCounts): BriefingChangeCounts {
+  return {
+    adminsAdded: row.admins_added_this_week,
+    adminsDemotedOrRemoved: row.admins_demoted_or_removed,
+    ownershipMoved: row.ownership_moved,
+    policyLoosened: row.sign_in_policy_loosened,
+    policyTightened: row.sign_in_policy_tightened,
+    policyChangedOther: row.sign_in_policy_changed_other,
+  };
+}
 
 function membersInput(row: MemberCounts, idleAfterDays: number): BriefingMembersInput {
   return {
@@ -290,7 +310,6 @@ function membersInput(row: MemberCounts, idleAfterDays: number): BriefingMembers
     membersWithIdleSignIns: row.members_with_idle_sign_ins,
     idleSignIns: row.idle_sign_ins,
     idleAfterDays,
-    adminsJoinedThisWeek: row.admins_joined_this_week,
     signInsReportedThisWeek: row.sign_ins_reported_this_week,
   };
 }
@@ -410,12 +429,7 @@ async function readEveryOrganization(now: number): Promise<PlatformSecurityBrief
       ? {
           organizations: changes.value.organizations.map((o) => ({
             organizationId: o.organization_id,
-            adminsPromoted: o.admins_promoted,
-            adminsDemotedOrRemoved: o.admins_demoted_or_removed,
-            ownershipMoved: o.ownership_moved,
-            policyLoosened: o.sign_in_policy_loosened,
-            policyTightened: o.sign_in_policy_tightened,
-            policyChangedOther: o.sign_in_policy_changed_other,
+            ...changesInput(o),
           })),
           truncated: changes.value.organizations_truncated,
         }
@@ -481,28 +495,46 @@ export interface OrganizationSecurityBriefing {
   detail: {
     people: OrganizationBriefingPerson[];
     peopleTruncated: boolean;
-    /** Admin and sign-in policy changes of 30 days, newest first. */
+    /** After how many days without use a sign-in is listed (the database's own number). */
+    idleAfterDays: number;
+    /**
+     * Admin and sign-in policy changes of 30 days, newest first. FOR DISPLAY
+     * ONLY: the week's counts in `briefing` come from the database's own
+     * count of every row of the week, never from this list.
+     */
     changes: OrganizationBriefingChange[];
+    /** True when the 30 days hold more audit rows than were read: the list is then not whole. */
     changesTruncated: boolean;
+    /** How many audit rows the list was made from. */
+    changesRowsRead: number;
   } | null;
 }
 
 interface ChangeNames {
-  /** The display name of an account that is a member of the organization now. */
+  /**
+   * An account that is a member of the organization now, as the briefing
+   * writes it: the name they chose with their email beside it, or the email
+   * alone. Never the name alone: a member chooses it.
+   */
   members: Map<string, string>;
   /** Accounts that are not members now and are platform administrators. */
   support: Set<string>;
 }
 
-/** Every account a change names. */
-function accountsIn(changes: readonly BriefingChange[]): string[] {
-  const ids = new Set<string>();
-  const add = (id: string | null) => {
-    if (id) ids.add(id);
+/** Every account a change names, and those among them who made a change. */
+function accountsIn(changes: readonly BriefingChange[]): { all: string[]; actors: Set<string> } {
+  const all = new Set<string>();
+  const actors = new Set<string>();
+  // An id out of an audit row's free text that is not an account id is left
+  // out here: it names nobody, and it would fail the whole read.
+  const add = (id: string | null, into?: Set<string>) => {
+    if (!id || !UUID.test(id)) return;
+    all.add(id);
+    into?.add(id);
   };
   for (const c of changes) {
     if (c.kind === 'account_deleted') continue;
-    add(c.actorUserId);
+    add(c.actorUserId, actors);
     if (c.kind === 'ownership_moved') {
       add(c.fromUserId);
       add(c.toUserId);
@@ -510,64 +542,75 @@ function accountsIn(changes: readonly BriefingChange[]): string[] {
       add(c.subjectUserId);
     }
   }
-  return [...ids];
+  return { all: [...all], actors };
 }
 
 /**
- * Who the changes name, by account id: one batched read of the profiles and
- * one of the organization's real memberships (accepted, not an act-as seat:
- * the rule every console reader uses). Null when either read failed
+ * Who the changes name, by account id. Two batched reads under ONE time
+ * budget, the same as every other read here: first the organization's real
+ * memberships among those accounts (accepted, not an act-as seat: the rule
+ * every console reader uses), then the profiles of those members, and of the
+ * people who made a change and are not members (only to tell StockPilot's own
+ * staff from a former member; their name is never used). Nobody else's
+ * profile is read. Null when either read failed or ran out of time
  * (reported): the lines are then written without names.
  */
 async function readChangeNames(
   admin: AdminClient,
   organizationId: string,
-  ids: string[],
+  accounts: { all: string[]; actors: Set<string> },
 ): Promise<ChangeNames | null> {
   const names: ChangeNames = { members: new Map(), support: new Set() };
-  if (ids.length === 0) return names;
+  if (accounts.all.length === 0) return names;
   try {
-    const [profiles, memberships] = await Promise.all([
-      fetchAllRowsByIds<{ id?: unknown; full_name?: unknown; email?: unknown }>(
-        ids,
-        (batch) => (from, to) =>
-          admin
-            .from('user_profiles')
-            .select('id, full_name, email')
-            .in('id', batch)
-            .order('id')
-            .range(from, to),
-        { requireList: 'user_profiles' },
-      ),
-      fetchAllRowsByIds<{ user_id?: unknown }>(
-        ids,
-        (batch) => (from, to) =>
-          admin
-            .from('organization_members')
-            .select('id, user_id')
-            .eq('organization_id', organizationId)
-            .in('user_id', batch)
-            .not('accepted_at', 'is', null)
-            .is('impersonation_expires_at', null)
-            .order('id')
-            .range(from, to),
-        { requireList: 'organization_members' },
-      ),
-    ]);
+    const signal = AbortSignal.timeout(SECURITY_BRIEFING_READ_BUDGET_MS);
+    const memberships = await fetchAllRowsByIds<{ user_id?: unknown }>(
+      accounts.all,
+      (batch) => (from, to) =>
+        admin
+          .from('organization_members')
+          .select('id, user_id')
+          .eq('organization_id', organizationId)
+          .in('user_id', batch)
+          .not('accepted_at', 'is', null)
+          .is('impersonation_expires_at', null)
+          .order('id')
+          .range(from, to)
+          .abortSignal(signal),
+      { requireList: 'organization_members' },
+    );
     const isMember = new Set(
       memberships.flatMap((m) => (typeof m.user_id === 'string' ? [m.user_id] : [])),
+    );
+    const wanted = accounts.all.filter((id) => isMember.has(id) || accounts.actors.has(id));
+    const profiles = await fetchAllRowsByIds<{
+      id?: unknown;
+      full_name?: unknown;
+      email?: unknown;
+    }>(
+      wanted,
+      (batch) => (from, to) =>
+        admin
+          .from('user_profiles')
+          .select('id, full_name, email')
+          .in('id', batch)
+          .order('id')
+          .range(from, to)
+          .abortSignal(signal),
+      { requireList: 'user_profiles' },
     );
     for (const p of profiles) {
       if (typeof p.id !== 'string') continue;
       const email = typeof p.email === 'string' && p.email.length > 0 ? p.email : null;
       if (isMember.has(p.id)) {
-        const fullName =
-          typeof p.full_name === 'string' && p.full_name.trim().length > 0
-            ? p.full_name.trim()
-            : null;
-        const name = fullName ?? email;
-        if (name) names.members.set(p.id, name);
+        const label = briefingPersonLabel(
+          typeof p.full_name === 'string' ? p.full_name : null,
+          email,
+        );
+        if (label) names.members.set(p.id, label);
       } else if (isPlatformAdmin(email)) {
+        // By the account's own address, which its holder cannot edit. Never
+        // by a name.
         names.support.add(p.id);
       }
     }
@@ -576,23 +619,27 @@ async function readChangeNames(
     await reportError(new Error(rawErrorText(err)), {
       tag: 'platform.security-briefing.names',
       level: 'warning',
-      extra: { organizationId, count: ids.length },
+      extra: { organizationId, count: accounts.all.length },
     });
     return null;
   }
 }
 
 /**
- * One change as its sentence. A person who is a member now is named. One
- * who is not is "a former member", or "StockPilot support" when the one who
- * made the change is a platform administrator with no membership there
- * (support acting as the organization). When the names could not be read, a
- * person is "a member" and nobody is said to have made the change.
+ * One change as its sentence. A person who is a member now is written with
+ * their email (and the name they chose, when they chose one). One who is not
+ * is "a former member", or "StockPilot support" when the one who made the
+ * change is a platform administrator with no membership there (support
+ * acting as the organization): that label is never a profile's name. When
+ * the names could not be read, a person is "a member" and nobody is said to
+ * have made the change.
  */
 function changeText(change: BriefingChange, names: ChangeNames | null): string {
   if (change.kind === 'account_deleted') return describeBriefingChange(change);
   const person = (id: string | null): string =>
-    names === null ? 'a member' : ((id && names.members.get(id)) ?? BRIEFING_FORMER_MEMBER);
+    names === null
+      ? BRIEFING_UNNAMED_MEMBER
+      : ((id && names.members.get(id)) ?? BRIEFING_FORMER_MEMBER);
   const actorId = change.actorUserId;
   const actor =
     names === null || actorId === null
@@ -680,10 +727,11 @@ async function readOneOrganization(
     }
   }
 
-  let changeCounts: BriefingChangeCounts | null = null;
   let people: OrganizationBriefingPerson[] = [];
   let changes: OrganizationBriefingChange[] = [];
   if (detail) {
+    // The list is for display only. It is made from at most 200 audit rows,
+    // so it is never counted: the week's numbers are `changes_this_week`.
     const listed = extractBriefingChanges(
       detail.changes.map((row) => ({
         createdAt: row.created_at,
@@ -699,7 +747,6 @@ async function readOneOrganization(
         madeAs: row.made_as,
       })),
     );
-    changeCounts = countBriefingChanges(listed, now - BRIEFING_WEEK_DAYS * DAY_MS);
     const names = await readChangeNames(admin, organizationId, accountsIn(listed));
     changes = listed.map((change) => ({ at: change.at, text: changeText(change, names) }));
     people = detail.people.map((p) => ({
@@ -727,14 +774,18 @@ async function readOneOrganization(
       now,
       members: detail ? membersInput(detail, detail.idle_after_days) : null,
       events,
-      changes: changeCounts,
+      // The database's count of every audit row of the week. Never a count
+      // of the list below, which stops at 200 rows.
+      changes: detail ? changesInput(detail.changes_this_week) : null,
     }),
     detail: detail
       ? {
           people,
           peopleTruncated: detail.people_truncated,
+          idleAfterDays: detail.idle_after_days,
           changes,
           changesTruncated: detail.changes_truncated,
+          changesRowsRead: detail.changes.length,
         }
       : null,
   };

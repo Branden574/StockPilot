@@ -14,10 +14,14 @@ import { SECURITY_EVENT_CATEGORIES } from '@stockpilot/core';
  * build does not know (a key too many, a key missing, a list past its cap)
  * is "could not check", so a session id, an address or a factor id that the
  * database must never return could not pass through; nothing throws. For one
- * organization: the names in the changes come from one batched read of the
- * profiles and one of the organization's real memberships; a platform
- * administrator with no membership there is "StockPilot support", anyone
- * else who is no member now is "a former member". Made-up people only.
+ * organization: the week's numbers are the database's own counts
+ * (changes_this_week), never a count of the list, which stops at 200 rows;
+ * the names in the changes come from one batched read of the organization's
+ * real memberships and one of those members' profiles, under one time
+ * budget; a member is always written with their email, so a name a member
+ * chose can never read as "StockPilot support", which is given only to a
+ * platform administrator with no membership there; anyone else who is no
+ * member now is "a former member". Made-up people only.
  */
 
 const ORG = '0b8f6c1e-0000-4000-8000-000000000001';
@@ -120,9 +124,23 @@ const changesAnswer = (over: Record<string, unknown> = {}) => ({
       sign_in_policy_loosened: 1,
       sign_in_policy_tightened: 0,
       sign_in_policy_changed_other: 0,
+      admins_added_this_week: 2,
     },
   ],
   organizations_truncated: false,
+  ...over,
+});
+
+/** One organization's week, as the database counts it from every audit row. */
+const weekCounts = (over: Record<string, number> = {}) => ({
+  organization_id: ORG,
+  admins_promoted: 0,
+  admins_demoted_or_removed: 0,
+  ownership_moved: 0,
+  sign_in_policy_loosened: 0,
+  sign_in_policy_tightened: 0,
+  sign_in_policy_changed_other: 0,
+  admins_added_this_week: 0,
   ...over,
 });
 
@@ -156,6 +174,7 @@ const detailAnswer = (over: Record<string, unknown> = {}) => ({
     },
   ],
   people_truncated: false,
+  changes_this_week: weekCounts({ admins_promoted: 1, admins_added_this_week: 1 }),
   changes: [changeRow()],
   changes_truncated: false,
   ...over,
@@ -167,7 +186,7 @@ const ok = (data: unknown): Answer => ({ data, error: null });
 let answers: Record<string, Answer | (() => Answer)>;
 let profiles: Array<Record<string, unknown>>;
 let memberships: Array<Record<string, unknown>>;
-let namesFail: boolean;
+let namesFail: false | 'profiles' | 'memberships' | 'timeout';
 /** Every rpc chain as it was awaited. */
 let awaited: MockCall[];
 
@@ -178,6 +197,20 @@ const rpc = (fn: string) => (call: MockCall) => {
   return typeof answer === 'function' ? answer() : answer;
 };
 
+/**
+ * The table reads carry a time budget. The stub's PostgREST stand-in applies
+ * the filters and has no word for `.abortSignal()`, so it is taken off the
+ * call it serves; the tests read the signal from the recorded chain.
+ */
+const served = (rows: () => Array<Record<string, unknown>>) => (call: MockCall) => {
+  const keep = call.methods.map((m) => m !== 'abortSignal');
+  return servedLikePostgrest(rows)({
+    ...call,
+    methods: call.methods.filter((_, i) => keep[i]),
+    args: call.args.filter((_, i) => keep[i]),
+  });
+};
+
 const stub = makeSupabaseStub({
   'rpc:platform_security_briefing_members': rpc('platform_security_briefing_members'),
   'rpc:platform_security_briefing_events': rpc('platform_security_briefing_events'),
@@ -186,11 +219,15 @@ const stub = makeSupabaseStub({
     'platform_security_briefing_for_organization',
   ),
   'rpc:passkey_account_states': rpc('passkey_account_states'),
-  'user_profiles.select': (call) =>
-    namesFail
-      ? { data: null, error: { message: 'profiles unreadable' } }
-      : servedLikePostgrest(profiles)(call),
-  'organization_members.select': (call) => servedLikePostgrest(memberships)(call),
+  'user_profiles.select': (call) => {
+    if (namesFail === 'profiles') return { data: null, error: { message: 'profiles unreadable' } };
+    if (namesFail === 'timeout') throw new Error('The operation was aborted due to timeout');
+    return served(() => profiles)(call);
+  },
+  'organization_members.select': (call) =>
+    namesFail === 'memberships'
+      ? { data: null, error: { message: 'memberships unreadable' } }
+      : served(() => memberships)(call),
   'organizations.select': () =>
     answers.organizations
       ? (answers.organizations as Answer)
@@ -332,6 +369,10 @@ describe("the schemas are the contract's shapes, exactly", () => {
       [platformBriefingOrganizationSchema, detailAnswer({ factor_id: 'x' })],
       [
         platformBriefingOrganizationSchema,
+        detailAnswer({ changes_this_week: { ...weekCounts(), admins_joined: 1 } }),
+      ],
+      [
+        platformBriefingOrganizationSchema,
         detailAnswer({
           people: [{ ...(detailAnswer().people as unknown[])[0]!, factor_name: 'Phone' }],
         }),
@@ -368,6 +409,26 @@ describe("the schemas are the contract's shapes, exactly", () => {
     expect(
       platformBriefingOrganizationSchema.safeParse(
         detailAnswer({ changes: Array.from({ length: 201 }, () => changeRow()) }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("the week's counts are part of the shape: a detail or a changes row without them is refused", () => {
+    const { changes_this_week: _gone, ...without } = detailAnswer();
+    expect(platformBriefingOrganizationSchema.safeParse(without).success).toBe(false);
+    for (const key of Object.keys(weekCounts())) {
+      const { [key]: _one, ...short } = weekCounts() as Record<string, unknown>;
+      expect(
+        platformBriefingOrganizationSchema.safeParse(detailAnswer({ changes_this_week: short }))
+          .success,
+      ).toBe(false);
+      expect(
+        platformBriefingChangesSchema.safeParse(changesAnswer({ organizations: [short] })).success,
+      ).toBe(false);
+    }
+    expect(
+      platformBriefingOrganizationSchema.safeParse(
+        detailAnswer({ changes_this_week: weekCounts({ admins_added_this_week: -1 }) }),
       ).success,
     ).toBe(false);
   });
@@ -416,7 +477,11 @@ describe('readPlatformSecurityBriefing', () => {
         adminsWithoutSecondStep: 1,
         membersWithoutSecondStep: 11,
         signInsReported: 0,
-        adminChanges: 3,
+        // The database's count of distinct people. Never admins_joined_this_week
+        // (1 here) plus admins_promoted (1 here).
+        adminsAdded: 2,
+        adminsRemoved: 0,
+        ownershipMoves: 1,
         policyChanges: 1,
       },
     ]);
@@ -482,18 +547,19 @@ describe('readPlatformSecurityBriefing', () => {
   }> = [
     {
       fn: 'platform_security_briefing_members',
-      unchecked: 'Second steps, reported sign-ins and new admins could not be checked.',
+      unchecked: 'Second steps and reported sign-ins could not be checked.',
       check: (b) => {
         expect(b.totalsLine).toBeNull();
         expect(b.organizations[0]).toMatchObject({
           adminsWithoutSecondStep: null,
           membersWithoutSecondStep: null,
           signInsReported: null,
-          adminChanges: null,
           // The other reads are shown.
+          adminsAdded: 2,
           blockedThisWeek: 28,
           policyChanges: 1,
         });
+        expect(b.organizationsAllChecked).toBe(false);
       },
     },
     {
@@ -516,11 +582,14 @@ describe('readPlatformSecurityBriefing', () => {
       unchecked: 'Admin and sign-in policy changes could not be checked.',
       check: (b) => {
         expect(b.organizations[0]).toMatchObject({
-          adminChanges: null,
+          adminsAdded: null,
+          adminsRemoved: null,
+          ownershipMoves: null,
           policyChanges: null,
           blockedThisWeek: 28,
           adminsWithoutSecondStep: 1,
         });
+        expect(b.organizationsAllChecked).toBe(false);
       },
     },
     {
@@ -528,7 +597,9 @@ describe('readPlatformSecurityBriefing', () => {
       unchecked: 'Passkey set-ups that need repair could not be checked.',
       check: (b) => {
         expect(b.goodShape).not.toContain('No passkey set-up needs repair.');
-        expect(b.organizations[0]).toMatchObject({ blockedThisWeek: 28, adminChanges: 3 });
+        expect(b.organizations[0]).toMatchObject({ blockedThisWeek: 28, adminsAdded: 2 });
+        // Not one of the three organization reads.
+        expect(b.organizationsAllChecked).toBe(true);
       },
     },
   ];
@@ -601,7 +672,7 @@ describe('readPlatformSecurityBriefing', () => {
     answers.platform_security_briefing_changes = ok({ organizations: 'none' });
     const b = await readPlatformSecurityBriefing(NOW);
     expect(b.unchecked).toEqual([
-      'Second steps, reported sign-ins and new admins could not be checked.',
+      'Second steps and reported sign-ins could not be checked.',
       'Blocked and flagged activity could not be checked.',
       'Admin and sign-in policy changes could not be checked.',
     ]);
@@ -654,6 +725,15 @@ describe('findBriefingOrganization', () => {
     expect(stub.chainArgsAll.get('organizations.select')?.[0]?.[1]).toEqual(['id', ORG]);
   });
 
+  it('the lookup has the same time budget as every other read', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    await findBriefingOrganization(ORG);
+    expect(timeout.mock.calls).toEqual([[SECURITY_BRIEFING_READ_BUDGET_MS]]);
+    expect(stub.chainArgsAll.get('organizations.select')?.[0]?.[2]?.[0]).toBe(
+      timeout.mock.results[0]?.value,
+    );
+  });
+
   it('no such organization: not found, and nothing reported', async () => {
     answers.organizations = ok([]);
     expect(await findBriefingOrganization(ORG)).toEqual({ found: false, failed: false });
@@ -677,7 +757,8 @@ describe('readOrganizationSecurityBriefing', () => {
       { name: 'platform_security_briefing_for_organization', args: { p_organization_id: ORG } },
       { name: 'platform_security_briefing_events', args: undefined },
     ]);
-    expect(timeout.mock.calls).toEqual([[6000], [6000]]);
+    // The detail, the events, and the names: one budget each.
+    expect(timeout.mock.calls).toEqual([[6000], [6000], [6000]]);
     expect(awaited.map((c) => c.methods)).toEqual([
       ['rpc', 'abortSignal'],
       ['rpc', 'abortSignal'],
@@ -710,39 +791,111 @@ describe('readOrganizationSecurityBriefing', () => {
         },
       ],
       peopleTruncated: false,
+      idleAfterDays: 30,
       changes: [
         {
           at: '2026-11-22T18:04:11.52+00:00',
-          text: 'Alex Example was made an admin by Dana Example.',
+          // Each person with their email: a name is the member's own choice.
+          text: 'Alex Example (alex@example.com) was made an admin by Dana Example (dana@example.com).',
         },
       ],
       changesTruncated: false,
+      changesRowsRead: 1,
     });
     expect(h.reportError).not.toHaveBeenCalled();
   });
 
-  it("the week's admin changes are counted from the list: a change 8 days old is listed, not counted", async () => {
-    answers.platform_security_briefing_for_organization = ok(
-      detailAnswer({
-        admins_joined_this_week: 0,
-        changes: [changeRow({ created_at: '2026-11-15T11:59:59+00:00' })],
-      }),
-    );
-    const old = await readOrganizationSecurityBriefing(ORG, NOW);
-    expect(old.detail?.changes).toHaveLength(1);
-    expect(old.briefing.items.map((i) => i.id)).not.toContain('admin_changes');
+  describe("the week's numbers are the database's own counts, never a count of the list", () => {
+    it('a list cut at 200 rows that hides a loosened policy: the briefing still says it was loosened', async () => {
+      // A rollout week: 200 staff accept invitations after the policy was
+      // loosened. The loosening is older than the 200 newest rows.
+      const staffJoins = Array.from({ length: 200 }, (_, i) =>
+        changeRow({
+          created_at: new Date(NOW - 60_000 * (i + 1)).toISOString(),
+          event: 'user.invite.accepted',
+          actor_user_id: ALEX,
+          target_user_id: null,
+          entity_id: null,
+          entity_type: null,
+          before: null,
+          after: null,
+          role: 'staff',
+          made_as: null,
+        }),
+      );
+      answers.platform_security_briefing_for_organization = ok(
+        detailAnswer({
+          changes: staffJoins,
+          changes_truncated: true,
+          changes_this_week: weekCounts({ sign_in_policy_loosened: 1 }),
+        }),
+      );
+      const { briefing, detail } = await readOrganizationSecurityBriefing(ORG, NOW);
+      // Nothing in the list...
+      expect(detail?.changes).toEqual([]);
+      expect(detail?.changesTruncated).toBe(true);
+      expect(detail?.changesRowsRead).toBe(200);
+      // ...and the week is still told as it was.
+      const policy = briefing.items.find((i) => i.id === 'policy_changes');
+      expect(policy?.severity).toBe('medium');
+      expect(policy?.headline).toBe('The sign-in policy was loosened once this week');
+      expect(briefing.goodShape).not.toContain('No admin or sign-in policy change this week.');
+      expect(briefing.status).toBe('needs_attention');
+    });
 
-    answers.platform_security_briefing_for_organization = ok(
-      detailAnswer({
-        admins_joined_this_week: 0,
-        changes: [changeRow({ created_at: '2026-11-16T12:00:00+00:00' })],
-      }),
-    );
-    const inWeek = await readOrganizationSecurityBriefing(ORG, NOW);
-    expect(inWeek.briefing.items.map((i) => i.id)).toContain('admin_changes');
+    it('"no change this week" comes from the counts alone: a quiet count says it, a list line does not unsay it', async () => {
+      answers.platform_security_briefing_for_organization = ok(
+        detailAnswer({ changes_this_week: weekCounts() }),
+      );
+      const { briefing, detail } = await readOrganizationSecurityBriefing(ORG, NOW);
+      // The list holds an in-week promotion; the counts are what is said.
+      expect(detail?.changes).toHaveLength(1);
+      expect(briefing.items.map((i) => i.id)).not.toContain('admin_changes');
+      expect(briefing.goodShape).toContain('No admin or sign-in policy change this week.');
+    });
+
+    it('a change in the counts and an empty list: still an item', async () => {
+      answers.platform_security_briefing_for_organization = ok(
+        detailAnswer({
+          changes: [],
+          changes_this_week: weekCounts({ admins_demoted_or_removed: 2, ownership_moved: 1 }),
+        }),
+      );
+      const { briefing } = await readOrganizationSecurityBriefing(ORG, NOW);
+      expect(briefing.items.find((i) => i.id === 'admin_changes')?.headline).toBe(
+        '2 admins removed or moved to another role, ownership moved once this week',
+      );
+    });
+
+    it('admins added is the count of distinct people: never joined plus promoted', async () => {
+      // One person who joined as staff on Monday and was made an admin on
+      // Wednesday: the members read says 1 joined, the audit rows say 1
+      // promoted, and it is one person.
+      answers.platform_security_briefing_for_organization = ok(
+        detailAnswer({
+          admins_joined_this_week: 1,
+          changes_this_week: weekCounts({ admins_promoted: 1, admins_added_this_week: 1 }),
+        }),
+      );
+      const { briefing } = await readOrganizationSecurityBriefing(ORG, NOW);
+      const item = briefing.items.find((i) => i.id === 'admin_changes');
+      expect(item?.headline).toBe('1 admin added this week');
+      expect(item?.whatWeSee).toBe('1 member became an admin or the owner.');
+      expect(JSON.stringify(item)).not.toMatch(/\b2\b/);
+      // The two source numbers alone make no item: only the distinct count does.
+      answers.platform_security_briefing_for_organization = ok(
+        detailAnswer({
+          admins_joined_this_week: 3,
+          changes_this_week: weekCounts({ admins_promoted: 4 }),
+        }),
+      );
+      const none = await readOrganizationSecurityBriefing(ORG, NOW);
+      expect(none.briefing.items.map((i) => i.id)).not.toContain('admin_changes');
+    });
   });
 
-  it('names: one batched read of the profiles, one of the real memberships of that organization', async () => {
+  it('names: one batched read of the real memberships of that organization, then one of those profiles', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
     answers.platform_security_briefing_for_organization = ok(
       detailAnswer({
         changes: [
@@ -805,29 +958,53 @@ describe('readOrganizationSecurityBriefing', () => {
     );
     const { detail } = await readOrganizationSecurityBriefing(ORG, NOW);
     expect(detail?.changes.map((c) => c.text)).toEqual([
-      'Alex Example was made an admin by StockPilot support.',
+      'Alex Example (alex@example.com) was made an admin by StockPilot support.',
       'A former member was made an admin by a former member.',
-      'Alex Example was changed from admin to manager.',
-      'A former member, an admin, was removed by Dana Example.',
+      'Alex Example (alex@example.com) was changed from admin to manager.',
+      'A former member, an admin, was removed by Dana Example (dana@example.com).',
       'A member deleted their account.',
-      'The sign-in policy was loosened: Required for everyone to Optional by Dana Example.',
-      'Ownership moved from Dana Example to Alex Example.',
+      'The sign-in policy was loosened: Required for everyone to Optional by Dana Example (dana@example.com).',
+      'Ownership moved from Dana Example (dana@example.com) to Alex Example (alex@example.com).',
     ]);
 
-    // One read of each table for the whole list.
-    expect(stub.fromCalls).toEqual(['user_profiles', 'organization_members']);
-    const profileChain = stub.chainArgsAll.get('user_profiles.select')?.[0];
-    expect(profileChain?.[0]).toEqual(['id, full_name, email']);
-    expect([...(profileChain?.[1]?.[1] as string[])].sort()).toEqual(
-      [ADMIN, ALEX, FORMER_ADMIN, GONE, SUPPORT].sort(),
-    );
+    // One read of each table for the whole list: the memberships first.
+    expect(stub.fromCalls).toEqual(['organization_members', 'user_profiles']);
     const memberMethods = stub.chainsAll.get('organization_members.select')?.[0];
     const memberArgs = stub.chainArgsAll.get('organization_members.select')?.[0];
-    expect(memberMethods).toEqual(['select', 'eq', 'in', 'not', 'is', 'order', 'range']);
+    expect(memberMethods).toEqual([
+      'select',
+      'eq',
+      'in',
+      'not',
+      'is',
+      'order',
+      'range',
+      'abortSignal',
+    ]);
     // Real memberships only: this organization, accepted, not an act-as seat.
     expect(memberArgs?.[1]).toEqual(['organization_id', ORG]);
+    expect([...(memberArgs?.[2]?.[1] as string[])].sort()).toEqual(
+      [ADMIN, ALEX, FORMER_ADMIN, GONE, SUPPORT].sort(),
+    );
     expect(memberArgs?.[3]).toEqual(['accepted_at', 'is', null]);
     expect(memberArgs?.[4]).toEqual(['impersonation_expires_at', null]);
+    // Profiles: the members, and the people who made a change and are not
+    // members (to tell support from a former member). Never the profile of
+    // someone who is neither: Gone Example is only the subject of a change.
+    const profileMethods = stub.chainsAll.get('user_profiles.select')?.[0];
+    const profileArgs = stub.chainArgsAll.get('user_profiles.select')?.[0];
+    expect(profileMethods).toEqual(['select', 'in', 'order', 'range', 'abortSignal']);
+    expect(profileArgs?.[0]).toEqual(['id, full_name, email']);
+    expect([...(profileArgs?.[1]?.[1] as string[])].sort()).toEqual(
+      [ADMIN, ALEX, FORMER_ADMIN, SUPPORT].sort(),
+    );
+    // Both under ONE time budget, the same as every other read.
+    expect(timeout.mock.calls).toEqual([[6000], [6000], [6000]]);
+    const namesSignal = timeout.mock.results[2]?.value as AbortSignal;
+    expect(memberArgs?.[7]?.[0]).toBe(namesSignal);
+    expect(profileArgs?.[4]?.[0]).toBe(namesSignal);
+    // The name a support account chose is never used.
+    expect(detail?.changes.map((c) => c.text).join(' ')).not.toContain('Sam Support');
     // The account of the self-deleted member is never looked up.
     expect(detail?.changes.map((c) => c.text).join(' ')).not.toContain('Gone Example');
   });
@@ -839,12 +1016,116 @@ describe('readOrganizationSecurityBriefing', () => {
     expect(stub.fromCalls).toEqual([]);
   });
 
-  it('the names could not be read: the lines name nobody, it is reported, nothing throws', async () => {
-    namesFail = true;
+  it('a member who names themselves "StockPilot support" is written with their own email, never as support', async () => {
+    profiles = profiles.map((p) => (p.id === ALEX ? { ...p, full_name: 'StockPilot support' } : p));
+    const loosened = (actor: string, created_at: string) =>
+      changeRow({
+        created_at,
+        event: 'organization.mfa_policy.changed',
+        actor_user_id: actor,
+        target_user_id: null,
+        entity_type: 'organization',
+        before: { mfa_policy: 'all_required' },
+        after: { mfa_policy: 'optional' },
+      });
+    answers.platform_security_briefing_for_organization = ok(
+      detailAnswer({
+        people: [
+          {
+            user_id: ALEX,
+            full_name: 'StockPilot support',
+            email: 'alex@example.com',
+            role: 'admin',
+            has_second_step: false,
+            idle_sign_ins: 0,
+            oldest_idle_at: null,
+          },
+        ],
+        changes: [
+          // The member, as the one who made a change and as the one a change is about.
+          loosened(ALEX, '2026-11-22T12:00:00+00:00'),
+          changeRow({ created_at: '2026-11-22T11:00:00+00:00', target_user_id: ALEX }),
+          // StockPilot's own staff.
+          loosened(SUPPORT, '2026-11-22T10:00:00+00:00'),
+        ],
+      }),
+    );
     const { detail } = await readOrganizationSecurityBriefing(ORG, NOW);
-    expect(detail?.changes.map((c) => c.text)).toEqual(['A member was made an admin.']);
-    expect(reports().map((r) => r.tag)).toEqual(['platform.security-briefing.names']);
+    const [byMember, aboutMember, bySupport] = detail!.changes.map((c) => c.text);
+    expect(byMember).toBe(
+      'The sign-in policy was loosened: Required for everyone to Optional by StockPilot support (alex@example.com).',
+    );
+    expect(aboutMember).toBe(
+      'StockPilot support (alex@example.com) was made an admin by Dana Example (dana@example.com).',
+    );
+    // The real label: no email beside it, and never a profile's name.
+    expect(bySupport).toBe(
+      'The sign-in policy was loosened: Required for everyone to Optional by StockPilot support.',
+    );
+    expect(byMember).not.toBe(bySupport);
+    // In People the email rides with the name.
+    expect(detail?.people[0]).toMatchObject({
+      fullName: 'StockPilot support',
+      email: 'alex@example.com',
+    });
   });
+
+  it('someone who is no member now and named themselves "StockPilot support" is "a former member": the label is never taken from a name', async () => {
+    profiles = profiles.map((p) =>
+      p.id === FORMER_ADMIN ? { ...p, full_name: 'StockPilot support' } : p,
+    );
+    answers.platform_security_briefing_for_organization = ok(
+      detailAnswer({ changes: [changeRow({ actor_user_id: FORMER_ADMIN })] }),
+    );
+    const { detail } = await readOrganizationSecurityBriefing(ORG, NOW);
+    expect(detail?.changes.map((c) => c.text)).toEqual([
+      'Alex Example (alex@example.com) was made an admin by a former member.',
+    ]);
+  });
+
+  it('a member with no name is written by their email alone', async () => {
+    profiles = profiles.map((p) => (p.id === ALEX ? { ...p, full_name: '  ' } : p));
+    const { detail } = await readOrganizationSecurityBriefing(ORG, NOW);
+    expect(detail?.changes[0]?.text).toBe(
+      'alex@example.com was made an admin by Dana Example (dana@example.com).',
+    );
+  });
+
+  it('an id in an audit row that is not an account id names nobody and is never asked for', async () => {
+    answers.platform_security_briefing_for_organization = ok(
+      detailAnswer({
+        changes: [
+          changeRow({
+            event: 'user.deactivated',
+            target_user_id: null,
+            before: { user_id: 'not-an-account-id', role: 'admin' },
+            after: null,
+          }),
+        ],
+      }),
+    );
+    const { detail } = await readOrganizationSecurityBriefing(ORG, NOW);
+    expect(detail?.changes.map((c) => c.text)).toEqual([
+      'A former member, an admin, was removed by Dana Example (dana@example.com).',
+    ]);
+    expect(stub.chainArgsAll.get('organization_members.select')?.[0]?.[2]?.[1]).toEqual([ADMIN]);
+    expect(h.reportError).not.toHaveBeenCalled();
+  });
+
+  it.each(['memberships', 'profiles', 'timeout'] as const)(
+    'the names could not be read (%s): the lines say "a member" and name nobody, it is reported, nothing throws',
+    async (failure) => {
+      namesFail = failure;
+      const { briefing, detail } = await readOrganizationSecurityBriefing(ORG, NOW);
+      expect(detail?.changes.map((c) => c.text)).toEqual(['A member was made an admin.']);
+      expect(reports().map((r) => r.tag)).toEqual(['platform.security-briefing.names']);
+      // The rest of the briefing stands.
+      expect(detail?.people).toHaveLength(1);
+      expect(briefing.items.map((i) => i.id)).toContain('admin_changes');
+      // A failed membership read never goes on to read profiles.
+      if (failure === 'memberships') expect(stub.fromCalls).toEqual(['organization_members']);
+    },
+  );
 
   it('the organization has no event in the two weeks: zeros, and blocked activity is steady', async () => {
     answers.platform_security_briefing_events = ok(eventsAnswer({ organizations: [] }));
@@ -878,7 +1159,7 @@ describe('readOrganizationSecurityBriefing', () => {
     const { briefing, detail } = await readOrganizationSecurityBriefing(ORG, NOW);
     expect(detail).toBeNull();
     expect(briefing.unchecked).toEqual([
-      'Second steps, reported sign-ins and new admins could not be checked.',
+      'Second steps and reported sign-ins could not be checked.',
       'Admin and sign-in policy changes could not be checked.',
     ]);
     expect(briefing.categories).toHaveLength(3);
@@ -923,7 +1204,7 @@ describe('readOrganizationSecurityBriefing', () => {
     const { briefing, detail } = await readOrganizationSecurityBriefing(ORG, NOW);
     expect(detail).toBeNull();
     expect(briefing.unchecked).toContain(
-      'Second steps, reported sign-ins and new admins could not be checked.',
+      'Second steps and reported sign-ins could not be checked.',
     );
   });
 
