@@ -1791,8 +1791,8 @@ select is(
 select is(
   (select md5(pg_get_constraintdef(c.oid)) from pg_constraint c
     where c.conrelid = 'public.platform_admin_audit'::regclass and c.conname = 'platform_admin_audit_action_check'),
-  '5c5206f38b7c1c7c60301d7d2ec92f2c',
-  '0475/215: the platform audit vocabulary is the one 0413 left: this file adds no word (the console''s switch words come with the console control)');
+  'fa0b463c82f5c1cc9ffbd450615dc877',
+  '0475/215: this file adds no word to the platform audit vocabulary: it is the one 0413 left (md5 5c5206f3...) plus the two passkey switch words 0476 adds (0476''s own test pins them)');
 select is(
   (select pg_get_constraintdef(c.oid) from pg_constraint c
     where c.conrelid = 'public.member_passkeys'::regclass and c.conname = 'member_passkeys_user_verified'),
