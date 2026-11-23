@@ -1848,7 +1848,7 @@ describe('the platform briefing: its own items', () => {
     // THE CAP: a read cut short at its cap. Nothing failed, so no "Some
     // checks ..."; the organizations past the cap are not in the count.
     for (const cut of [
-      { members: platformMembers(two.organizations, { truncated: true }) },
+      { members: platformMembers([...two.organizations], { truncated: true }) },
       { members: two, events: platformEvents({ truncated: true }) },
       { members: two, changes: { organizations: [], truncated: true } },
     ]) {
