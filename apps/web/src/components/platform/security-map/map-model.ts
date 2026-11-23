@@ -1,0 +1,244 @@
+import {
+  SECURITY_EVENT_CATEGORIES,
+  SECURITY_MAP_RECENT_POLL_MS,
+  SECURITY_MAP_WHOLE_POLL_MS,
+  SECURITY_MAP_WORDS,
+  securityMapNextPollDelay,
+  type SecurityEventCategory,
+  type SecurityMapArc,
+  type SecurityMapPlan,
+  type SecurityMapStopReason,
+  type SecurityMapWholeRead,
+} from '@stockpilot/core';
+
+import { facingOf, type ArcTiming, type GlobeFacing } from './globe-math';
+import { STOCKPILOT_LON_LAT, countryPoint, type LonLat } from './world-geometry';
+
+/**
+ * The island's own rules for showing core's plan: how each category looks,
+ * which arcs are on the map this moment, when to read again, and which view
+ * is shown. Pure and tested (map-model.test.ts). Core decides what is true;
+ * this decides only how it is shown.
+ */
+
+/* ───────────────────────────── how a category looks ───────────────────────────── */
+
+export type MarkShape = 'circle' | 'diamond' | 'square' | 'triangle' | 'hexagon';
+
+export interface CategoryLook {
+  /** For CSS. */
+  hex: string;
+  /** The same colour for the globe's shaders, 0 to 1. */
+  rgb: readonly [number, number, number];
+  /** The mark at an arc's start: a second sign of the category besides its colour. */
+  shape: MarkShape;
+}
+
+const look = (hex: string, shape: MarkShape): CategoryLook => ({
+  hex,
+  rgb: [
+    parseInt(hex.slice(1, 3), 16) / 255,
+    parseInt(hex.slice(3, 5), 16) / 255,
+    parseInt(hex.slice(5, 7), 16) / 255,
+  ],
+  shape,
+});
+
+/**
+ * Every category has a colour and a shape of its own, hidden ones too, so
+ * showing a category needs no new look. The colours are for the map's dark
+ * panel, which is dark in both appearances.
+ */
+export const CATEGORY_LOOKS: Readonly<Record<SecurityEventCategory, CategoryLook>> = {
+  password_guessing: look('#f5b041', 'circle'),
+  exploit: look('#ff5c7a', 'diamond'),
+  bots: look('#3dd5f3', 'square'),
+  phishing: look('#b794f6', 'triangle'),
+  malware: look('#9be15d', 'hexagon'),
+};
+
+/** The shape's number in the globe's shader. */
+export const SHAPE_INDEX: Readonly<Record<MarkShape, number>> = {
+  circle: 0,
+  diamond: 1,
+  square: 2,
+  triangle: 3,
+  hexagon: 4,
+};
+
+/** The map panel's own colours (dark in both appearances). */
+export const PANEL = {
+  land: '#6fb7ff',
+  stockpilot: '#ffffff',
+  text: '#e6edf7',
+  quiet: '#c9d6ea',
+} as const;
+
+/* ─────────────────────────── what is on the map now ─────────────────────────── */
+
+export interface Stage {
+  timing: ArcTiming;
+  arcs: SecurityMapArc[];
+  /** The replay step shown, or -1. */
+  stepIndex: number;
+}
+
+/**
+ * The arcs on the map this moment, and how they move. Moving only when
+ * nothing stops the play: live arcs loop, a replay shows its current hour.
+ * Stopped for any reason (signed out, not updating, reduced motion, paused,
+ * hidden): core's one still picture, and nothing moves. Old arcs can never
+ * keep moving as if they were live.
+ */
+export function stageOf(
+  plan: SecurityMapPlan,
+  stop: SecurityMapStopReason | null,
+  stepIndex: number,
+): Stage {
+  if (stop !== null || plan.mode === 'still') {
+    return { timing: 'still', arcs: plan.picture, stepIndex: -1 };
+  }
+  if (plan.mode === 'live') return { timing: 'live', arcs: plan.live, stepIndex: -1 };
+  const n = plan.steps.length;
+  const i = n === 0 ? 0 : ((stepIndex % n) + n) % n;
+  return { timing: 'replay', arcs: plan.steps[i]?.arcs ?? [], stepIndex: i };
+}
+
+export interface DrawnArc {
+  arc: SecurityMapArc;
+  from: LonLat;
+}
+
+/** The arcs that have a place to start from. An arc of a code with no point is not drawn. */
+export function drawnArcs(arcs: readonly SecurityMapArc[]): DrawnArc[] {
+  const out: DrawnArc[] = [];
+  for (const arc of arcs) {
+    const from = countryPoint(arc.country);
+    if (from) out.push({ arc, from });
+  }
+  return out;
+}
+
+/** Which way the globe turns to keep the drawn arcs in view: their starts and StockPilot. */
+export function focusOf(drawn: readonly DrawnArc[]): GlobeFacing | null {
+  if (drawn.length === 0) return null;
+  return facingOf([...drawn.map((d) => d.from), STOCKPILOT_LON_LAT]);
+}
+
+const num = (n: number): string => n.toLocaleString('en-US');
+
+/**
+ * The line for events of the window whose country has no point on the map
+ * (a code that is not one of ISO 3166-1's, such as XK): they are in the
+ * table and never drawn. Null when there are none.
+ */
+export function notOnMapWords(whole: SecurityMapWholeRead): string | null {
+  let events = 0;
+  const codes = new Set<string>();
+  for (const [country, , , count] of whole.whole.table) {
+    if (countryPoint(country)) continue;
+    events += count;
+    codes.add(country);
+  }
+  if (events === 0) return null;
+  const list = [...codes].sort().join(', ');
+  return `Not on the map: ${num(events)} ${events === 1 ? 'event comes' : 'events come'} from ${
+    codes.size === 1 ? 'a place' : 'places'
+  } the map has no point for (${list}). ${events === 1 ? 'It is' : 'They are'} in the table.`;
+}
+
+/* ──────────────────────────────── when to read ──────────────────────────────── */
+
+export interface PollClock {
+  /** When the last read of any kind finished (the page's clock), or null before the first. */
+  lastPollAt: number | null;
+  /** When the whole window was last read successfully, or null. */
+  lastWholeAt: number | null;
+  /** Failed reads in a row. */
+  failures: number;
+  /** Whether a whole read that carried the viewer's day start has come back. */
+  dayCounted: boolean;
+}
+
+export interface PollStep {
+  scope: 'whole' | 'recent';
+  /** When to send it (the page's clock). */
+  at: number;
+}
+
+/**
+ * The next read. First, at once, the whole window with the viewer's day
+ * start (the server's first read could not know the viewer's midnight).
+ * Then the last ten minutes every 30 seconds and, in their place when it is
+ * due, the whole window every 5 minutes. After a failed read the wait grows
+ * (30, 60, then 120 seconds) and nothing is sent sooner, whichever read is due.
+ */
+export function nextPoll(clock: PollClock, now: number): PollStep {
+  const wait = securityMapNextPollDelay(clock.failures);
+  const afterLast = clock.lastPollAt === null ? now : clock.lastPollAt + wait;
+  if (!clock.dayCounted) return { scope: 'whole', at: afterLast };
+  const recentAt = clock.lastPollAt === null ? now : clock.lastPollAt + wait;
+  const wholeDue =
+    clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
+  const wholeAt = Math.max(wholeDue, clock.failures > 0 ? afterLast : -Infinity);
+  return wholeAt <= recentAt ? { scope: 'whole', at: wholeAt } : { scope: 'recent', at: recentAt };
+}
+
+/** The instant the viewer's own day began, as the poll sends it. */
+export function localDayStart(now: Date): string {
+  const midnight = new Date(now.getTime());
+  midnight.setHours(0, 0, 0, 0);
+  return midnight.toISOString();
+}
+
+/** How often the last ten minutes are read when all is well (for the words). */
+export const RECENT_POLL_MS = SECURITY_MAP_RECENT_POLL_MS;
+
+/* ─────────────────────────────── which view ─────────────────────────────── */
+
+export type MapViewChoice = 'globe' | 'flat';
+/** What became of the globe: fine so far, cannot be drawn here, or its context was lost. */
+export type GlobeState = 'ok' | 'unavailable' | 'lost';
+
+export interface ViewShown {
+  view: MapViewChoice;
+  /** Whether the "Globe" choice can be taken. */
+  globeOffered: boolean;
+  /** Why the flat map is shown in the globe's place, or null. */
+  note: string | null;
+}
+
+/**
+ * The view shown. The flat map whenever the device asks for reduced motion
+ * (the globe is never drawn then), when the globe cannot be drawn or stopped
+ * drawing, or by the viewer's choice; otherwise the globe.
+ */
+export function viewShown(
+  choice: MapViewChoice,
+  reducedMotion: boolean,
+  globe: GlobeState,
+): ViewShown {
+  if (reducedMotion) {
+    return { view: 'flat', globeOffered: false, note: SECURITY_MAP_WORDS.globeReducedMotion };
+  }
+  if (globe === 'unavailable') {
+    return { view: 'flat', globeOffered: false, note: SECURITY_MAP_WORDS.globeUnavailable };
+  }
+  if (globe === 'lost') {
+    return { view: 'flat', globeOffered: false, note: SECURITY_MAP_WORDS.globeLost };
+  }
+  return { view: choice, globeOffered: true, note: null };
+}
+
+/** A country's name in English, or its code when the runtime has none. */
+export function countryName(code: string): string {
+  try {
+    const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
+    return name && name !== code ? name : code;
+  } catch {
+    return code;
+  }
+}
+
+/** The categories in the record's order, for anything that lists them all. */
+export const ALL_CATEGORIES = SECURITY_EVENT_CATEGORIES;
