@@ -44,13 +44,15 @@
 --      when that read does not list it), and its numbers stay exact when
 --      its list of rows is cut short.
 --  11. An invitation acceptance seen twice is not a promotion or a demotion,
---      and nothing else is set aside: the same member, the same UTC day
---      whatever the session's time zone, the role the invitation gave, and
---      recorded no later than the acceptance. A member named only by a
---      membership id is looked up in the row's own organization.
+--      and nothing else is set aside: the same organization, the same
+--      member, the same UTC day whatever the session's time zone, the role
+--      the invitation gave, and recorded no later than the acceptance (at
+--      the very same time counts). A member named only by a membership id
+--      is looked up in the row's own organization.
 --  12. Admins added counts people, not rows: whoever joined this week as an
---      admin or owner or was promoted this week, each once for an
---      organization; an ownership move adds nobody.
+--      admin or owner (exactly 168 hours ago is this week) or was promoted
+--      this week, each once for an organization; an ownership move adds
+--      nobody.
 --  13. A member's name is cut at 200 characters, and a value of an audit row
 --      that is not text is not returned.
 --  14. 7, 14 and 30 days are 168, 336 and 720 hours, also in a session whose
@@ -64,7 +66,7 @@
 
 begin;
 
-select plan(104);
+select plan(107);
 
 \set orgA '\'a0477000-0000-0000-0000-0000000000a1\''
 \set orgB '\'a0477000-0000-0000-0000-0000000000b1\''
@@ -1544,12 +1546,60 @@ select is(
   '0477/103: there, every function still measures 168, 336 and 720 hours: the admin who joined, the sign-in reported, the event and the policy change of 167 and a half hours ago are this week; the event of 335 and a half hours ago is last week; the sign-in last used 719 and a half hours ago is not idle and the row of that age is in the 30-day list');
 rollback to savepoint clock_change;
 
+-- ── 17. Three edges of the week's counts ────────────────────────────────────
+-- Five more organizations. Wing 1 and 2: one person accepts an invitation
+-- for admin in Wing 1 a second after Wing 2 made them an admin; nothing
+-- but the organization differs between the two rows. Wing 3: the role row
+-- and the acceptance carry the very same time. Wing 4 and 5: an admin who
+-- joined exactly 168 hours ago, and one a microsecond before that; neither
+-- organization has an audit row.
+\set w1 '\'a0477000-0000-0000-0009-000000000001\''
+\set w2 '\'a0477000-0000-0000-0009-000000000002\''
+\set w3 '\'a0477000-0000-0000-0009-000000000003\''
+\set w4 '\'a0477000-0000-0000-0009-000000000004\''
+\set w5 '\'a0477000-0000-0000-0009-000000000005\''
+\set p1 '\'a0477000-0000-0000-000a-000000000001\''
+\set p2 '\'a0477000-0000-0000-000a-000000000002\''
+\set p3 '\'a0477000-0000-0000-000a-000000000003\''
+\set p4 '\'a0477000-0000-0000-000a-000000000004\''
+savepoint week_edges;
+insert into public.organizations (id, name, slug, mfa_policy)
+select ('a0477000-0000-0000-0009-' || lpad(g::text, 12, '0'))::uuid, 'Example Wing ' || g,
+       'a0477000-example-wing-' || g, 'optional'
+  from generate_series(1, 5) g;
+insert into auth.users (id, email, raw_user_meta_data)
+select ('a0477000-0000-0000-000a-' || lpad(g::text, 12, '0'))::uuid, 'wing-' || g || '@example.com',
+       jsonb_build_object('full_name', 'Briefing Wing ' || g)
+  from generate_series(1, 4) g;
+select pg_temp.role_row(:w2, gen_random_uuid(), :p1, 'viewer', 'admin', pg_temp.d(9), :ownerA, 'authenticated');
+select pg_temp.invite(:w1, :p1, 'admin', pg_temp.d(9) + interval '1 second');
+select pg_temp.role_row(:w3, gen_random_uuid(), :p2, 'viewer', 'admin', pg_temp.d(9), null, 'service_role');
+select pg_temp.invite(:w3, :p2, 'admin', pg_temp.d(9));
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:w4, :p3, 'admin', now() - interval '168 hours'),
+  (:w5, :p4, 'admin', now() - interval '168 hours' - interval '1 microsecond');
+-- Read both ways: the read of all organizations holds both organizations'
+-- rows at once, the detail one organization's.
+select is(
+  (select array[pg_temp.org_of(c.j, :w1), pg_temp.org_of(c.j, :w2), pg_temp.week(:w1), pg_temp.week(:w2)]
+     from (select public.platform_security_briefing_changes() as j) c),
+  array[null::jsonb, pg_temp.counts(:w2, 1, 0, 0, 0, 0, 0, 1),
+        pg_temp.counts(:w1, 0, 0, 0, 0, 0, 0, 0), pg_temp.counts(:w2, 1, 0, 0, 0, 0, 0, 1)],
+  '0477/104: an invitation accepted in one organization sets nothing aside in another: the same person, the same UTC day, the same role, the acceptance a second after the role change, and only the organization differs; the promotion counts where it was made, in the read of all organizations (which does not list the other) and in the detail');
+select is(pg_temp.week(:w3), pg_temp.counts(:w3, 0, 0, 0, 0, 0, 0, 0),
+  '0477/105: a role change and the acceptance at the very same time are the acceptance seen twice (the acceptance is not earlier): not counted');
+select is(
+  array[pg_temp.week(:w4), pg_temp.week(:w5)],
+  array[pg_temp.counts(:w4, 0, 0, 0, 0, 0, 0, 1), pg_temp.counts(:w5, 0, 0, 0, 0, 0, 0, 0)],
+  '0477/106: an admin who joined exactly 168 hours ago is an admin added this week; one who joined a microsecond before that is not');
+rollback to savepoint week_edges;
+
 -- After the savepoints the database is as the fixtures left it.
 select is(
   array[public.platform_security_briefing_members(), public.platform_security_briefing_events(),
         public.platform_security_briefing_changes(), public.platform_security_briefing_for_organization(:orgA)],
   (select array[ans.members, ans.events, ans.changes, ans.da] from ans),
-  '0477/104: with the savepoints undone the four answers are what they were (the functions keep nothing between calls)');
+  '0477/107: with the savepoints undone the four answers are what they were (the functions keep nothing between calls)');
 
 select * from finish();
 rollback;
