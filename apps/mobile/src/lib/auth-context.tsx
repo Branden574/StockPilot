@@ -122,6 +122,15 @@ interface AuthState {
    * Returns an error string on an invalid/expired code.
    */
   verifyMfa: (code: string) => Promise<{ error?: string }>;
+  /**
+   * The passkey-only notice's "Check again": the same user-only read the gate
+   * makes when it comes up (readLiveUser, then reconcileCodeGate), and
+   * nothing else. No workspace, membership or other account read: the
+   * session still owes its second step. 'answered' when the server answered
+   * (the gate is then reconciled with that answer), 'no_answer' when it could
+   * not be read.
+   */
+  recheckCodeGate: () => Promise<'answered' | 'no_answer'>;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   /**
    * The deliberate sign-out (drawer, Settings). Tries to send unsynced work
@@ -762,6 +771,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const recheckCodeGate: AuthState['recheckCodeGate'] = async () => {
+    const live = await readLiveUser();
+    if (!live) return 'no_answer';
+    await reconcileCodeGate(live);
+    return 'answered';
+  };
+
   const signOutToFallback: AuthState['signOutToFallback'] = async () => {
     // Same reasoning as signOut above: keep the remembered identity current
     // for whoever retypes a password on this device next.
@@ -848,6 +864,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         biometricEnabled,
         mfaRequired,
         verifyMfa,
+        recheckCodeGate,
         signIn,
         signOut,
         unlock,

@@ -9,6 +9,7 @@ import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast
 import {
   TOUCHABLE_TAG,
   attrText,
+  listTsx,
   parseTsx,
   readSource,
   tagOf,
@@ -171,6 +172,134 @@ describe('the auth shell: the brand on a flat ground', () => {
     // Liquid Glass: the scene behind the shell, the ground clear over it.
     expect(shell).toContain('{lg ? <SceneBackground /> : null}');
     expect(shell).toContain("backgroundColor: lg ? 'transparent' : c.paper");
+  });
+});
+
+// The passkey notice's simulator walk (part-2-phone, steps 12 and 22) found
+// the shell did not scroll: at AX3 and AX5 the notice's words ran off the
+// foot of an iPhone 17 Pro and an iPhone SE and its three buttons could not
+// be reached, and the code screen's Verify and way out sat under the number
+// pad. The Dynamic Type policy keeps body copy uncapped, so the fix is room,
+// not smaller words.
+describe('the auth shell: the content scrolls when it is taller than the screen', () => {
+  const sf = treeOf(SHELL);
+  const found: { el: JsxNode; ancestors: JsxNode[] }[] = [];
+  walkJsx(sf, (el, ancestors) => {
+    if (tagOf(el, sf) === 'ScrollView') found.push({ el, ancestors: [...ancestors] });
+  });
+
+  // Mutation caught: the ScrollView removed (the walk's FAIL), or a second one.
+  it('one ScrollView, holding the content view', () => {
+    expect(found).toHaveLength(1);
+    const scroll = found[0]!.el;
+    expect(ts.isJsxElement(scroll)).toBe(true);
+    const kids = (scroll as ts.JsxElement).children
+      .map((ch) => ch.getText(sf).trim())
+      .filter(Boolean);
+    expect(kids).toEqual(['{content}']);
+    // Without the scroll (sign-in) the same content view stands in its place.
+    expect(code(SHELL)).toMatch(/\{scroll \? \( <KeyboardAvoidingView[\s\S]*\) : \( content \)\}/);
+    expect(code(SHELL)).toContain('scroll = true,');
+  });
+
+  // Mutation caught: a bounce on a screen that fits (it would move at Large,
+  // where nothing moved before); a first tap with the number pad up spent on
+  // putting the pad away instead of pressing Verify or the way out; a
+  // container that stops at its content, so the lock's centre and footer, and
+  // a glass sheet at the foot, lose their places.
+  it('at Large nothing moves: the container fills the height, no bounce, taps go through', () => {
+    const scroll = found[0]!.el;
+    expect(attrText(scroll, 'style', sf)).toBe('styles.fill');
+    expect(attrText(scroll, 'contentContainerStyle', sf)).toBe('styles.scrollContent');
+    expect(attrText(scroll, 'alwaysBounceVertical', sf)).toBe('false');
+    expect(attrText(scroll, 'keyboardShouldPersistTaps', sf)).toBe('handled');
+    expect(attrText(scroll, 'showsVerticalScrollIndicator', sf)).toBe('false');
+    expect(styleBlock(SHELL, 'scrollContent').trim()).toBe('flexGrow: 1,');
+    expect(styleBlock(SHELL, 'fill').trim()).toBe('flex: 1,');
+    // The content view keeps its flex, gutters and foot inset (pinned above).
+    expect(styleBlock(SHELL, 'content')).toContain('flex: 1,');
+  });
+
+  // React Native's KeyboardAvoidingView pads by `frame.y + frame.height -
+  // keyboardTop` with the frame its parent lays it out in, so its parent must
+  // start at the top of the screen: the shell's root. Mutation caught: no
+  // keyboard handling (the code screen's buttons under the pad), one that does
+  // nothing on iOS, or one moved under anything that starts lower.
+  it('the scroll sits directly in a keyboard-avoiding view, a child of the root', () => {
+    const chain = found[0]!.ancestors;
+    const kav = chain[chain.length - 1]!;
+    expect(tagOf(kav, sf)).toBe('KeyboardAvoidingView');
+    expect(attrText(kav, 'behavior', sf)).toBe("Platform.OS === 'ios' ? 'padding' : undefined");
+    expect(attrText(kav, 'style', sf)).toBe('styles.fill');
+    expect(attrText(kav, 'keyboardVerticalOffset', sf)).toBeUndefined();
+    expect(chain).toHaveLength(2);
+    expect(attrText(chain[0]!, 'style', sf)).toBe(
+      "[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]",
+    );
+  });
+
+  // The Dynamic Type policy: body copy and the gates' words are never capped,
+  // and nothing shrinks text to fit.
+  it('the shell caps and shrinks no text', () => {
+    expect(code(SHELL)).not.toContain('maxFontSizeMultiplier');
+    expect(code(SHELL)).not.toContain('allowFontScaling');
+    expect(code(SHELL)).not.toContain('adjustsFontSizeToFit');
+  });
+});
+
+describe('every screen in the shell scrolls in it, except sign-in, which brings its own', () => {
+  const users = new Map<string, (string | undefined)[]>();
+  for (const abs of listTsx(path.join(MOBILE_ROOT, 'app'), path.join(MOBILE_ROOT, 'src'))) {
+    const file = path.relative(MOBILE_ROOT, abs);
+    if (!sourceOf(file).includes('<AuthShell')) continue;
+    const sf = treeOf(file);
+    walkJsx(sf, (el) => {
+      if (tagOf(el, sf) !== 'AuthShell') return;
+      users.set(file, [...(users.get(file) ?? []), attrText(el, 'scroll', sf)]);
+    });
+  }
+
+  // Mutation caught: a gate turning the scroll off (its buttons unreachable at
+  // AX5 again), sign-in getting the shell's scroll and keyboard view inside its
+  // own (two of each, padding twice), or a new screen in the shell no one
+  // looked at.
+  it('the five screens, and only sign-in turns the scroll off', () => {
+    expect(Object.fromEntries(users)).toEqual({
+      [SIGN_IN]: ['false'],
+      [DISABLED]: [undefined],
+      [MFA]: [undefined],
+      [LOCK]: [undefined],
+      'src/components/passkey-only-notice.tsx': [undefined],
+    });
+  });
+
+  // Mutation caught: sign-in's own scroll or keyboard view removed while the
+  // shell's stays off.
+  it('sign-in keeps its own ScrollView inside its own keyboard-avoiding view', () => {
+    const sf = treeOf(SIGN_IN);
+    const chains: string[][] = [];
+    walkJsx(sf, (el, ancestors) => {
+      if (tagOf(el, sf) === 'ScrollView') chains.push(ancestors.map((a) => tagOf(a, sf)));
+    });
+    expect(chains).toEqual([['KeyboardAvoidingView', 'AuthShell']]);
+  });
+
+  // The code screen's box keeps its focus and keypad as before; only its own
+  // 26pt digits keep the input ceiling they had.
+  it('the code screen keeps autofocus, the number pad and the one-time code', () => {
+    const mfa = code(MFA);
+    expect(mfa).toContain('keyboardType="number-pad"');
+    expect(mfa).toContain('textContentType="oneTimeCode"');
+    expect(mfa).toContain('autoFocus');
+    expect(mfa).toContain('maxFontSizeMultiplier={CODE_CAP}');
+  });
+
+  // The notice's words grow with the reader's text size: room, not caps.
+  it('the passkey notice caps none of its words', () => {
+    const notice = code('src/components/passkey-only-notice.tsx');
+    expect(notice).not.toContain('maxFontSizeMultiplier');
+    expect(notice).not.toContain('allowFontScaling');
+    expect(notice).not.toContain('adjustsFontSizeToFit');
   });
 });
 

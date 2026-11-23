@@ -128,6 +128,7 @@ export * from './schemas/maintenance';
 export * from './guards/db-guard-copy';
 export * from './auth/step-up';
 export * from './auth/set-up-copy';
+export * from './auth/passkey-copy';
 export * from './account/delete-account-copy';
 export * from './appearance';
 export * from './security/security-events';
