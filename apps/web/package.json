@@ -64,6 +64,7 @@
     "stripe": "^22.6.2",
     "tailwind-merge": "^3.7.0",
     "tailwindcss-animate": "^1.0.7",
+    "three": "0.187.0",
     "undici": "^8.12.2",
     "zod": "^3.25.76",
     "zustand": "^5.0.16"
