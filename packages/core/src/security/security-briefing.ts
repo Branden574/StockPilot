@@ -679,12 +679,13 @@ type OwnershipMove = Extract<BriefingChange, { kind: 'ownership_moved' }>;
  *     Removed: a membership of an admin or owner taken away.
  *   - Joined as admin: an accepted invitation that gave admin or owner. A
  *     press by someone already a member changed nothing and is left out.
- *   - The invitation wins: every role change of a member is left out when the
- *     same member accepted an invitation (to any role) on the same UTC day.
  *   - Ownership: a role change to or from owner is an ownership move, never
- *     an admin added or removed. The database stamps the rows of one move
- *     with one time, so rows with the same time are one move. The app's own
- *     row of a move only adds the two names.
+ *     an admin added or removed, and it is always listed. The database
+ *     stamps the rows of one move with one time, so rows with the same time
+ *     are one move. The app's own row of a move only adds the two names.
+ *   - The invitation wins: a promotion or demotion of a member is left out
+ *     when the same member accepted an invitation (to any role) on the same
+ *     UTC day. An ownership move is never left out this way.
  *   - A member who deleted their own account: the row carries no role, so
  *     the line says only that.
  *
@@ -722,8 +723,8 @@ export function extractBriefingChanges(rows: readonly BriefingAuditRow[]): Brief
     } else if (row.event === 'user.role.changed') {
       const from = textIn(row.before, 'role');
       const to = textIn(row.after, 'role');
-      if (foldedByInvite(row)) continue;
       if (from === 'owner' || to === 'owner') {
+        // Never folded by an invitation: an ownership move is always listed.
         const move = moves.get(row.createdAt) ?? {
           kind: 'ownership_moved',
           at: row.createdAt,
@@ -736,6 +737,8 @@ export function extractBriefingChanges(rows: readonly BriefingAuditRow[]): Brief
         if (from === 'owner') move.fromUserId ??= row.targetUserId;
         if (to === 'owner') move.toUserId ??= row.targetUserId;
         moves.set(row.createdAt, move);
+      } else if (foldedByInvite(row)) {
+        continue;
       } else if (to === 'admin' && from !== 'admin') {
         changes.push(roleChange('admin_promoted', row, from, to));
       } else if (from === 'admin' && to !== 'admin') {

@@ -984,10 +984,6 @@ describe('admin changes from audit rows', () => {
     expect(kinds([{ ...invite, role: null, alreadyMember: true }, databaseRow])).toEqual([
       'admin_promoted',
     ]);
-    // Every role change of that member that day is folded, one to or from owner too.
-    expect(
-      kinds([invite, { ...databaseRow, before: { role: 'admin' }, after: { role: 'owner' } }]),
-    ).toEqual(['admin_joined']);
     // An invitation to any role folds: here it turned an admin row into staff.
     expect(
       kinds([
@@ -995,6 +991,71 @@ describe('admin changes from audit rows', () => {
         { ...databaseRow, before: { role: 'admin' }, after: { role: 'staff' } },
       ]),
     ).toEqual([]);
+  });
+
+  it('an ownership move is never folded by an invitation the same UTC day', () => {
+    const invite = auditRow({
+      createdAt: '2026-11-22T09:00:00+00:00',
+      event: 'user.invite.accepted',
+      actorUserId: MEMBER,
+      targetUserId: null,
+      entityId: null,
+      entityType: null,
+      before: null,
+      after: null,
+      role: 'admin',
+    });
+    // Later that day the new member is made the owner: the database writes
+    // one row for each side of the move, both with one time.
+    const movedAt = '2026-11-22T15:00:00+00:00';
+    const toOwner = auditRow({
+      createdAt: movedAt,
+      actorUserId: null,
+      targetUserId: MEMBER,
+      before: { role: 'admin' },
+      after: { role: 'owner' },
+      madeAs: 'service_role',
+    });
+    const fromOwner = auditRow({
+      createdAt: movedAt,
+      actorUserId: null,
+      targetUserId: OTHER,
+      before: { role: 'owner' },
+      after: { role: 'admin' },
+      madeAs: 'service_role',
+    });
+    const changes = extractBriefingChanges([toOwner, fromOwner, invite]);
+    expect(changes).toEqual([
+      {
+        kind: 'ownership_moved',
+        at: movedAt,
+        actorUserId: null,
+        fromUserId: OTHER,
+        toUserId: MEMBER,
+        inRoleRows: true,
+      },
+      {
+        kind: 'admin_joined',
+        at: invite.createdAt,
+        actorUserId: null,
+        subjectUserId: MEMBER,
+        fromRole: null,
+        toRole: 'admin',
+      },
+    ]);
+    expect(countBriefingChanges(changes, 0)).toMatchObject({
+      ownershipMoved: 1,
+      adminsPromoted: 0,
+      adminsDemotedOrRemoved: 0,
+    });
+    // The new owner's row alone is still a move, whatever the invitation gave.
+    expect(kinds([toOwner, invite])).toEqual(['ownership_moved', 'admin_joined']);
+    expect(kinds([toOwner, { ...invite, role: 'staff' }])).toEqual(['ownership_moved']);
+    // The owner who accepted an invitation that day and then handed over: the same.
+    expect(kinds([fromOwner, { ...invite, actorUserId: OTHER }])).toEqual([
+      'ownership_moved',
+      'admin_joined',
+    ]);
   });
 
   it('two role changes of one member on one day are each listed', () => {
