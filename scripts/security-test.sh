@@ -2528,11 +2528,13 @@ WEB_TESTS=(
   # The console's passkey switches (stage 6): the kill switch, new passkeys
   # and one organization's switch are pressed only by a platform admin on a
   # fresh step-up with the typed word PASSKEYS, checked before anything is
-  # read or written; the settings row is upserted with only its own column;
-  # every change has its platform audit row with the email Auth verified.
-  # Turning on writes the row first and switches nothing without it; turning
-  # off always proceeds, and a row that cannot be written then is reported
-  # at error level and said in the answer.
+  # read or written; the settings row is written with only its own column,
+  # and only while the switch still holds the value read (an update, or an
+  # insert when there is no row); every change has its platform audit row
+  # with the email Auth verified. Turning on writes the row first and
+  # switches nothing without it; turning off always proceeds, a row that
+  # cannot be written then is reported at error level and said in the
+  # answer, and the answer is the switch as read again after the press.
   src/server/actions/platform/passkeys.test.ts
 )
 
