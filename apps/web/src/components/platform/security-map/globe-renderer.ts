@@ -41,6 +41,7 @@ import {
   type ArcTiming,
   type GlobeFacing,
 } from './globe-math';
+import type { GlobeArc } from './map-model';
 import type { LonLat } from './world-geometry';
 
 /**
@@ -61,17 +62,7 @@ import type { LonLat } from './world-geometry';
  * loop and is reported once, so the island can show the flat map.
  */
 
-export interface GlobeArc {
-  key: string;
-  from: LonLat;
-  /** 0 to 1, as the island's look gives it. */
-  rgb: readonly [number, number, number];
-  /** Core's width for the count, 1 to 4. */
-  width: number;
-  flagged: boolean;
-  /** The category's mark, as the shader numbers it. */
-  shape: number;
-}
+export type { GlobeArc };
 
 export interface GlobeScene {
   arcs: readonly GlobeArc[];

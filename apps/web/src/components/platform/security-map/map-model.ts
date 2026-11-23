@@ -119,6 +119,35 @@ export function drawnArcs(arcs: readonly SecurityMapArc[]): DrawnArc[] {
   return out;
 }
 
+/** One arc as the globe draws it (globe-renderer.ts): where from, its look, flagged or not. */
+export interface GlobeArc {
+  key: string;
+  from: LonLat;
+  /** 0 to 1. */
+  rgb: readonly [number, number, number];
+  /** Core's width for the count, 1 to 4. */
+  width: number;
+  /** Drawn dashed and thinner, with hollow marks. */
+  flagged: boolean;
+  /** The category's mark, as the globe's shader numbers it. */
+  shape: number;
+}
+
+/** The drawn arcs as the globe takes them. A flagged arc is never handed over as blocked. */
+export function globeArcsOf(drawn: readonly DrawnArc[]): GlobeArc[] {
+  return drawn.map(({ arc, from }) => {
+    const look = CATEGORY_LOOKS[arc.category];
+    return {
+      key: arc.key,
+      from,
+      rgb: look.rgb,
+      width: arc.width,
+      flagged: arc.outcome === 'flagged',
+      shape: SHAPE_INDEX[look.shape],
+    };
+  });
+}
+
 /** Which way the globe turns to keep the drawn arcs in view: their starts and StockPilot. */
 export function focusOf(drawn: readonly DrawnArc[]): GlobeFacing | null {
   if (drawn.length === 0) return null;

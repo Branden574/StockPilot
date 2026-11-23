@@ -17,6 +17,7 @@ import {
   countryName,
   drawnArcs,
   focusOf,
+  globeArcsOf,
   localDayStart,
   nextPoll,
   notOnMapWords,
@@ -97,6 +98,16 @@ describe('what is on the map this moment', () => {
     const drawn = drawnArcs([arc('DE', 1, 0, 5), arc('XK', 1, 0, 3)]);
     expect(drawn.map((d) => d.arc.country)).toEqual(['DE']);
     expect(drawn[0]!.from).toEqual(countryPoint('DE'));
+  });
+
+  it('the globe is handed each arc with its own outcome: flagged is never handed over as blocked', () => {
+    const arcs = globeArcsOf(drawnArcs([arc('DE', 1, 0, 5), arc('BR', 0, 1, 2)]));
+    expect(arcs.map((a) => [a.key, a.flagged, a.shape])).toEqual([
+      ['DE:exploit:blocked', false, SHAPE_INDEX[CATEGORY_LOOKS.exploit.shape]],
+      ['BR:password_guessing:flagged', true, SHAPE_INDEX[CATEGORY_LOOKS.password_guessing.shape]],
+    ]);
+    expect(arcs[0]!.rgb).toEqual(CATEGORY_LOOKS.exploit.rgb);
+    expect(arcs[0]!.from).toEqual(countryPoint('DE'));
   });
 
   it("the globe faces the drawn arcs' starts and StockPilot", () => {

@@ -5,8 +5,8 @@ import * as React from 'react';
 import { SECURITY_MAP_WORDS } from '@stockpilot/core';
 
 import type { ArcTiming, GlobeFacing } from './globe-math';
-import type { GlobeArc, GlobeHandle } from './globe-renderer';
-import { CATEGORY_LOOKS, SHAPE_INDEX, type DrawnArc } from './map-model';
+import type { GlobeHandle } from './globe-renderer';
+import { globeArcsOf, type DrawnArc } from './map-model';
 import { STOCKPILOT_LON_LAT, landDots } from './world-geometry';
 
 /**
@@ -103,21 +103,7 @@ export function SecurityMapGlobe({
     return () => observer.disconnect();
   }, []);
 
-  const globeArcs = React.useMemo<GlobeArc[]>(
-    () =>
-      arcs.map(({ arc, from }) => {
-        const look = CATEGORY_LOOKS[arc.category];
-        return {
-          key: arc.key,
-          from,
-          rgb: look.rgb,
-          width: arc.width,
-          flagged: arc.outcome === 'flagged',
-          shape: SHAPE_INDEX[look.shape],
-        };
-      }),
-    [arcs],
-  );
+  const globeArcs = React.useMemo(() => globeArcsOf(arcs), [arcs]);
 
   React.useEffect(() => {
     handleRef.current?.setRunning(ready && onScreen && !hidden);
