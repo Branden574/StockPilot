@@ -57,6 +57,7 @@ const BLOCKED_ID = 'blocked-activity-2026-11';
 const BLOCKED_CURRENT_ID = 'blocked-activity-current-password-and-set-up-code-2026-11';
 const SIGNIN_ID = 'sign-in-alerts-2026-11';
 const PHONE_LARGE_ID = 'phone-large-text-2026-11';
+const RECOVERY_ID = 'recovery-code-signs-out-other-devices-2026-11';
 const blockedRead = {
   release_id: BLOCKED_ID,
   revision: 1,
@@ -85,12 +86,19 @@ const phoneLargeRead = {
   opened_at: '2026-11-23T06:01:00Z',
   read_at: '2026-11-23T06:01:00Z',
 };
+const recoveryRead = {
+  release_id: RECOVERY_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-23T06:31:00Z',
+  read_at: '2026-11-23T06:31:00Z',
+};
 const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
 // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_AT = '2026-11-21T02:31:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity release, published later, above the phone authenticator set-up release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_AT = '2026-11-21T18:19:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity current password and set-up code release, published later, above the Blocked activity release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_CURRENT_AT = '2026-11-22T05:42:00Z'): the Liquid Glass draft placeholder is now the minute of the sign-in alerts release, published later, above the Blocked activity current password and set-up code release.
 // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: SIGNIN_AT = '2026-11-22T06:08:00Z'): the Liquid Glass draft placeholder is now the minute of the phone large text release, published later, above this one.
-const PHONE_LARGE_AT = '2026-11-23T06:00:00Z';
+const RECOVERY_AT = '2026-11-23T06:30:00Z';
 const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,
@@ -156,10 +164,13 @@ describe('the receiving release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(0, 5)): the count start access check release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(0, 6)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(0, 7)): the Blocked activity release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 10).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(0, 10)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 11).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      [RECOVERY_ID, 'published'],
       [PHONE_LARGE_ID, 'published'],
       [SIGNIN_ID, 'published'],
       [BLOCKED_CURRENT_ID, 'published'],
@@ -176,7 +187,7 @@ describe('the receiving release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: EXPORT_RECEIPT_ACCESS_ID): the count start access check release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_ID): the phone authenticator set-up release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(PHONE_LARGE_ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(RECOVERY_ID);
   });
 
   // Renamed by docs/whats-new-small-fixes-1119 (2026-11-19; was: "with the draft placeholder at the same minute"): the placeholder moved to the minute of the export, receipt and access release, published later, above this one.
@@ -190,14 +201,15 @@ describe('the receiving release: order, status and date', () => {
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: COUNT_START_ACCESS_AT): the placeholder is the minute of the phone authenticator set-up release, published later, above this one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_AT): the placeholder is the minute of the Blocked activity release, published later, above this one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: SIGNIN_AT): the placeholder is the minute of the phone large text release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(PHONE_LARGE_AT);
+    expect(RELEASES[0]!.publishedAt).toBe(RECOVERY_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: RELEASES.slice(2)): the export, receipt and access release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: RELEASES.slice(3)): the count start access check release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(4)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(5)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(8)): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(9)) {
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(9)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(10)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -297,7 +309,7 @@ describe('the receiving release: who is told', () => {
           RELEASES,
           v,
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-          [phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead],
+          [recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead],
           null,
         ).latestUnread?.id,
         v.role,
@@ -308,7 +320,7 @@ describe('the receiving release: who is told', () => {
           RELEASES,
           v,
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-          [phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead, read],
+          [recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead, read],
           null,
         ).latestUnread?.id,
         v.role,
@@ -322,7 +334,7 @@ describe('the receiving release: who is told', () => {
         RELEASES,
         owner,
         // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-        [phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead, read],
+        [recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead, countStartAccessRead, exportReceiptAccessRead, read],
         null,
       ).latestUnread?.id,
     ).toBe(LOW_CRITICAL_ID);
@@ -334,6 +346,8 @@ describe('the receiving release: who is told', () => {
         legacyAnnouncementsFor(RELEASES, v, {
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
+          // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          [RECOVERY_ID]: true,
           [PHONE_LARGE_ID]: true,
           [SIGNIN_ID]: true,
           [BLOCKED_CURRENT_ID]: true,

@@ -71,10 +71,11 @@ const BLOCKED_ID = 'blocked-activity-2026-11';
 const BLOCKED_CURRENT_ID = 'blocked-activity-current-password-and-set-up-code-2026-11';
 const SIGNIN_ID = 'sign-in-alerts-2026-11';
 const PHONE_LARGE_ID = 'phone-large-text-2026-11';
+const RECOVERY_ID = 'recovery-code-signs-out-other-devices-2026-11';
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_AT = '2026-11-21T18:19:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity current password and set-up code release, published later, above the Blocked activity release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_CURRENT_AT = '2026-11-22T05:42:00Z'): the Liquid Glass draft placeholder is now the minute of the sign-in alerts release, published later, above the Blocked activity current password and set-up code release.
 // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: SIGNIN_AT = '2026-11-22T06:08:00Z'): the Liquid Glass draft placeholder is now the minute of the phone large text release, published later, above this one.
-const PHONE_LARGE_AT = '2026-11-23T06:00:00Z';
+const RECOVERY_AT = '2026-11-23T06:30:00Z';
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 /** #604 (which carries #598 and #599), the last of this update's phone changes, merged at this instant. */
@@ -146,9 +147,12 @@ describe('the phone authenticator set-up release: order, status and date', () =>
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(0, 4)): the Blocked activity release is published at the top, below the Liquid Glass draft, so the list takes one more.
-    expect(RELEASES.slice(0, 7).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(0, 7)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(0, 8).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, directly below the Liquid Glass draft.
+      // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      [RECOVERY_ID, 'published'],
       [PHONE_LARGE_ID, 'published'],
       [SIGNIN_ID, 'published'],
       [BLOCKED_CURRENT_ID, 'published'],
@@ -157,7 +161,7 @@ describe('the phone authenticator set-up release: order, status and date', () =>
       [COUNT_START_ACCESS_ID, 'published'],
     ]);
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: ID): the Blocked activity release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(PHONE_LARGE_ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(RECOVERY_ID);
   });
 
   it('is dated on a whole minute, in the past, after #604 and #626 merged, with the draft placeholder at the same minute and every release below it older', () => {
@@ -169,11 +173,12 @@ describe('the phone authenticator set-up release: order, status and date', () =>
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the Blocked activity release, published later, above this one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: SIGNIN_AT): the placeholder is the minute of the phone large text release, published later, above this one.
-    expect(RELEASES[0]!.publishedAt).toBe(PHONE_LARGE_AT);
+    expect(RELEASES[0]!.publishedAt).toBe(RECOVERY_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(2)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(5)): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(6)) {
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(6)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(7)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -392,6 +397,13 @@ describe('the phone authenticator set-up release: who is told', () => {
       opened_at: '2026-11-23T06:01:00Z',
       read_at: '2026-11-23T06:01:00Z',
     };
+    const recoveryRead = {
+      release_id: RECOVERY_ID,
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-23T06:31:00Z',
+      read_at: '2026-11-23T06:31:00Z',
+    };
     const read = {
       release_id: ID,
       revision: 1,
@@ -403,10 +415,10 @@ describe('the phone authenticator set-up release: who is told', () => {
     const blockedFirst = (v: ReleaseViewer) => v === owner || v === admin;
     for (const v of [owner, admin, manager, staff, member, managerNoModules, staffNoPoRead]) {
       // Added by docs/whats-new-sign-in-alerts-and-reader (2026-11-22): the sign-in alerts release is published later, at the top; its first entry has no audience, so it is every member's first notice, and the checks below start with it read.
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(PHONE_LARGE_ID);
-      expect(buildReleaseList(RELEASES, v, [phoneLargeRead, signInRead], null).latestUnread?.id, v.role).toBe(blockedFirst(v) ? BLOCKED_CURRENT_ID : ID);
-      expect(buildReleaseList(RELEASES, v, [phoneLargeRead, signInRead, blockedCurrentRead, blockedRead], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, { [PHONE_LARGE_ID]: true, [SIGNIN_ID]: true, [BLOCKED_CURRENT_ID]: true, [BLOCKED_ID]: true })[0], v.role).toEqual({
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(RECOVERY_ID);
+      expect(buildReleaseList(RELEASES, v, [recoveryRead, phoneLargeRead, signInRead], null).latestUnread?.id, v.role).toBe(blockedFirst(v) ? BLOCKED_CURRENT_ID : ID);
+      expect(buildReleaseList(RELEASES, v, [recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead], null).latestUnread?.id, v.role).toBe(ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, { [RECOVERY_ID]: true, [PHONE_LARGE_ID]: true, [SIGNIN_ID]: true, [BLOCKED_CURRENT_ID]: true, [BLOCKED_ID]: true })[0], v.role).toEqual({
         id: ID,
         date: release().publishedAt.slice(0, 10),
         title: release().title,
@@ -416,11 +428,11 @@ describe('the phone authenticator set-up release: who is told', () => {
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is read first, so the notices after it are the ones this test checked before.
     // The count start release reaches a manager or above who can assign
     // counts where Cycle Counts is on: the owner here.
-    expect(buildReleaseList(RELEASES, owner, [phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, read], null).latestUnread?.id).toBe(
+    expect(buildReleaseList(RELEASES, owner, [recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, read], null).latestUnread?.id).toBe(
       COUNT_START_ACCESS_ID,
     );
     for (const v of [admin, manager, staff, member, managerNoModules, staffNoPoRead]) {
-      expect(buildReleaseList(RELEASES, v, [phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, read], null).latestUnread?.id, v.role).toBe(
+      expect(buildReleaseList(RELEASES, v, [recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, read], null).latestUnread?.id, v.role).toBe(
         EXPORT_RECEIPT_ACCESS_ID,
       );
     }

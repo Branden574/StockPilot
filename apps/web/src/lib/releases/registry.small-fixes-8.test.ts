@@ -95,6 +95,8 @@ const NEWER_IDS = [
   // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
   // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
   // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'recovery-code-signs-out-other-devices-2026-11',
   'phone-large-text-2026-11',
   'sign-in-alerts-2026-11',
   'blocked-activity-current-password-and-set-up-code-2026-11',
@@ -242,7 +244,8 @@ describe('the small fixes slice 8 release', () => {
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[39]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[40]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[43]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[44]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[44]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[45]?.id).toBe('export-fixes-2026-10');
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -256,7 +259,8 @@ describe('the small fixes slice 8 release', () => {
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[39]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[40]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[43]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(Date.parse(RELEASES[44]!.publishedAt)).toBeGreaterThan(
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[44]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(Date.parse(RELEASES[45]!.publishedAt)).toBeGreaterThan(
       Date.parse(release().publishedAt),
     );
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
@@ -283,7 +287,8 @@ describe('the small fixes slice 8 release', () => {
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES[40]): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[41]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[44]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[45]?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[45]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[46]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -297,7 +302,8 @@ describe('the small fixes slice 8 release', () => {
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(41)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(42)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(45)): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(46)) {
+    // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(46)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(47)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
