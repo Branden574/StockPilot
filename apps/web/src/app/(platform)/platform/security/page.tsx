@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { PlatformPage } from '@/components/platform/platform-page';
+import { PlatformPasskeysSection } from '@/components/platform/platform-passkeys-section';
 import { PlatformTable } from '@/components/platform/platform-table';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
@@ -40,6 +41,11 @@ const OVER_CAP = new Set(['over_minute_cap', 'over_buffer_cap']);
  * the service client (server/services/platform/security-events.ts), so the
  * gate is here, first: requirePlatformAdmin() before anything is read (the
  * layout renders in parallel and cannot stop this body's read).
+ *
+ * Below the events, PASSKEYS (plan section 4): the kill switch, new passkeys
+ * and the organizations with passkeys on (components/platform/
+ * platform-passkeys-section.tsx; its presses are the actions in
+ * server/actions/platform/passkeys.ts, each re-gated with a fresh step-up).
  */
 export default async function PlatformSecurityEventsPage() {
   await requirePlatformAdmin();
@@ -123,6 +129,10 @@ export default async function PlatformSecurityEventsPage() {
           )}
         </TableBody>
       </PlatformTable>
+
+      {/* The passkey switches (part 2, stage 6): read with the service
+          client, after the gate above, like the events. */}
+      <PlatformPasskeysSection />
     </PlatformPage>
   );
 }

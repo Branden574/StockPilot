@@ -43,6 +43,13 @@ vi.mock('@/server/services/platform/security-events', () => ({
   },
 }));
 
+vi.mock('@/components/platform/platform-passkeys-section', () => ({
+  PlatformPasskeysSection: () => {
+    h.order.push('passkeys');
+    return <section aria-label="Passkeys section" />;
+  },
+}));
+
 import PlatformSecurityEventsPage from './page';
 
 const ORG = '5eed0000-0001-4000-8000-000000000001';
@@ -72,9 +79,10 @@ beforeEach(() => {
 });
 
 describe('the gate', () => {
-  it('requirePlatformAdmin runs before the read', async () => {
+  it('requirePlatformAdmin runs before the reads', async () => {
     render(await PlatformSecurityEventsPage());
-    expect(h.order).toEqual(['gate', 'read']);
+    // The gate first; then the events, then the passkey switches.
+    expect(h.order).toEqual(['gate', 'read', 'passkeys']);
     expect(h.list).toHaveBeenCalledWith({ limit: 200 });
   });
 
@@ -160,5 +168,19 @@ describe('the table', () => {
     h.list.mockResolvedValueOnce([]);
     render(await PlatformSecurityEventsPage());
     expect(screen.getByText('No security events recorded yet.')).toBeTruthy();
+  });
+
+  it('shows the Passkeys section after the gate, and a refused gate shows none', async () => {
+    h.order = [];
+    h.gate.mockResolvedValue(undefined);
+    h.list.mockResolvedValue([]);
+    render(await PlatformSecurityEventsPage());
+    expect(screen.getByRole('region', { name: 'Passkeys section' })).toBeInTheDocument();
+    expect(h.order[0]).toBe('gate');
+    expect(h.order).toContain('passkeys');
+    h.order = [];
+    h.gate.mockRejectedValue(new Error('NOT_FOUND'));
+    await expect(PlatformSecurityEventsPage()).rejects.toThrow('NOT_FOUND');
+    expect(h.order).toEqual(['gate']);
   });
 });
