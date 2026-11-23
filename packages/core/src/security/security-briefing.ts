@@ -679,8 +679,8 @@ type OwnershipMove = Extract<BriefingChange, { kind: 'ownership_moved' }>;
  *     Removed: a membership of an admin or owner taken away.
  *   - Joined as admin: an accepted invitation that gave admin or owner. A
  *     press by someone already a member changed nothing and is left out.
- *   - The invitation wins: a role change of a member is left out when the same
- *     member accepted an invitation (to any role) on the same UTC day.
+ *   - The invitation wins: every role change of a member is left out when the
+ *     same member accepted an invitation (to any role) on the same UTC day.
  *   - Ownership: a role change to or from owner is an ownership move, never
  *     an admin added or removed. The database stamps the rows of one move
  *     with one time, so rows with the same time are one move. The app's own
@@ -722,6 +722,7 @@ export function extractBriefingChanges(rows: readonly BriefingAuditRow[]): Brief
     } else if (row.event === 'user.role.changed') {
       const from = textIn(row.before, 'role');
       const to = textIn(row.after, 'role');
+      if (foldedByInvite(row)) continue;
       if (from === 'owner' || to === 'owner') {
         const move = moves.get(row.createdAt) ?? {
           kind: 'ownership_moved',
@@ -736,9 +737,9 @@ export function extractBriefingChanges(rows: readonly BriefingAuditRow[]): Brief
         if (to === 'owner') move.toUserId ??= row.targetUserId;
         moves.set(row.createdAt, move);
       } else if (to === 'admin' && from !== 'admin') {
-        if (!foldedByInvite(row)) changes.push(roleChange('admin_promoted', row, from, to));
+        changes.push(roleChange('admin_promoted', row, from, to));
       } else if (from === 'admin' && to !== 'admin') {
-        if (!foldedByInvite(row)) changes.push(roleChange('admin_demoted', row, from, to));
+        changes.push(roleChange('admin_demoted', row, from, to));
       }
     } else if (row.event === 'user.deactivated') {
       if (row.entityType === 'user') {

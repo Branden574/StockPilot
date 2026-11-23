@@ -984,6 +984,10 @@ describe('admin changes from audit rows', () => {
     expect(kinds([{ ...invite, role: null, alreadyMember: true }, databaseRow])).toEqual([
       'admin_promoted',
     ]);
+    // Every role change of that member that day is folded, one to or from owner too.
+    expect(
+      kinds([invite, { ...databaseRow, before: { role: 'admin' }, after: { role: 'owner' } }]),
+    ).toEqual(['admin_joined']);
     // An invitation to any role folds: here it turned an admin row into staff.
     expect(
       kinds([
