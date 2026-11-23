@@ -104,6 +104,13 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'mfa-recovery:': RECOVERY_RECORDED_AT_CALL_SITE,
   'mfa-recovery-password:': RECOVERY_RECORDED_AT_CALL_SITE,
   'mfa-recovery-code:': RECOVERY_RECORDED_AT_CALL_SITE,
+  // The passkey actions (server/security/passkeys.ts) record a refusal of
+  // their own limits as passkey_checks_paused at the call site.
+  'passkey-start:': RECORDED_AT_CALL_SITE,
+  'passkey-start-account:': RECORDED_AT_CALL_SITE,
+  'passkey-finish:': RECORDED_AT_CALL_SITE,
+  'passkey-register:': RECORDED_AT_CALL_SITE,
+  'passkey-remove:': RECORDED_AT_CALL_SITE,
   // A signed-in account's own security actions.
   'mfa-recovery-gen:': SIGNED_IN,
   'mfa-enroll-verify:': SIGNED_IN,
@@ -134,11 +141,26 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'new-device-event:org:': ALERT_PACING,
   'new-device-event-held:org:': ALERT_PACING,
   'export-alert:': ALERT_PACING,
+  // The hourly passkey check's email of a sign-in it ended (one a day per
+  // account; server/security/passkey-detector.ts).
+  'passkey-detector-email:': ALERT_PACING,
+  // The same check's word that the platform settings row is missing (read as
+  // off): once a day for everyone (`...:all`).
+  'passkey-detector-settings-report:': ALERT_PACING,
   // Reports about the passkey records (lib/auth/passkey-bridge.ts): a
   // reserved-name factor that is not the account's bridge, and the records
   // missing while such a factor is listed: the missing table once an hour
   // for everyone (`...:table`), the missing function once an hour per account.
   'passkeys-not-ours-report:': ALERT_PACING,
+  // A fail-closed state or a secret the keys do not open, met by the
+  // second-step page or a start (server/security/passkeys.ts): once an hour
+  // per account and fault. The key-fault roll-up (a missing key, a secret
+  // that does not open) once an hour for everyone, per fault.
+  'passkeys-step-report:': ALERT_PACING,
+  'passkeys-key-report:': ALERT_PACING,
+  // A refused attestation format of a new passkey (server/security/passkeys.ts):
+  // once an hour per format, the format a word from a fixed list.
+  'passkey-format-report:': ALERT_PACING,
   'passkeys-records-missing-report:': ALERT_PACING,
   'passkeys-records-missing-report:function:': ALERT_PACING,
   // The platform console.

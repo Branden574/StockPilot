@@ -33,13 +33,18 @@ import { insertAuditRowReported, type AuditEvent } from '@/server/services/audit
  * organization_id and user_id are both nullable on audit_logs (see
  * migration 0002_inventory.sql), so a sign-in-failure with both null
  * is still a valid forensic row.
+ *
+ * Resolves to whether the row was written on the first try
+ * (insertAuditRowReported). Callers that only log ignore it; a caller whose
+ * next step must not happen without its row (the passkey bridge raise,
+ * server/security/passkeys.ts) refuses on false.
  */
 export async function emitAuthAudit(params: {
   event: AuditEvent;
   userId?: string | null;
   organizationId?: string | null;
   extra?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<boolean> {
   try {
     const h = await headers();
     // The one rule (lib/client-ip.ts), null unless an IP literal (inet).
@@ -48,7 +53,7 @@ export async function emitAuthAudit(params: {
 
     // Reads the INSERT's own result: supabase-js returns a refused write as
     // { error } rather than throwing, so the catch below never saw one.
-    await insertAuditRowReported({
+    return await insertAuditRowReported({
       organization_id: params.organizationId ?? null,
       user_id: params.userId ?? null,
       event: params.event,
@@ -71,6 +76,7 @@ export async function emitAuthAudit(params: {
       level: 'warning',
       extra: { event: params.event },
     });
+    return false;
   }
 }
 

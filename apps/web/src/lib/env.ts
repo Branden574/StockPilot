@@ -187,6 +187,19 @@ const serverSchema = z.object({
   // Optional: unset, the job answers { skipped: 'no_token' } and does
   // nothing. Sent only to api.supabase.com; never logged.
   SUPABASE_LOGS_READ_TOKEN: optionalSecret.transform((s) => s.trim()),
+  // The passkey bridge's own sealing key (lib/auth/bridge-secret.ts): 32
+  // random bytes, base64, never derived from any other secret. _V2 is set
+  // only during a rotation (rows are sealed again with the newest on use).
+  // Optional and FAIL-CLOSED: with no key, passkeys are neither offered nor
+  // accepted, exactly as with the platform kill switch off. Never printed,
+  // logged or committed; tests make up their own.
+  PASSKEY_BRIDGE_KEY_V1: optionalSecret.transform((s) => s.trim()),
+  PASSKEY_BRIDGE_KEY_V2: optionalSecret.transform((s) => s.trim()),
+  // More local origins a passkey answer may come from on a developer machine
+  // or the lab (lib/auth/passkey-relying-party.ts): a comma list of
+  // http://localhost:<port>, refused unless every entry is one. Ignored on
+  // Vercel and whenever the Supabase URL is not a loopback address.
+  PASSKEY_LOCAL_ORIGINS: optionalSecret.transform((s) => s.trim()),
 });
 
 const clientSchema = z.object({

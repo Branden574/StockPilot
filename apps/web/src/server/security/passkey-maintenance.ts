@@ -1,0 +1,273 @@
+import 'server-only';
+
+import { passkeyRelyingParty } from '@/lib/auth/passkey-relying-party';
+import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
+import { createAdminClient } from '@/lib/supabase/admin';
+
+import { compareTimes } from './passkey-state';
+
+/**
+ * The scheduled passkey upkeep (plan 10.3), run from a cron that already
+ * exists (no new Vercel setting): the security-events retention job, four
+ * times a day (vercel.json: half past every sixth hour), runs
+ * runPasskeyMaintenance (the purge, the sweep, the counts, the Auth version
+ * check). Every count and report below is per run, so four times a day. The hourly check of bridge-raised sessions (10.4) is its own
+ * module, server/security/passkey-detector.ts, which deletes nothing. This
+ * never throws and never changes its cron's own answer: a failure is
+ * reported (counts and codes only).
+ *
+ * It is not gated by the switches: it closes what is unfinished, and the
+ * S7/S13 repairs (finishing a removal the member started) run while the kill
+ * switch is off (answer B). Without a site (a preview) it does nothing.
+ * Before 0475 exists every call answers "missing" and is skipped.
+ */
+
+type Admin = ReturnType<typeof createAdminClient>;
+
+const MISSING = new Set(['PGRST202', '42883', 'PGRST205', '42P01']);
+const missing = (error: unknown) =>
+  MISSING.has(String((error as { code?: unknown } | null)?.code ?? ''));
+
+/** Auth versions the spike/v2 proofs passed on (plan 2.9): one joins only after a re-run on that exact image. */
+export const PROVEN_AUTH_VERSIONS: readonly string[] = ['v2.198.0'];
+
+/** An unverified reserved-name factor older than this is swept; never one younger than two minutes. */
+const SWEEP_UNVERIFIED_AFTER_MS = 10 * 60_000;
+
+/** The states that fail closed and wait for the member or the operator (10.1). */
+const CLOSED_STATES = new Set([
+  'bridge_without_passkey',
+  'reserved_factor_without_row',
+  'bridge_newer_than_removal',
+]);
+/** The open states (an active passkey with no verified bridge): counted on every run. */
+const OPEN_STATES = new Set(['no_bridge', 'bridge_factor_missing', 'bridge_factor_unverified']);
+
+interface StateRow {
+  user_id: string;
+  state: string;
+  bridge_factor_id: string | null;
+  bridge_factor_status: string | null;
+  bridge_factor_created_at: string | null;
+  reserved_factors: Array<{
+    factor_id: string;
+    status: string | null;
+    created_at: string | null;
+  }> | null;
+}
+
+async function deleteFactor(admin: Admin, userId: string, factorId: string): Promise<boolean> {
+  try {
+    const { error } = await admin.auth.admin.mfa.deleteFactor({ id: factorId, userId });
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+const olderThan = (time: string | null, ms: number) => {
+  const cutoff = new Date(Date.now() - ms).toISOString();
+  // compareTimes keeps microseconds; an unreadable time is never "old".
+  return compareTimes(time, cutoff) === -1;
+};
+
+/**
+ * Review 4 finding 10: no account's sweep starts after this long into the run
+ * (one Auth admin call at a time per factor). The retention route's own loop
+ * stops at 45 s and its function at 120 s (maxDuration); the sweep in flight
+ * and the version check (8 s at most) still end inside it. What a run leaves,
+ * the next takes, and the early stop is reported with the counts.
+ */
+export const MAINTENANCE_BUDGET_MS = 60_000;
+
+export interface PasskeyMaintenanceSummary {
+  ran: boolean;
+  purged: { challenges: number; removedPasskeys: number } | null;
+  swept: number;
+  removalsFinished: number;
+  counts: Record<string, number>;
+  /** Accounts in the state list, and those whose sweep ran before the budget. */
+  accountsListed: number;
+  accountsSeen: number;
+  stop: 'time_limit' | null;
+  authVersion: 'proven' | 'unproven' | 'not_checked';
+}
+
+/** The work of one run, four times a day (10.3). Never throws. */
+export async function runPasskeyMaintenance(): Promise<PasskeyMaintenanceSummary> {
+  const started = Date.now();
+  const summary: PasskeyMaintenanceSummary = {
+    ran: false,
+    purged: null,
+    swept: 0,
+    removalsFinished: 0,
+    counts: {},
+    accountsListed: 0,
+    accountsSeen: 0,
+    stop: null,
+    authVersion: 'not_checked',
+  };
+  try {
+    const rp = passkeyRelyingParty();
+    if (!rp) return summary;
+    const admin = createAdminClient();
+
+    const purge = await admin.rpc('purge_passkey_records');
+    if (purge.error) {
+      if (missing(purge.error)) return summary;
+      report('purge_failed', 'warning', {
+        code: String((purge.error as { code?: unknown }).code ?? 'none'),
+      });
+    } else {
+      const row = (Array.isArray(purge.data) ? purge.data[0] : purge.data) as {
+        challenges_deleted?: number;
+        removed_passkeys_deleted?: number;
+      } | null;
+      summary.purged = {
+        challenges: Number(row?.challenges_deleted ?? 0),
+        removedPasskeys: Number(row?.removed_passkeys_deleted ?? 0),
+      };
+    }
+    summary.ran = true;
+
+    const states = await admin.rpc('passkey_account_states', { p_rp_id: rp.rpId });
+    if (states.error) {
+      report('states_unreadable', 'error', {
+        code: String((states.error as { code?: unknown }).code ?? 'none'),
+      });
+    } else {
+      const rows = (states.data ?? []) as StateRow[];
+      summary.accountsListed = rows.length;
+      for (const row of rows) {
+        // The counts cover every account listed; the sweep stops at the budget.
+        summary.counts[row.state] = (summary.counts[row.state] ?? 0) + 1;
+        if (summary.stop !== null) continue;
+        if (Date.now() - started >= MAINTENANCE_BUDGET_MS) {
+          summary.stop = 'time_limit';
+          continue;
+        }
+        summary.accountsSeen += 1;
+        await sweepOne(admin, row, summary);
+      }
+      if (summary.stop !== null) {
+        report('maintenance_stopped', 'warning', {
+          stop: summary.stop,
+          accountsListed: summary.accountsListed,
+          accountsSeen: summary.accountsSeen,
+          swept: summary.swept,
+          removalsFinished: summary.removalsFinished,
+        });
+      }
+      const closed = Object.entries(summary.counts).filter(([s]) => CLOSED_STATES.has(s));
+      const open = Object.entries(summary.counts).filter(([s]) => OPEN_STATES.has(s));
+      if (closed.length > 0) report('accounts_fail_closed', 'error', Object.fromEntries(closed));
+      if (open.length > 0)
+        report('accounts_without_verified_bridge', 'warning', Object.fromEntries(open));
+    }
+
+    summary.authVersion = await checkAuthVersion(admin);
+  } catch (e) {
+    report('maintenance_failed', 'warning', { name: e instanceof Error ? e.name : 'unknown' });
+  }
+  console.info('[passkeys.maintenance]', JSON.stringify(summary));
+  return summary;
+}
+
+/**
+ * One account of the list: unverified reserved-name factors older than ten
+ * minutes are deleted (never younger than two); S7 and S13 removals the
+ * member started are finished. Never a verified bridge of a fail-closed
+ * state (S8, S12, S14, S17).
+ */
+async function sweepOne(
+  admin: Admin,
+  row: StateRow,
+  summary: PasskeyMaintenanceSummary,
+): Promise<void> {
+  const others = row.reserved_factors ?? [];
+  for (const f of others) {
+    if (f.status !== 'verified' && olderThan(f.created_at, SWEEP_UNVERIFIED_AFTER_MS)) {
+      if (await deleteFactor(admin, row.user_id, f.factor_id)) summary.swept += 1;
+    }
+  }
+  if (
+    row.state === 'bridge_factor_unverified' &&
+    row.bridge_factor_id &&
+    olderThan(row.bridge_factor_created_at, SWEEP_UNVERIFIED_AFTER_MS)
+  ) {
+    if (await deleteFactor(admin, row.user_id, row.bridge_factor_id)) summary.swept += 1;
+  }
+  // S13: no bridge row, removed rows only, verified reserved factors no newer
+  // than the removal (a newer one is bridge_newer_than_removal, never here).
+  // Only the verified ones are the removal's leftovers; an unverified one may
+  // be a new Add in flight and goes only by the age rule above.
+  if (row.state === 'removal_unfinished') {
+    let all = true;
+    for (const f of others) {
+      if (f.status === 'verified')
+        all = (await deleteFactor(admin, row.user_id, f.factor_id)) && all;
+    }
+    if (all) summary.removalsFinished += 1;
+    return;
+  }
+  if (row.state !== 'bridge_row_without_passkey' || !row.bridge_factor_id) return;
+  // S7: a bridge row with its verified factor no newer than the removal.
+  if (row.bridge_factor_status === 'verified') {
+    if (!(await deleteFactor(admin, row.user_id, row.bridge_factor_id))) return;
+    const { error } = await admin.rpc('passkey_drop_bridge', {
+      p_user_id: row.user_id,
+      p_factor_id: row.bridge_factor_id,
+    });
+    if (!error) summary.removalsFinished += 1;
+    return;
+  }
+  // S5: a row whose factor is gone, or unverified and old: the row goes.
+  if (row.bridge_factor_status === null) {
+    await admin.rpc('passkey_drop_bridge', {
+      p_user_id: row.user_id,
+      p_factor_id: row.bridge_factor_id,
+    });
+    return;
+  }
+  if (olderThan(row.bridge_factor_created_at, SWEEP_UNVERIFIED_AFTER_MS)) {
+    if (!(await deleteFactor(admin, row.user_id, row.bridge_factor_id))) return;
+    await admin.rpc('passkey_drop_bridge', {
+      p_user_id: row.user_id,
+      p_factor_id: row.bridge_factor_id,
+    });
+  }
+}
+
+/** The version check (2.9), on every run while passkeys are on. Reports; never turns anything off. */
+async function checkAuthVersion(admin: Admin): Promise<PasskeyMaintenanceSummary['authVersion']> {
+  const settings = await admin
+    .from('platform_settings')
+    .select('passkeys_on')
+    .limit(1)
+    .maybeSingle();
+  if (settings.error || (settings.data as { passkeys_on?: unknown } | null)?.passkeys_on !== true) {
+    return 'not_checked';
+  }
+  let version: string | null = null;
+  try {
+    const res = await fetch(`${env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/health`, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8_000),
+      headers: { apikey: env.NEXT_PUBLIC_SUPABASE_ANON_KEY },
+    });
+    const body = (await res.json()) as { version?: unknown };
+    version = typeof body.version === 'string' ? body.version : null;
+  } catch {
+    version = null;
+  }
+  if (version && PROVEN_AUTH_VERSIONS.includes(version)) return 'proven';
+  report('auth_version_unproven', 'warning', { version: version ?? 'unread' });
+  return 'unproven';
+}
+
+type ReportExtra = Record<string, string | number | boolean | null | undefined>;
+
+function report(tag: string, level: 'warning' | 'error', extra: ReportExtra) {
+  void reportError(new Error(`Passkeys: ${tag}`), { tag: `passkeys.${tag}`, level, extra });
+}

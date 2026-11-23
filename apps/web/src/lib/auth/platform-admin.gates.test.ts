@@ -35,6 +35,15 @@ vi.mock('@/lib/env', async () => {
     },
   };
 });
+// Stage 4 (plan 2.1 rule 21): the console gate also reads the passkey bridge
+// record with the service role. These accounts hold none.
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: () => ({
+    from: () => ({
+      select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
+    }),
+  }),
+}));
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('NOT_FOUND');

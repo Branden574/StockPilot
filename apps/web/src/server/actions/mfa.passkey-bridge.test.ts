@@ -103,8 +103,29 @@ vi.mock('@/lib/auth/verified-claims', () => ({
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// Stage 4: the passkey reads answer as for an account whose passkeys are not
+// open (the stage 2 behaviour these tests pin); passkeys.test.ts covers them.
+vi.mock('@/server/security/passkeys', () => ({
+  passkeyStepFor: vi.fn(async () => 'none'),
+  servingPasskeyIds: vi.fn(async () => []),
+}));
+// Stage 4: the app removal rule has its own tests
+// (server/security/second-step-methods.test.ts and
+// mfa.unenroll-no-change.test.ts); here a removal is allowed unless a test
+// says otherwise, so what is pinned is the bridge's own refusal, and how the
+// action asks the rule and answers its verdict.
+vi.mock('@/server/security/second-step-methods', () => ({
+  LAST_METHOD_WORDS: 'last method',
+  appRemovalVerdict: vi.fn(async () => 'allowed'),
+}));
 
-type Factor = { id: string; status: string; factor_type?: string; friendly_name?: string | null };
+type Factor = {
+  id: string;
+  status: string;
+  factor_type?: string;
+  friendly_name?: string | null;
+  created_at?: string;
+};
 
 const h = vi.hoisted(() => ({
   /** The account's factors, as GoTrue lists them (getUser and listFactors). */
@@ -113,6 +134,7 @@ const h = vi.hoisted(() => ({
     status: string;
     factor_type?: string;
     friendly_name?: string | null;
+    created_at?: string;
   }>,
   accountId: 'user-1',
   getUserFails: false,
@@ -189,6 +211,8 @@ vi.mock('@/lib/supabase/admin', () => ({
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { audit } from '@/server/services/audit';
+import { servingPasskeyIds } from '@/server/security/passkeys';
+import { appRemovalVerdict } from '@/server/security/second-step-methods';
 
 import {
   challengeFactorAction,
@@ -571,6 +595,59 @@ describe('unenrollFactorAction and the passkey bridge', () => {
   });
 });
 
+describe('unenrollFactorAction and the app removal rule (the no-change rule of 2026-11-21)', () => {
+  it("asks the rule with the list the context read, the active organization's policy, and the passkeys judged by the page's own rule, only when asked", async () => {
+    h.factors = [APP, BRIDGE];
+    await unenrollFactorAction({ factorId: APP.id });
+    expect(appRemovalVerdict).toHaveBeenCalledOnce();
+    const input = vi.mocked(appRemovalVerdict).mock.calls[0]![0];
+    expect(input).toMatchObject({ userId: 'user-1', factorId: APP.id, activeRequired: false });
+    expect(input.factors?.map((f) => f.id)).toEqual([APP.id, BRIDGE.id]);
+    expect(servingPasskeyIds).not.toHaveBeenCalled();
+    await input.servingPasskeys();
+    expect(servingPasskeyIds).toHaveBeenCalledWith('user-1', input.factors);
+  });
+
+  it("an unread factor list, or another account's, reaches the rule as unknown (null), never as an empty list", async () => {
+    h.contextListFails = true;
+    await unenrollFactorAction({ factorId: APP.id });
+    h.contextListFails = false;
+    h.accountId = 'user-2';
+    await unenrollFactorAction({ factorId: APP.id });
+    expect(vi.mocked(appRemovalVerdict).mock.calls.map((c) => c[0].factors)).toEqual([null, null]);
+  });
+
+  it("the base rule: refused with the base's words, nothing removed", async () => {
+    vi.mocked(appRemovalVerdict).mockResolvedValueOnce('policy');
+    const res = await unenrollFactorAction({ factorId: APP.id });
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: 'Your organization requires MFA. Ask an admin to lower the policy before disabling.',
+      },
+    });
+    expect(mfaStub.unenroll).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("the last method (a passkey holder): refused with the rule's words, nothing removed", async () => {
+    vi.mocked(appRemovalVerdict).mockResolvedValueOnce('last_method');
+    const res = await unenrollFactorAction({ factorId: APP.id });
+    expect(res).toEqual({ ok: false, error: { code: 'forbidden', message: 'last method' } });
+    expect(mfaStub.unenroll).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('what could not be read answers try again in a moment, never a removal', async () => {
+    vi.mocked(appRemovalVerdict).mockResolvedValueOnce('unreadable');
+    const res = await unenrollFactorAction({ factorId: APP.id });
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: TRY_AGAIN } });
+    expect(mfaStub.unenroll).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+});
+
 describe('enrollFactorAction and the passkey bridge', () => {
   it("the clean-up of unfinished set-ups leaves the recorded bridge and removes the member's own", async () => {
     h.factors = [
@@ -611,10 +688,22 @@ describe('enrollFactorAction and the passkey bridge', () => {
   });
 
   it('the clean-up removes an unfinished reserved-name factor that is not recorded, like any set-up', async () => {
-    h.factors = [{ ...IMPOSTOR, status: 'unverified' }];
+    const old = new Date(Date.now() - 3 * 60_000).toISOString();
+    h.factors = [{ ...IMPOSTOR, status: 'unverified', created_at: old }];
     h.record = { data: null, error: null };
     await enrollFactorAction();
     expect(mfaStub.unenroll.mock.calls).toEqual([[{ factorId: IMPOSTOR.id }]]);
+  });
+
+  it('stage 4: an unfinished reserved-name factor younger than two minutes (a registration in flight) is left alone', async () => {
+    const young = new Date(Date.now() - 30_000).toISOString();
+    for (const created_at of [young, undefined, 'not a time']) {
+      mfaStub.unenroll.mockClear();
+      h.factors = [{ ...IMPOSTOR, status: 'unverified', created_at }];
+      h.record = { data: null, error: null };
+      await enrollFactorAction();
+      expect(mfaStub.unenroll).not.toHaveBeenCalled();
+    }
   });
 
   it('the name it gives a new authenticator never carries the reserved prefix', async () => {
@@ -644,6 +733,7 @@ describe('stepUpMethodsAction', () => {
           { id: APP.id, friendlyName: 'Phone' },
           { id: 'app-2', friendlyName: null },
         ],
+        passkey: false,
       },
     });
     expect(h.recordFilters).toEqual(READ_OWN_RECORD);
@@ -708,13 +798,16 @@ describe('stepUpMethodsAction', () => {
       const withApp = await stepUpMethodsAction();
       expect(withApp).toMatchObject({
         ok: true,
-        data: { apps: [{ id: APP.id, friendlyName: 'Phone' }], recordsUnread: true },
+        data: { apps: [{ id: APP.id, friendlyName: 'Phone' }], recordsUnread: true, passkey: false },
       });
       expect(withApp.ok && withApp.data.apps).toHaveLength(1);
 
       h.factors = [IMPOSTOR];
       const alone = await stepUpMethodsAction();
-      expect(alone).toMatchObject({ ok: true, data: { apps: [], recordsUnread: true } });
+      expect(alone).toMatchObject({
+        ok: true,
+        data: { apps: [], recordsUnread: true, passkey: false },
+      });
     },
   );
 

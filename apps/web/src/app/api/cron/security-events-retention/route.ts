@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { runPasskeyMaintenance } from '@/server/security/passkey-maintenance';
 import { secretsEqual } from '@/server/services/lib/system-context';
 
 export const runtime = 'nodejs';
@@ -78,6 +79,11 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * are reported the same way, once, marked with the table; an error in either
  * loop answers 500.
  *
+ * The passkey upkeep (server/security/passkey-maintenance.ts: the purge of
+ * old challenges and removed passkeys, the sweep, the counts, the Auth
+ * version check) runs alongside, started after the secret check. It never
+ * throws and never changes this answer.
+ *
  * Auth: Bearer ${CRON_SECRET}, compared in constant time, FAIL-CLOSED when
  * CRON_SECRET is unset (as purge-ai-chat-history): an unauthenticated GET must
  * never reach the service-role client.
@@ -91,6 +97,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
+  const passkeyUpkeep = runPasskeyMaintenance();
   const started = Date.now();
   let deleted = 0;
   let hashesCleared = 0;
@@ -175,9 +182,11 @@ export async function GET(req: Request) {
     console.info(`[${TAG}]`, JSON.stringify({ table: 'sign_in_alerts', ...signInAlerts }));
   }
   if (failed || signInAlerts === null) {
+    await passkeyUpkeep;
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
+  await passkeyUpkeep;
   return NextResponse.json({ ok: true, ...events, signInAlerts });
 }
 

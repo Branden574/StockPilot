@@ -432,8 +432,9 @@ export type AuditEvent =
   // An authenticator code GoTrue judged wrong, on the web's sign-in code, the
   // step-up or the reset's code step (lib/auth/mfa-code-attempts.ts). No
   // organization: not shown to the organization's admins, and never counted
-  // as the person's own last action. metadata: path ('challenge' or
-  // 'password_reset'), session_aal on the challenge path, gotrue_code. Never
+  // as the person's own last action. metadata: path ('challenge',
+  // 'password_reset' or 'add_passkey'), session_aal on the challenge path,
+  // gotrue_code. Never
   // the code, GoTrue's message or the factor id.
   | 'mfa.code_refused'
   // Recovery codes (server/actions/mfa-recovery.ts), never the codes:
@@ -443,6 +444,23 @@ export type AuditEvent =
   | 'mfa.recovery.generated'
   | 'mfa.recovery.consumed'
   | 'mfa.recovery.failed'
+  // Passkeys (server/security/passkeys.ts, plan 2.8), in the default
+  // organization: added (metadata passkey_id, backed_up, transports, fmt,
+  // session_id), removed (passkey_id, reason), used (passkey_id, purpose,
+  // backed_up, session_id, raise_id), bridge_repaired (state, session_id,
+  // raise_id), bridge_raise (session_id, raise_id, purpose: written BEFORE
+  // every bridge answer and required, so the ceremony refuses without it).
+  // Never the credential id, key, counter, code or secret. The bridge_raise
+  // rows are what the hourly check of bridge-raised sessions matches (plan
+  // 10.4).
+  | 'passkey.added'
+  | 'passkey.removed'
+  | 'passkey.used'
+  | 'passkey.bridge_repaired'
+  | 'passkey.bridge_raise'
+  // The hourly passkey check's memory of a raise it reported (session id,
+  // raise time): server/security/passkey-detector.ts.
+  | 'passkey.raise_flagged'
   // Ownership transfer — the action doesn't exist yet but the event
   // type lets the fixer agent emit it when the missing flow lands.
   | 'organization.ownership.transferred'

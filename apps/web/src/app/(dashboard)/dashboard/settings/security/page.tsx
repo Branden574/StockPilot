@@ -7,14 +7,18 @@ import { ChangePasswordForm } from '@/components/settings/change-password-form';
 import { MfaEnrollment } from '@/components/settings/mfa-enrollment';
 import { MfaPolicyEditor } from '@/components/settings/mfa-policy-editor';
 import { MfaRecoveryCodes } from '@/components/settings/mfa-recovery-codes';
+import { PasskeysPanel } from '@/components/settings/passkeys-panel';
+import { PASSKEYS_PANEL_WORDS } from '@/components/settings/passkeys-copy';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
+import { contextFactorsOf } from '@/lib/auth/context-factor-list';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { readPasskeyBridge, withoutPasskeyBridge } from '@/lib/auth/passkey-bridge';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getVerifiedSessionClaimsForRequest } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
 import { getMfaRecoveryCodeStatus } from '@/server/actions/mfa-recovery';
+import { passkeysPanelFor } from '@/server/security/passkeys';
 import { withContext } from '@/server/services/context';
 import { SessionsService } from '@/server/services/sessions';
 import { SignInAlertsService } from '@/server/services/sign-in-alerts';
@@ -59,10 +63,21 @@ export default async function SecuritySettingsPage({
     new SignInAlertsService(serviceContext).mine().catch(() => null),
   ]);
 
-  const [factorsRes, orgRow, recoveryStatus] = await Promise.all([
+  const [factorsRes, orgRow, recoveryStatus, passkeys] = await Promise.all([
     supabase.auth.mfa.listFactors(),
     supabase.from('organizations').select('mfa_policy').eq('id', ctx.organizationId).maybeSingle(),
     getMfaRecoveryCodeStatus(),
+    // Stage 4: the Passkeys panel, or null when it must be ABSENT
+    // (server/security/passkeys.ts passkeysPanelFor). Names first, with the
+    // factor list the service context already read: a member with no factor
+    // carrying the passkey bridge name gets the panel only when they can add
+    // a passkey. Otherwise no site or no bridge key reads nothing at all, and
+    // anything else (the kill switch, new passkeys or an organization off)
+    // reads only the one passkey_add_allowed answer; no passkey table, no
+    // Auth call and no second session read (review 4 finding 6, review B3).
+    contextFactorsOf(serviceContext, ctx.userId)
+      .then((factors) => passkeysPanelFor(ctx.userId, factors))
+      .catch(() => null),
   ]);
 
   // Display only (every action on this page re-checks server-side), but an
@@ -183,6 +198,12 @@ export default async function SecuritySettingsPage({
           <MfaEnrollment verifiedFactors={appFactors} policyRequired={policyRequired} />
         )}
       </SettingsPanel>
+
+      {passkeys ? (
+        <SettingsPanel title="Passkeys" description={PASSKEYS_PANEL_WORDS.description}>
+          <PasskeysPanel data={passkeys} />
+        </SettingsPanel>
+      ) : null}
 
       <SettingsPanel
         title="Active sessions"

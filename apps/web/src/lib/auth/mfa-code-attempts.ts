@@ -117,7 +117,7 @@ export const MFA_SETUP_NOT_OPEN = 'This authenticator set-up is no longer open. 
 export const MFA_SETUP_UNREADABLE = 'Could not check your authenticator set-up. Try again.';
 
 /** Where a code was checked, as the row records it. */
-export type MfaCodePath = 'challenge' | 'password_reset';
+export type MfaCodePath = 'challenge' | 'password_reset' | 'add_passkey';
 
 /**
  * Spends one code attempt of `userId`: first in the bucket of the account at

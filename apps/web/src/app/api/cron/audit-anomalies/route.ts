@@ -6,6 +6,7 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { runPasskeyDetector } from '@/server/security/passkey-detector';
 import {
   detectExportAbuse,
   detectFailedLoginBursts,
@@ -74,6 +75,14 @@ function secretsEqual(a: string, b: string): boolean {
  * Every run that reads the window logs one summary line of counts (never a
  * row), so the logs show the detectors ran also in an hour with no finding.
  *
+ * The passkey detector (server/security/passkey-detector.ts: sessions
+ * raised by a passkey bridge with no raise row of ours; it reports and
+ * records a security event, and only while
+ * platform_settings.passkey_check_ends_sessions is on (off by default) ends
+ * that one session; turning it on affects raises found from then on) runs
+ * alongside, started after the secret check. It never throws and never
+ * changes this answer.
+ *
  * Schedule: "0 *\/1 * * *" (hourly) — see apps/web/vercel.json.
  * Auth: Bearer ${CRON_SECRET} — fail-closed.
  */
@@ -86,6 +95,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
+  const passkeyCheck = runPasskeyDetector();
   const admin = createAdminClient();
   const windowStart = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000).toISOString();
   const rows: AuditRow[] = [];
@@ -107,6 +117,7 @@ export async function GET(req: Request) {
         void reportError(new Error(`audit-anomalies query: ${error.message}`), {
           tag: 'cron.audit-anomaly',
         });
+        await passkeyCheck;
         return NextResponse.json({ error: 'query_failed' }, { status: 500 });
       }
 
@@ -202,8 +213,10 @@ export async function GET(req: Request) {
     // detectors ran (the JSON body below is read by nobody).
     console.info('[cron.audit-anomaly] summary', JSON.stringify(summary));
 
+    await passkeyCheck;
     return NextResponse.json(summary);
   } catch (err) {
+    await passkeyCheck;
     return internalErrorResponse(err, 'cron.audit-anomaly');
   }
 }
