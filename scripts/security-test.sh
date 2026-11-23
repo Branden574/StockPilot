@@ -2597,6 +2597,29 @@ WEB_TESTS=(
   src/server/services/platform/security-briefing.callers.test.ts
   src/components/platform/platform-security-briefing-section.test.tsx
   'src/app/(platform)/platform/security/page.test.tsx'
+
+  # The platform console's attack map (platform administrators only). Its
+  # read covers every organization and none with the service role, so the
+  # doors are pinned: the read is imported by the map section and the poll's
+  # Server Action alone; the section is rendered by the gated map page alone;
+  # the action is called by the map's island alone. The poll asks
+  # checkPlatformConsoleRead() first, exactly the console page's rule
+  # (allowlisted verified email, aal2 outright, no recorded bridge), and
+  # answers one fixed refusal for every failure: an allowlisted session at
+  # aal1 with no factor is refused. The answer is read twice against the
+  # contract and trimmed to what the page draws; a category the map does not
+  # show never leaves the server and is never drawn; flagged is never called
+  # or drawn as blocked; a floor says "at least"; a failed read is "could not
+  # check", never a zero; after two failed reads the page says it is not
+  # updating and nothing moves; a name that looks like markup is plain text.
+  # Each file carries the "Security invariant" marker.
+  src/lib/auth/platform-admin.console-read.test.ts
+  src/server/services/platform/security-map.test.ts
+  src/server/services/platform/security-map.callers.test.ts
+  src/server/actions/platform/security-map.test.ts
+  src/components/platform/platform-security-map-section.test.tsx
+  src/components/platform/security-map/security-map-client.test.tsx
+  'src/app/(platform)/platform/security/map/page.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2966,6 +2989,12 @@ CORE_TESTS=(
   # reported number, never from the events; sign-ins nobody uses are never an
   # item; the words name no address, reason code or detection number.
   src/security/security-briefing.test.ts
+  # The attack map's rules (the platform console): the lists the database
+  # counts with, a strict reader of its answer, the view that leaves the
+  # server (a hidden category is taken out there), the playback plan, and
+  # every sentence; a flagged event is never called blocked, a floor says
+  # "at least", and a number that could not be read is never a zero.
+  src/security/security-map.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
