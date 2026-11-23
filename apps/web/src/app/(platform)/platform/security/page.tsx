@@ -84,6 +84,16 @@ export default async function PlatformSecurityEventsPage({
       <PageHeader
         title="Security events"
         subline={`What the app refused, across every organization and none. The newest ${PLATFORM_SECURITY_EVENT_LIMIT} entries; each counts events of one kind in one minute.`}
+        actions={
+          <Link
+            href="/platform/security/map"
+            // Never prefetched: opening the map reads the whole window.
+            prefetch={false}
+            className="text-ink-2 hover:text-foreground text-[13px] underline underline-offset-2"
+          >
+            Attack map
+          </Link>
+        }
       />
 
       {/* The passkey switches (part 2, stage 6): read with the service

@@ -185,6 +185,21 @@ describe('the gate', () => {
   });
 });
 
+describe('the attack map', () => {
+  it('a plain link to it near the header, never prefetched; the map itself is not on this page', async () => {
+    await renderPage();
+    const link = screen.getByRole('link', { name: 'Attack map' });
+    expect(link).toHaveAttribute('href', '/platform/security/map');
+    expect(link).toHaveAttribute('data-prefetch', 'false');
+    // The link is in the header, before the Passkeys section.
+    expect(
+      link.compareDocumentPosition(screen.getByRole('region', { name: 'Passkeys section' })) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Attack map' })).toBeNull();
+  });
+});
+
 describe('the table', () => {
   it('rows of every organization and none, with names, places and counts', async () => {
     h.list.mockResolvedValueOnce([
