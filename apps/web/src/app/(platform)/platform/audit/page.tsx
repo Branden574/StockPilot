@@ -8,6 +8,7 @@ import { PlatformTable } from '@/components/platform/platform-table';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { formatExactUtc } from '@/lib/platform/last-active';
+import { passkeySwitchChangeOf } from '@/lib/platform/passkeys-console';
 import {
   platformAuditActorLabel,
   platformAuditTargetLabel,
@@ -49,6 +50,8 @@ const ACTION_LABEL: Record<PlatformAuditAction, string> = {
   user_disabled: 'Disabled account',
   user_reenabled: 'Re-enabled account',
   permission_exception_changed: ORDER_ITEMS_ACCESS_AUDIT_LABEL,
+  passkeys_switched: 'Switched passkeys',
+  org_passkeys_switched: "Switched an organization's passkeys",
 };
 
 const EXCEPTION_STATES: ReadonlySet<string> = new Set(PERMISSION_EXCEPTION_STATES);
@@ -141,7 +144,8 @@ export default async function PlatformAuditPage({
               // an operator scanning this table doesn't have to open the
               // row's raw detail to tell them apart.
               const superseded = auditDetailSuperseded(r.detail);
-              const exceptionChange = exceptionChangeOf(r.action, r.detail);
+              const exceptionChange =
+                exceptionChangeOf(r.action, r.detail) ?? passkeySwitchChangeOf(r.action, r.detail);
               return (
                 <TableRow key={r.id}>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">

@@ -114,22 +114,24 @@ async function holdsNoRecordedBridge(admin: VerifiedUser): Promise<boolean> {
  * Whether our table records a passkey bridge for `userId`: 'none', 'recorded'
  * or 'unreadable'. Read once per render (cache), like getVerifiedUser.
  */
-const consoleBridgeRecord = cache(async (userId: string): Promise<'none' | 'recorded' | 'unreadable'> => {
-  try {
-    const { data, error } = await createAdminClient()
-      .from('passkey_bridges')
-      .select('factor_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-    if (error) {
-      const code = (error as { code?: unknown }).code;
-      return code === 'PGRST205' || code === '42P01' ? 'none' : 'unreadable';
+const consoleBridgeRecord = cache(
+  async (userId: string): Promise<'none' | 'recorded' | 'unreadable'> => {
+    try {
+      const { data, error } = await createAdminClient()
+        .from('passkey_bridges')
+        .select('factor_id')
+        .eq('user_id', userId)
+        .maybeSingle();
+      if (error) {
+        const code = (error as { code?: unknown }).code;
+        return code === 'PGRST205' || code === '42P01' ? 'none' : 'unreadable';
+      }
+      return data === null ? 'none' : 'recorded';
+    } catch {
+      return 'unreadable';
     }
-    return data === null ? 'none' : 'recorded';
-  } catch {
-    return 'unreadable';
-  }
-});
+  },
+);
 
 /**
  * LINK-VISIBILITY-ONLY variant of {@link currentUserIsPlatformAdmin} that
@@ -264,7 +266,23 @@ export async function requirePlatformAdmin(): Promise<ServerSession> {
  * reason to a clean error.
  */
 export type PlatformAdminCheck =
-  | { ok: true; session: ServerSession }
+  | {
+      ok: true;
+      session: ServerSession;
+      /**
+       * The email Auth verified for this request (auth.getUser()), the one the
+       * allowlist passed. `session.email` is the profile column, which the
+       * account itself can edit: an audit row's actor takes this one.
+       */
+      verifiedEmail: string;
+      /**
+       * The id Auth verified for this request, from the same answer as
+       * verifiedEmail. `session.userId` comes from the request's session read;
+       * a caller that records the actor's id and email as one pair takes this
+       * one (and may refuse when the two differ).
+       */
+      verifiedUserId: string;
+    }
   | { ok: false; reason: 'forbidden' | 'aal2_required' };
 
 /**
@@ -292,5 +310,6 @@ export async function checkPlatformAdmin(
     return { ok: false, reason: 'aal2_required' };
   }
   if (!(await holdsNoRecordedBridge(admin))) return { ok: false, reason: 'forbidden' };
-  return { ok: true, session };
+  // isPlatformAdmin passed on this email, so it is a non-empty string.
+  return { ok: true, session, verifiedEmail: admin.email ?? '', verifiedUserId: admin.id };
 }

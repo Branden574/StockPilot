@@ -1000,6 +1000,15 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'not_org_data',
     "Platform console: a platform setting; no organization's row.",
   ],
+  'server/actions/platform/passkeys.ts#setOrganizationPasskeysAction::organization_passkey_switches.delete':
+    [
+      'not_org_data',
+      "Platform console (platform administrators, fresh step-up, the typed word): one organization's passkey switch, named by the press; no data of the organization.",
+    ],
+  'server/actions/platform/passkeys.ts#writeSetting::platform_settings.update': [
+    'not_org_data',
+    "Platform console: a platform setting (the passkey switches), the one settings row, only while it holds the value read; no organization's row.",
+  ],
   'server/actions/profile.ts#setAvatarUrlAction::user_profiles.update': [
     'own_row',
     "The caller's own profile.",
@@ -3154,10 +3163,12 @@ describe('every table write in apps/web/src stays in the active organization and
     // and 57 jobs, webhooks, callbacks, public token paths, platform console
     // and sign-up writes today (the 56th: the weekly digest re-signing its
     // week's claim row; the 57th: a scheduled job claiming its own attempt
-    // row for an organization). A new one is added here on purpose, with its
-    // reason, never to quiet a failure.
+    // row for an organization; the 58th and 59th: the platform console's
+    // passkey switches, a platform setting and one organization's switch row).
+    // A new one is added here on purpose, with its reason, never to quiet a
+    // failure.
     expect(stated.filter(([k]) => k === 'row_in_hand')).toHaveLength(5);
-    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(57);
+    expect(stated.filter(([k]) => k === 'not_org_data')).toHaveLength(59);
     expect(Object.keys(ROW_PROOF_EXEMPT)).toHaveLength(8);
     // One write serves several tables, and no query builder is kept in a
     // variable.

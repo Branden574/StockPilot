@@ -239,6 +239,18 @@ const REVIEWED: Record<string, Reviewed> = {
     reason:
       "Ends the caller's own temporary membership; currentUserIsPlatformAdmin refuses an allowlisted account that owes its code.",
   },
+  'server/actions/platform/passkeys.ts#setNewPasskeysSwitchAction': {
+    kind: 'platform',
+    reason: 'Platform admins only, with a fresh step-up (checkPlatformAdmin requireStepUp).',
+  },
+  'server/actions/platform/passkeys.ts#setOrganizationPasskeysAction': {
+    kind: 'platform',
+    reason: 'Platform admins only, with a fresh step-up (checkPlatformAdmin requireStepUp).',
+  },
+  'server/actions/platform/passkeys.ts#setPasskeysKillSwitchAction': {
+    kind: 'platform',
+    reason: 'Platform admins only, with a fresh step-up (checkPlatformAdmin requireStepUp).',
+  },
   'server/actions/platform/permission-exceptions.ts#setOrderItemsAccessAction': {
     kind: 'platform',
     reason: 'Platform admins only, with a fresh step-up (checkPlatformAdmin requireStepUp).',

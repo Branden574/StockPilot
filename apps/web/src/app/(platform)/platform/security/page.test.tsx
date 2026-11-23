@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * nothing; every organization's rows and the rows with no organization, with
  * the organization's name (its id when the name could not be read); the
  * place, and none for an entry that counts events past a cap; the empty
- * words.
+ * words; the Passkeys section above the events list.
  */
 
 const h = vi.hoisted(() => ({ order: [] as string[], list: vi.fn(), gate: vi.fn() }));
@@ -43,6 +43,13 @@ vi.mock('@/server/services/platform/security-events', () => ({
   },
 }));
 
+vi.mock('@/components/platform/platform-passkeys-section', () => ({
+  PlatformPasskeysSection: () => {
+    h.order.push('passkeys');
+    return <section aria-label="Passkeys section" />;
+  },
+}));
+
 import PlatformSecurityEventsPage from './page';
 
 const ORG = '5eed0000-0001-4000-8000-000000000001';
@@ -72,9 +79,10 @@ beforeEach(() => {
 });
 
 describe('the gate', () => {
-  it('requirePlatformAdmin runs before the read', async () => {
+  it('requirePlatformAdmin runs before the reads', async () => {
     render(await PlatformSecurityEventsPage());
-    expect(h.order).toEqual(['gate', 'read']);
+    // The gate first; then the events, then the passkey switches.
+    expect(h.order).toEqual(['gate', 'read', 'passkeys']);
     expect(h.list).toHaveBeenCalledWith({ limit: 200 });
   });
 
@@ -160,5 +168,29 @@ describe('the table', () => {
     h.list.mockResolvedValueOnce([]);
     render(await PlatformSecurityEventsPage());
     expect(screen.getByText('No security events recorded yet.')).toBeTruthy();
+  });
+
+  it('the Passkeys section comes before the events list, so the kill switch is never below it', async () => {
+    h.list.mockResolvedValue([row(), row({ id: 'e2' })]);
+    render(await PlatformSecurityEventsPage());
+    const passkeys = screen.getByRole('region', { name: 'Passkeys section' });
+    const events = screen.getByRole('region', { name: 'Security events' });
+    expect(
+      passkeys.compareDocumentPosition(events) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('shows the Passkeys section after the gate, and a refused gate shows none', async () => {
+    h.order = [];
+    h.gate.mockResolvedValue(undefined);
+    h.list.mockResolvedValue([]);
+    render(await PlatformSecurityEventsPage());
+    expect(screen.getByRole('region', { name: 'Passkeys section' })).toBeInTheDocument();
+    expect(h.order[0]).toBe('gate');
+    expect(h.order).toContain('passkeys');
+    h.order = [];
+    h.gate.mockRejectedValue(new Error('NOT_FOUND'));
+    await expect(PlatformSecurityEventsPage()).rejects.toThrow('NOT_FOUND');
+    expect(h.order).toEqual(['gate']);
   });
 });
