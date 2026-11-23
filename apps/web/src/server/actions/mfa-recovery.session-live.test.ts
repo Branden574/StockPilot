@@ -57,7 +57,7 @@ vi.mock('@/server/services/sessions', () => ({
 vi.mock('@/server/security/recovery-code-email', () => ({ sendRecoveryCodeUsedEmail: vi.fn() }));
 
 type Stub = ReturnType<typeof makeSupabaseStub>;
-type UserAnswer = { data: { user: { id: string } | null }; error: unknown };
+type UserAnswer = { data: { user: { id: string; email?: string | null } | null }; error: unknown };
 const h = vi.hoisted(() => ({
   admin: null as unknown as { client: unknown },
   member: null as unknown as { client: unknown },
@@ -167,7 +167,7 @@ const consumeCalls = (admin: Stub) => [
 ];
 
 const live = async (token: string): Promise<UserAnswer> => ({
-  data: { user: { id: String(payloadOf(token).sub) } },
+  data: { user: { id: String(payloadOf(token).sub), email: 'member@example.test' } },
   error: null,
 });
 

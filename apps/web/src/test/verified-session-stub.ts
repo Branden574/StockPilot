@@ -67,9 +67,14 @@ export function verifiedSessionAuth(
  * still holds, the account the token names. For the recovery code, which asks
  * Auth whether the held token's session still exists before a code is
  * checked (server/actions/mfa-recovery.ts sessionAtAuth). `record` hears each
- * token asked about.
+ * token asked about. Auth's answer carries the account's own address,
+ * `email` (a made-up one by default; null answers a user with none), which is
+ * where the recovery code's security email goes.
  */
-export function liveSessionAuth(record: (token: string) => void = () => {}) {
+export function liveSessionAuth(
+  record: (token: string) => void = () => {},
+  email: string | null = 'u@example.test',
+) {
   return {
     getUser: async (token?: string) => {
       record(token ?? '');
@@ -79,7 +84,7 @@ export function liveSessionAuth(record: (token: string) => void = () => {}) {
           error: { name: 'AuthSessionMissingError', message: 'Auth session missing!', status: 400 },
         };
       }
-      return { data: { user: { id: String(payloadOf(token).sub) } }, error: null };
+      return { data: { user: { id: String(payloadOf(token).sub), email } }, error: null };
     },
   };
 }

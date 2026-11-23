@@ -34,7 +34,12 @@ export type RecoveryMethodsLeft =
 
 /** The action's answer after a used code (consumeMfaRecoveryCodeAction). */
 export interface RecoveryCodeDone {
-  /** Every factor removed, the passkey's hidden one included. */
+  /**
+   * The sign-in methods removed at Auth, the passkey's hidden factor
+   * included. A factor never set up (unverified) is removed too, but it is
+   * no sign-in method and is not counted, so these words agree with the email
+   * (the release review of stage 5, finding 2).
+   */
   unenrolled: number;
   /** The other sessions could not be ended. */
   otherSessionsLeft?: boolean;
@@ -43,7 +48,10 @@ export interface RecoveryCodeDone {
    * account that had them). Never set while their records may be left.
    */
   passkeysRemoved?: boolean;
-  /** Authenticator apps removed, when the account had passkeys (else `unenrolled`). */
+  /**
+   * Authenticator apps set up and removed, apart from the passkey's own
+   * factor, when the account had passkeys (else `unenrolled`).
+   */
   appsRemoved?: number;
   /** What the code left (RecoveryMethodsLeft). */
   methodsLeft?: RecoveryMethodsLeft;

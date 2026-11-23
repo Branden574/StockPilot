@@ -251,22 +251,31 @@ const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try a
  * ran on, the cookie client here, so that answer clears this browser's
  * sign-in cookies too (the session is already gone at Auth; pinned in
  * mfa-recovery.held-reads.test.ts).
+ *
+ * With 'live' comes the account's own sign-in address as Auth answers it
+ * (null when Auth gives none). The security email goes only to that address,
+ * never to `session.email`, which for an account with no profile row is a
+ * request header the caller can choose (lib/auth/session.ts; the release
+ * review of stage 5, finding 1).
  */
 async function sessionAtAuth(
   supabase: Awaited<ReturnType<typeof createClient>>,
   token: string,
   userId: string,
-): Promise<'live' | 'ended' | 'unknown'> {
+): Promise<{ state: 'live'; email: string | null } | { state: 'ended' } | { state: 'unknown' }> {
   // A throw is not caught here: it reaches the action's own catch
   // (actionErrorResult), which refuses before any code is checked.
   const { data, error } = await supabase.auth.getUser(token);
   if (error) {
     const { name, status } = error as { name?: string; status?: number };
-    if (name === 'AuthSessionMissingError') return 'ended';
-    if (name === 'AuthApiError' && (status === 401 || status === 403)) return 'ended';
-    return 'unknown';
+    if (name === 'AuthSessionMissingError') return { state: 'ended' };
+    if (name === 'AuthApiError' && (status === 401 || status === 403)) return { state: 'ended' };
+    return { state: 'unknown' };
   }
-  return data?.user?.id === userId ? 'live' : 'ended';
+  const user = data?.user;
+  if (user?.id !== userId) return { state: 'ended' };
+  const email = typeof user.email === 'string' && user.email ? user.email : null;
+  return { state: 'live', email };
 }
 
 /** The client that acts as the held token alone (made once per press, when first needed). */
@@ -284,15 +293,20 @@ type ListedAdminFactor = {
 type FactorRemoval = {
   /** The factors listed (none when the list could not be read). */
   factors: ListedAdminFactor[];
-  /** TOTP factors deleted, the passkey's hidden one included. */
+  /** TOTP factors deleted, the passkey's hidden one and any never set up included (the audit row's count). */
   unenrolled: number;
-  /** Of those, the ones that are not the passkey's (no reserved name). */
-  appsRemoved: number;
   /**
    * Of those, the sign-in methods: every one but a factor never set up
    * (unverified). A factor whose status is not given counts (closed).
    */
   methodsRemoved: number;
+  /**
+   * Of the sign-in methods, the authenticator apps: not the passkey's own
+   * factor (no reserved name), and never a factor never set up, so the words
+   * after the press agree with the email (the release review of stage 5,
+   * finding 2).
+   */
+  appsRemoved: number;
   /** Deletes that failed (any factor). */
   failed: number;
   /** The list could not be read: no delete was tried. */
@@ -355,8 +369,10 @@ async function removeFactors(
     }
     if (deleted) {
       unenrolled += 1;
+      // A factor never set up is removed, but it was no sign-in method.
+      if (f.status === 'unverified') continue;
+      methodsRemoved += 1;
       if (!carriesBridgeName(f)) appsRemoved += 1;
-      if (f.status !== 'unverified') methodsRemoved += 1;
       continue;
     }
     failed += 1;
@@ -578,10 +594,12 @@ export async function consumeMfaRecoveryCodeAction(input: {
     // method and ends no other session. Closed: an answer that cannot be had
     // refuses too, with "try again".
     const atAuth = await sessionAtAuth(supabase, held.token, session.userId);
-    if (atAuth === 'ended') {
+    if (atAuth.state === 'ended') {
       return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
     }
-    if (atAuth === 'unknown') return err('internal_error', RECOVERY_NOT_CHECKED);
+    if (atAuth.state === 'unknown') return err('internal_error', RECOVERY_NOT_CHECKED);
+    // The account's own address, as Auth answered it for the held token.
+    const accountEmail = atAuth.email;
 
     // The service client spends the code with the passkey records and removes
     // the factors, so it is made before any code is checked.
@@ -664,7 +682,7 @@ export async function consumeMfaRecoveryCodeAction(input: {
     if (spent.kind === 'not_yet' && factors.some(carriesBridgeName)) {
       await reportPasskeyRecordsMissing('function', 'recovery_code', session.userId);
     }
-    const { unenrolled, appsRemoved } = removal;
+    const { unenrolled, appsRemoved, methodsRemoved } = removal;
 
     // Whether the passkey records are KNOWN removed: the combined call
     // answered, or the second removal below did. Not when the function is
@@ -722,35 +740,50 @@ export async function consumeMfaRecoveryCodeAction(input: {
           ? { unenrolled }
           : { unenrolled, passkeys_removed: passkeysRemoved },
     });
-    // Q7: the security email, after the response, whenever a code was spent
-    // (here; a press refused before this point spent nothing and sends none).
-    // It names passkeys only for an account that had one, and says so when a
-    // method was left. Its sentences are only the true ones (the second lab
-    // walk, RS5 25, and REVIEW-STAGE-6B finding 2): "removed" only when a
-    // sign-in method was removed (a verified factor, or passkeys with the
-    // code), "could not be removed" only when one was left; a code that did
-    // neither (an account with no method, or only a factor never set up)
+    // Q7: the security email, after the response, for every code known spent
+    // here (a press refused before this point spent nothing and sends none;
+    // a code the combined call may have spent before its answer was lost is
+    // answered "try again" above and sends none either). It goes only to the
+    // account's own address as Auth answered it for the held token, never to
+    // `session.email` (the release review of stage 5, finding 1); an account
+    // Auth gives no address gets no email, and that is reported, with no
+    // address. It names passkeys only for an account that had one, and says
+    // so when a method was left. Its sentences are only the true ones (the
+    // second lab walk, RS5 25, and REVIEW-STAGE-6B finding 2): "removed" only
+    // when a sign-in method was removed (a verified factor, or passkeys with
+    // the code), "could not be removed" only when one was left; a code that
+    // did neither (an account with no method, or only a factor never set up)
     // says only that a code was used and whether the other devices were
     // signed out.
     const nothingRemoved =
-      removal.methodsRemoved === 0 && (passkeysRemoved ?? 0) === 0 && methodsLeft === undefined;
-    if (session.email) {
-      sendRecoveryCodeUsedEmail(session.email, session.userId, {
+      methodsRemoved === 0 && (passkeysRemoved ?? 0) === 0 && methodsLeft === undefined;
+    if (accountEmail) {
+      sendRecoveryCodeUsedEmail(accountEmail, session.userId, {
         passkeys: hadPasskeys,
         othersSignedOut: othersEnded,
         ...(methodsLeft ? { methodsLeft } : {}),
         ...(methodsLeft === 'unchecked' && passkeysKnownRemoved ? { passkeysRemoved: true } : {}),
         ...(nothingRemoved ? { nothingRemoved: true } : {}),
       });
+    } else {
+      void reportError(new Error('A recovery code was used on an account with no sign-in address'), {
+        tag: 'actions.mfa_recovery.email_no_address',
+        level: 'warning',
+        userIdHash: accountIdHash(session.userId),
+      });
     }
     revalidatePath('/dashboard', 'layout');
-    // The answer of an account with no passkey whose methods all went, and
-    // whose other sessions ended, is `{ unenrolled }`, as before stage 5.
-    const answer: RecoveryCodeDone = { unenrolled };
+    // `unenrolled` in the answer counts the sign-in methods removed at Auth,
+    // never a factor never set up (the release review of stage 5, finding 2:
+    // the words then agree with the email); the audit row above keeps the
+    // count of every factor deleted. The answer of an account with no passkey
+    // whose methods all went, and whose other sessions ended, is
+    // `{ unenrolled }`, as before stage 5.
+    const answer: RecoveryCodeDone = { unenrolled: methodsRemoved };
     if (hadPasskeys) {
       if (passkeysKnownRemoved) answer.passkeysRemoved = true;
-      // The count of apps, apart from the passkey's own factor; not known
-      // when the list could not be read.
+      // The count of apps set up, apart from the passkey's own factor; not
+      // known when the list could not be read.
       if (methodsLeft !== 'unchecked') answer.appsRemoved = appsRemoved;
     }
     if (methodsLeft) answer.methodsLeft = methodsLeft;

@@ -92,6 +92,8 @@ const h = vi.hoisted(() => ({
   sessionId: 'sess-this' as string | null,
   /** The email's render throws. */
   renderThrows: false,
+  /** The account's own address as Auth answers it for the held token (null: none). */
+  authEmail: 'member@example.test' as string | null,
 }));
 
 const seg = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
@@ -119,7 +121,10 @@ vi.mock('@/lib/supabase/server', () => ({
       // Auth still holds the session (mfa-recovery.session-live.test.ts covers the rest).
       getUser: async (token: string) => ({
         data: {
-          user: { id: JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')).sub },
+          user: {
+            id: JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')).sub,
+            email: h.authEmail,
+          },
         },
         error: null,
       }),
@@ -131,6 +136,8 @@ vi.mock('@/lib/supabase/access-token-client', () => ({
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => h.admin.client) }));
 
+import { requireSession } from '@/lib/auth/session';
+import { recoveryCodeDoneWords } from '@/lib/auth/recovery-code-words';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { sendEmail } from '@/lib/email/resend';
 import { reportError } from '@/lib/error-reporter';
@@ -225,6 +232,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.sessionId = 'sess-this';
   h.renderThrows = false;
+  h.authEmail = 'member@example.test';
   h.cookieSignOut = vi.fn(async () => ({ error: null }));
   memberWith();
   vi.mocked(signOutAs).mockResolvedValue(SIGNED_OUT);
@@ -874,9 +882,13 @@ describe('the email is rendered after the response (the review of stage 5, findi
   });
 });
 
-describe('a spent code always sends one email, with only the true sentences (REVIEW-STAGE-6B finding 2)', () => {
+describe('a code known spent sends one email, with only the true sentences (REVIEW-STAGE-6B finding 2)', () => {
   /**
-   * Q7, "yes, for everyone": an email whenever a recovery code is spent.
+   * Q7, "yes, for everyone": an email for every recovery code the action
+   * knows it spent, to the address Auth answers. Not always: no address from
+   * Auth sends none (below), and a code the combined call may have spent
+   * before its answer was lost gets "try again" and no email (accepted, the
+   * release review of stage 5, finding 3; mfa-recovery.passkeys.test.ts).
    * Its sentences are only the true ones (the second lab walk, RS5 25):
    * "removed" only when a sign-in method was removed, "could not be removed"
    * only when one was left. A code that removed nothing says only that a
@@ -942,12 +954,57 @@ describe('a spent code always sends one email, with only the true sentences (REV
     saysOnlyCodeUsed(mails[0]!);
   });
 
-  it('only a factor never set up (unverified) went: no sign-in method was removed, so the email says only that a code was used', async () => {
-    adminWith(PASSKEY_RECOVERY_NOT_YET, [UNVERIFIED]);
+  it('only a factor never set up (unverified) went: no sign-in method was removed, so the email and the words after the press both say only that a code was used', async () => {
+    const a = adminWith(PASSKEY_RECOVERY_NOT_YET, [UNVERIFIED]);
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(res).toEqual({ ok: true, data: { unenrolled: 1 } });
+    // The factor is deleted, and the audit row still counts it; the answer
+    // counts sign-in methods only (the release review of stage 5, finding 2).
+    expect(deleteFactorOf(a).mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual([
+      'app-half',
+    ]);
+    expect(res).toEqual({ ok: true, data: { unenrolled: 0 } });
+    expect(vi.mocked(emitAuthAudit).mock.calls.map((c) => c[0].extra)).toEqual([{ unenrolled: 1 }]);
+    const words = recoveryCodeDoneWords((res as { data: Parameters<typeof recoveryCodeDoneWords>[0] }).data);
+    expect(words).toBe(
+      'Recovery code accepted. Your other devices were signed out. Set up a sign-in method now.',
+    );
+    expect(words).not.toMatch(/removed|authenticator app/i);
     expect(sent()).toHaveLength(1);
     saysOnlyCodeUsed(sent()[0]!);
+  });
+
+  it('one app set up and one never set up: the words count one app, as the email says every app was removed', async () => {
+    adminWith(PASSKEY_RECOVERY_NOT_YET, [APP, UNVERIFIED]);
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({ ok: true, data: { unenrolled: 1 } });
+    expect(vi.mocked(emitAuthAudit).mock.calls.map((c) => c[0].extra)).toEqual([{ unenrolled: 2 }]);
+    expect(
+      recoveryCodeDoneWords((res as { data: Parameters<typeof recoveryCodeDoneWords>[0] }).data),
+    ).toBe(
+      'Recovery code accepted. 1 authenticator app was removed, and your other devices were signed out. Set up a new one now.',
+    );
+    expect(sent()[0]!.text).toContain(
+      'Every authenticator app was removed, and your other devices were signed out.',
+    );
+  });
+
+  it('a passkey holder with a factor never set up: the words name only the passkeys, never an app', async () => {
+    adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: [{ consumed: true, passkeys_removed: 1, bridge_factor_id: 'bridge-1' }],
+          error: null,
+        },
+      },
+      [BRIDGE, UNVERIFIED],
+    );
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toMatchObject({ ok: true, data: { appsRemoved: 0, passkeysRemoved: true } });
+    expect(
+      recoveryCodeDoneWords((res as { data: Parameters<typeof recoveryCodeDoneWords>[0] }).data),
+    ).toBe(
+      'Recovery code accepted. Your passkeys were removed, and your other devices were signed out. Set up a new one now.',
+    );
   });
 
   it('REMOVED: a verified app removed: the removed sentence, as before', async () => {
@@ -990,6 +1047,43 @@ describe('a spent code always sends one email, with only the true sentences (REV
       'An authenticator app could not be removed, so it is still on your account.',
     );
     expect(mail.text).not.toMatch(/Every authenticator app|was removed|were removed/);
+  });
+
+  describe('the address is the one Auth answers, never one from the request (the release review of stage 5, finding 1)', () => {
+    it('the session names another address (for an account with no profile row, a request header): the email goes only to Auth’s', async () => {
+      beforeRecords();
+      vi.mocked(requireSession).mockResolvedValueOnce({
+        userId: 'user-1',
+        email: 'chosen-by-caller@example.test',
+        fullName: null,
+        avatarUrl: null,
+        defaultOrganizationId: null,
+      });
+      const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+      expect(res).toEqual(DONE);
+      const mails = sent();
+      expect(mails).toHaveLength(1);
+      expect(mails[0]!.to).toBe('member@example.test');
+      expect(`${mails[0]!.text}\n${mails[0]!.html}`).not.toContain('chosen-by-caller');
+    });
+
+    it.each([
+      ['no address', null],
+      ['an empty address', ''],
+    ])('Auth answers %s: no email at all (never the session’s), and one report with no address', async (_what, email) => {
+      beforeRecords();
+      h.authEmail = email;
+      const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+      // The recovery itself is unchanged.
+      expect(res).toEqual(DONE);
+      expect(sendEmail).not.toHaveBeenCalled();
+      const reports = vi
+        .mocked(reportError)
+        .mock.calls.filter((c) => c[1]?.tag === 'actions.mfa_recovery.email_no_address');
+      expect(reports).toHaveLength(1);
+      expect(reports[0]![1]).toMatchObject({ level: 'warning' });
+      expect(JSON.stringify(reports[0])).not.toContain('@example.test');
+    });
   });
 
   describe('REFUSED BEFORE SPENDING: no email', () => {

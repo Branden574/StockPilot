@@ -12,9 +12,12 @@ import { defer } from '@/server/services/lib/defer';
 
 /**
  * "Your StockPilot sign-in methods were removed" (answers Q6 and Q7 of the
- * passkey plan): the security email of a used recovery code, sent to the
- * account's address after the response, never blocking it, whenever a code
- * was spent (when it removed nothing, it says only that a code was used). The words are the
+ * passkey plan): the security email of a used recovery code, sent after the
+ * response, never blocking it, for every code the action knows it spent
+ * (when it removed nothing, it says only that a code was used). `to` is the
+ * account's own address as Auth answered it for the held token, never an
+ * address from the request (the caller sends none when Auth gives none;
+ * server/actions/mfa-recovery.ts sessionAtAuth). The words are the
  * true ones for this account (lib/email/es/families/security.ts
  * renderRecoveryCodeUsedEmail). The email is rendered and sent inside the
  * deferred function, so a render that throws cannot change the answer of a
