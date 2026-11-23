@@ -1014,8 +1014,12 @@ describe('review B1: the memory keeps what became of each finding', () => {
     h.sessions = { data: standing, error: null };
     h.endAnswer = FAILS;
     expect(await runPasskeyDetector()).toMatchObject({ ending: { failed: MAX_FINDINGS } });
+    // One raise time for both, read once: two reads of the clock can differ
+    // by a millisecond on a slow machine, and the detector rightly takes the
+    // newer raise first. With equal times the order given is kept.
+    const freshAt = ago(10 * MIN);
     const fresh = [0, 1].map((i) => ({
-      ...session({ raised_at: ago(10 * MIN) }),
+      ...session({ raised_at: freshAt }),
       session_id: `fresh-${i}`,
       user_id: `fresh-user-${i}`,
     }));
