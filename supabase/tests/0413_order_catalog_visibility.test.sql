@@ -470,9 +470,9 @@ select is(
   (select string_agg(m[1], ',' order by m[1])
      from pg_constraint c, regexp_matches(pg_get_constraintdef(c.oid), '''([a-z_]+)''::text', 'g') as m
     where c.conrelid = 'public.platform_admin_audit'::regclass and c.conname = 'platform_admin_audit_action_check'),
-  'acted_as_end,acted_as_start,billing_changed,deletion_passphrase_set,org_deleted,org_provisioned,password_reset_sent,'
-  'permission_exception_changed,ticket_updated,user_disabled,user_reenabled,viewed_org',
-  'S9: the re-added platform audit CHECK accepts every value it accepted before (the eleven through 0308) plus permission_exception_changed, and nothing else');
+  'acted_as_end,acted_as_start,billing_changed,deletion_passphrase_set,org_deleted,org_passkeys_switched,org_provisioned,'
+  'passkeys_switched,password_reset_sent,permission_exception_changed,ticket_updated,user_disabled,user_reenabled,viewed_org',
+  'S9: the re-added platform audit CHECK accepts every value it accepted before (the eleven through 0308) plus permission_exception_changed, and nothing else (0476 later adds the two passkey switch words; 0476''s own test pins them)');
 
 -- ═══ P. Who holds the capability by default ═══════════════════════════════
 select is(
