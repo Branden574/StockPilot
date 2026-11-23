@@ -88,6 +88,12 @@ function press(
  * that has lapsed it answers `aal2_required`, and the authenticator code is
  * asked for in place (useStepUp) and the same payload pressed again. The page
  * is refreshed after every answer, so it shows the switch as it is now.
+ *
+ * The dialog's direction is fixed when it opens. The refresh after an answer
+ * can change `on` while the dialog is still open (an error keeps it open, and
+ * an OFF that answered an error may have landed), so the dialog keeps asking
+ * for, and pressing, the change it was opened for: it never turns into the
+ * opposite change with the typed word still in the box.
  */
 export function PasskeySwitchControl({ target, on }: { target: PasskeySwitchTarget; on: boolean }) {
   const router = useRouter();
@@ -95,13 +101,15 @@ export function PasskeySwitchControl({ target, on }: { target: PasskeySwitchTarg
   const [open, setOpen] = React.useState(false);
   const [typed, setTyped] = React.useState('');
   const [pending, start] = React.useTransition();
-  const turnOn = !on;
+  // What the open dialog asks for; set again each time it opens.
+  const [turnOn, setTurnOn] = React.useState(!on);
   const words = wordsFor(target, turnOn);
   const inputId = React.useId();
   const armed = typed === PASSKEYS_CONFIRM_WORD && !pending;
 
   function onOpenChange(next: boolean) {
     if (pending) return;
+    if (next) setTurnOn(!on);
     setOpen(next);
     if (!next) setTyped('');
   }
@@ -150,10 +158,10 @@ export function PasskeySwitchControl({ target, on }: { target: PasskeySwitchTarg
             type="button"
             size="sm"
             variant={on ? 'outline' : 'default'}
-            onClick={() => setOpen(true)}
+            onClick={() => onOpenChange(true)}
             className="max-sm:h-11"
           >
-            {turnOn ? 'Turn on' : 'Turn off'}
+            {on ? 'Turn off' : 'Turn on'}
           </Button>
         </span>
 

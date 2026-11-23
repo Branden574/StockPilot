@@ -2540,8 +2540,12 @@ WEB_TESTS=(
   # with the email Auth verified. Turning on writes the row first and
   # switches nothing without it; turning off always proceeds, a row that
   # cannot be written then is reported at error level and said in the
-  # answer, and the answer is the switch as read again after the press.
+  # answer, and the answer is the switch as read again after the press (when
+  # that read fails, what the write itself answered; the page is refreshed
+  # after every answer). The confirm dialog keeps the direction it was
+  # opened for.
   src/server/actions/platform/passkeys.test.ts
+  src/components/platform/passkey-switch-control.test.tsx
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

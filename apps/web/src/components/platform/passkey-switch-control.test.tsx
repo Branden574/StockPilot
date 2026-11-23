@@ -9,7 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the exact word; each target calls its own action with what it shows; a
  * stale step-up asks for the code in place and presses again with the same
  * payload; the answers' words (already, off without its record, members
- * still holding passkeys); an error keeps the dialog open.
+ * still holding passkeys); an error keeps the dialog open, and the open
+ * dialog keeps the direction it was opened for when the page refreshes under
+ * it.
  */
 
 const ORG = '0b000000-0000-4000-8000-000000000001';
@@ -200,6 +202,54 @@ describe('PasskeySwitchControl', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     // The page is refreshed anyway: the switch may have moved.
     expect(h.refresh).toHaveBeenCalled();
+  });
+
+  it('an OFF that answered an error keeps asking to turn off when the refresh shows the switch off', async () => {
+    h.kill.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm whether this passkey switch is off. Reload the page to see its state, and turn it off again if it is still on.',
+      },
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { rerender } = render(
+      <PasskeySwitchControl target={{ kind: 'platform', setting: 'passkeys_on' }} on />,
+    );
+    await openAndType(user, 'Turn off', 'PASSKEYS');
+    await user.click(screen.getByRole('button', { name: 'Turn off passkeys for everyone' }));
+    await waitFor(() => expect(h.toast.error).toHaveBeenCalled());
+    // The refresh after the answer: the OFF had landed, so the page now shows it off.
+    rerender(
+      <PasskeySwitchControl target={{ kind: 'platform', setting: 'passkeys_on' }} on={false} />,
+    );
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByText('Turn off passkeys for everyone?')).toBeInTheDocument();
+    expect(screen.queryByText('Turn on passkeys for everyone?')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Turn on passkeys for everyone' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Turn off passkeys for everyone' }));
+    await waitFor(() => expect(h.kill).toHaveBeenCalledTimes(2));
+    for (const call of h.kill.mock.calls)
+      expect(call[0]).toEqual({ on: false, confirm: 'PASSKEYS' });
+  });
+
+  it('opened again after the switch moved, the dialog asks for the change from its new state', async () => {
+    h.adds.mockResolvedValue(done({ on: false, changed: true, recorded: true }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const { rerender } = render(
+      <PasskeySwitchControl target={{ kind: 'platform', setting: 'passkey_adds_on' }} on />,
+    );
+    await openAndType(user, 'Turn off', 'PASSKEYS');
+    await user.click(screen.getByRole('button', { name: 'Turn off new passkeys' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    rerender(
+      <PasskeySwitchControl target={{ kind: 'platform', setting: 'passkey_adds_on' }} on={false} />,
+    );
+    await openAndType(user, 'Turn on', '');
+    expect(screen.getByText('Turn on new passkeys?')).toBeInTheDocument();
+    expect(screen.getByLabelText('Type PASSKEYS to confirm')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Turn on new passkeys' })).toBeDisabled();
   });
 
   it('a press refused because its record could not be written says so and claims nothing', async () => {
