@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * nothing; every organization's rows and the rows with no organization, with
  * the organization's name (its id when the name could not be read); the
  * place, and none for an entry that counts events past a cap; the empty
- * words.
+ * words; the Passkeys section above the events list.
  */
 
 const h = vi.hoisted(() => ({ order: [] as string[], list: vi.fn(), gate: vi.fn() }));
@@ -168,6 +168,16 @@ describe('the table', () => {
     h.list.mockResolvedValueOnce([]);
     render(await PlatformSecurityEventsPage());
     expect(screen.getByText('No security events recorded yet.')).toBeTruthy();
+  });
+
+  it('the Passkeys section comes before the events list, so the kill switch is never below it', async () => {
+    h.list.mockResolvedValue([row(), row({ id: 'e2' })]);
+    render(await PlatformSecurityEventsPage());
+    const passkeys = screen.getByRole('region', { name: 'Passkeys section' });
+    const events = screen.getByRole('region', { name: 'Security events' });
+    expect(
+      passkeys.compareDocumentPosition(events) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('shows the Passkeys section after the gate, and a refused gate shows none', async () => {
