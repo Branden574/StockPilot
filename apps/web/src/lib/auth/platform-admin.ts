@@ -11,7 +11,7 @@ import { createClient } from '@/lib/supabase/server';
 
 import { stepUpOwed } from '@stockpilot/core';
 
-import { requireSession, type ServerSession } from './session';
+import { getServerSession, requireSession, type ServerSession } from './session';
 import { carriesBridgeName } from './passkey-bridge-name';
 import { readVerifiedSessionClaimsOf, type VerifiedSessionClaims } from './verified-claims';
 
@@ -312,4 +312,49 @@ export async function checkPlatformAdmin(
   if (!(await holdsNoRecordedBridge(admin))) return { ok: false, reason: 'forbidden' };
   // isPlatformAdmin passed on this email, so it is a non-empty string.
   return { ok: true, session, verifiedEmail: admin.email ?? '', verifiedUserId: admin.id };
+}
+
+/** The one answer checkPlatformConsoleRead() gives every caller it turns away. */
+export const PLATFORM_CONSOLE_READ_REFUSED = Object.freeze({ ok: false } as const);
+
+export type PlatformConsoleReadCheck = { ok: true } | typeof PLATFORM_CONSOLE_READ_REFUSED;
+
+/**
+ * THE CONSOLE'S OWN RULE, FOR A READ THE CONSOLE POLLS. Exactly what
+ * requirePlatformAdmin() asks of a page, for a Server Action that hands
+ * console data to a page that is already open:
+ *   1. a signed-in session,
+ *   2. the VERIFIED auth email on the platform-admin allowlist (and no factor
+ *      that carries the passkey bridge's name),
+ *   3. the session at AAL2 OUTRIGHT, read from verified claims of that same
+ *      account,
+ *   4. no recorded passkey bridge.
+ *
+ * NOT checkPlatformAdmin(): without its fresh step-up that check lets an
+ * allowlisted account that has no authenticator through on its password
+ * alone (owesStepUp owes nothing there), which the console itself never
+ * does. A read behind that check would be a door to console data weaker
+ * than the console.
+ *
+ * ONE ANSWER FOR EVERY FAILURE: the same frozen value whether there is no
+ * session, the email is not on the list, the session has no second step, a
+ * bridge is recorded, or anything could not be read (it never throws and
+ * never redirects: a poll must not move the page). A caller cannot tell which
+ * it was, and neither can whoever sent the request.
+ */
+export async function checkPlatformConsoleRead(): Promise<PlatformConsoleReadCheck> {
+  try {
+    if (!(await getServerSession())) return PLATFORM_CONSOLE_READ_REFUSED;
+    const admin = await verifiedPlatformAdmin();
+    if (!admin) return PLATFORM_CONSOLE_READ_REFUSED;
+    if ((await currentVerifiedClaims(admin.id))?.aal !== 'aal2') {
+      return PLATFORM_CONSOLE_READ_REFUSED;
+    }
+    if (!(await holdsNoRecordedBridge(admin))) return PLATFORM_CONSOLE_READ_REFUSED;
+    return { ok: true };
+  } catch {
+    // A redirect the session load raises (a disabled account), or a read that
+    // failed: refused like everything else.
+    return PLATFORM_CONSOLE_READ_REFUSED;
+  }
 }
