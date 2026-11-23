@@ -26,6 +26,17 @@ import { PlatformTable } from './platform-table';
 
 const COULD_NOT_CHECK = 'Could not check';
 
+/**
+ * The Organization column of the all-organizations table keeps a width of its
+ * own. In the Liquid Glass appearance the headers of a console table do not
+ * wrap, so the eleven columns beside it take what they need and this one was
+ * left with the width of its header: a name of three words stood on three
+ * lines, and a long one ran down the page. Long names still wrap inside it,
+ * and a long unbroken word (or an id shown in place of a name) breaks.
+ */
+const ORGANIZATION_COLUMN = 'min-w-[14rem]';
+const ORGANIZATION_CELL = 'min-w-[14rem] [overflow-wrap:anywhere]';
+
 const SEVERITY_TONE: Record<BriefingSeverity, 'destructive' | 'warning' | 'secondary'> = {
   high: 'destructive',
   medium: 'warning',
@@ -158,10 +169,13 @@ function AllOrganizations({ briefing }: { briefing: PlatformSecurityBriefing }) 
             </p>
           )
         ) : (
-          <PlatformTable label="Security briefing by organization" minWidth={1300}>
+          // 1200, not wider: in Classic the headers wrap, and the card is
+          // about 1250 wide on a 1360 screen, so the last column is in view
+          // without scrolling sideways there.
+          <PlatformTable label="Security briefing by organization" minWidth={1200}>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead>Organization</TableHead>
+                <TableHead className={ORGANIZATION_COLUMN}>Organization</TableHead>
                 <TableHead>Attention</TableHead>
                 <TableHead className="text-right">Blocked this week</TableHead>
                 <TableHead className="text-right">Blocked last week</TableHead>
@@ -178,7 +192,7 @@ function AllOrganizations({ briefing }: { briefing: PlatformSecurityBriefing }) 
             <TableBody>
               {briefing.organizations.map((o) => (
                 <TableRow key={o.organizationId}>
-                  <TableCell>
+                  <TableCell className={ORGANIZATION_CELL}>
                     <Link
                       href={`/platform/security?org=${o.organizationId}`}
                       // Never prefetched: rendering one organization's

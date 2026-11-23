@@ -290,6 +290,34 @@ describe('all organizations', () => {
     expect(within(section).getByText('38 organizations have nothing to report.')).toBeTruthy();
   });
 
+  it('the Organization column keeps a width of its own, and a long name or an id breaks inside it', async () => {
+    const section = await renderSection();
+    const table = within(section).getByRole('region', {
+      name: 'Security briefing by organization',
+    });
+    const head = within(table).getByRole('columnheader', { name: 'Organization' });
+    const firstCells = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => within(r).getAllByRole('cell')[0]!);
+    expect(firstCells.length).toBeGreaterThan(0);
+    // The head and every cell of the column, so neither appearance can
+    // squeeze it to the width of its header.
+    expect(head.className.split(/\s+/)).toContain('min-w-[14rem]');
+    for (const cell of firstCells) {
+      const classes = cell.className.split(/\s+/);
+      expect(classes).toContain('min-w-[14rem]');
+      // A long unbroken word, or an id in place of a name, wraps too.
+      expect(classes).toContain('[overflow-wrap:anywhere]');
+      expect(classes).not.toContain('whitespace-nowrap');
+    }
+    // No other column is given a minimum: the numbers stay as narrow as they are.
+    const others = within(table).getAllByRole('columnheader').slice(1);
+    expect(others.some((h) => /min-w-/.test(h.className))).toBe(false);
+    // The table's own floor: below the card's width on a 1360 screen in Classic.
+    expect((table.querySelector('table') as HTMLTableElement).style.minWidth).toBe('1200px');
+  });
+
   it("each organization's name links to its briefing, never prefetched", async () => {
     h.platform.mockResolvedValue(
       buildPlatformSecurityBriefing({ ...platformInput(), members: null }),
