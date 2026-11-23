@@ -224,13 +224,16 @@ function sameInstant(stored: unknown, sent: string): boolean {
  * Only this column (with updated_at and updated_by) is written, on the one
  * row. No row when read: insert it; a row another press made first (23505)
  * falls back to the conditional update. `applied` is false when the update
- * matched no row: the switch moved since the read.
+ * matched no row: the switch moved since the read. A write that answers an
+ * error is reported here, with `report`, and answered only as `failed`: its
+ * text stays on the server (S31).
  */
 async function writeSetting(
   admin: AdminClient,
   setting: PlatformPasskeySetting,
   w: { from: boolean; on: boolean; rowExists: boolean; userId: string; at: string },
-): Promise<{ error: { message: string } | null; applied: boolean }> {
+  report: Parameters<typeof reportError>[1],
+): Promise<{ failed: boolean; applied: boolean }> {
   const values = {
     [setting]: w.on,
     updated_at: w.at,
@@ -238,9 +241,10 @@ async function writeSetting(
   };
   if (!w.rowExists) {
     const inserted = await admin.from('platform_settings').insert({ id: true, ...values });
-    if (!inserted.error) return { error: null, applied: true };
+    if (!inserted.error) return { failed: false, applied: true };
     if ((inserted.error as { code?: string }).code !== '23505') {
-      return { error: inserted.error, applied: false };
+      await reportError(new Error(inserted.error.message), report);
+      return { failed: true, applied: false };
     }
   }
   const updated = await admin
@@ -249,8 +253,11 @@ async function writeSetting(
     .eq('id', true)
     .eq(setting, w.from)
     .select('id');
-  if (updated.error) return { error: updated.error, applied: false };
-  return { error: null, applied: (updated.data ?? []).length > 0 };
+  if (updated.error) {
+    await reportError(new Error(updated.error.message), report);
+    return { failed: true, applied: false };
+  }
+  return { failed: false, applied: (updated.data ?? []).length > 0 };
 }
 
 /** Turn the platform-wide kill switch (platform_settings.passkeys_on) on or off. */
@@ -315,23 +322,14 @@ async function setPlatformSwitch(
     let applied = false;
     let failed = false;
     if (from) {
-      const written = await writeSetting(admin, setting, {
-        from,
-        on,
-        rowExists: true,
-        userId: actor.userId,
-        at,
-      });
-      if (written.error) {
-        failed = true;
-        await reportError(new Error(written.error.message), {
-          tag: `${tag}.off_write`,
-          level: 'error',
-          extra: { setting, to: on },
-        });
-      } else {
-        applied = written.applied;
-      }
+      const written = await writeSetting(
+        admin,
+        setting,
+        { from, on, rowExists: true, userId: actor.userId, at },
+        { tag: `${tag}.off_write`, level: 'error', extra: { setting, to: on } },
+      );
+      failed = written.failed;
+      applied = written.applied;
     }
     const again = await readSettings(admin);
     const now = again.data as Record<string, unknown> | null;
@@ -398,15 +396,13 @@ async function setPlatformSwitch(
   // This press's own timestamp, sent (never the database's default): with the
   // actor's id it tells this press's write apart from any other on a read again.
   const at = new Date().toISOString();
-  const written = await writeSetting(admin, setting, {
-    from,
-    on,
-    rowExists: row !== null,
-    userId: actor.userId,
-    at,
-  });
-  if (written.error) {
-    await reportError(new Error(written.error.message), { tag: `${tag}.write`, extra: { to: on } });
+  const written = await writeSetting(
+    admin,
+    setting,
+    { from, on, rowExists: row !== null, userId: actor.userId, at },
+    { tag: `${tag}.write`, extra: { to: on } },
+  );
+  if (written.failed) {
     // Its record landed: read again before saying it did not happen. Only
     // this press's own write (its actor and its timestamp) confirms it; an
     // ON written by any other press, or an unreadable row, cannot.
