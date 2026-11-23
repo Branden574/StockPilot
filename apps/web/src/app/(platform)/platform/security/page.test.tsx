@@ -1,4 +1,5 @@
 import { render, screen, within } from '@testing-library/react';
+import { isValidElement, Suspense, type ReactElement, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -8,9 +9,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * the organization's name (its id when the name could not be read); the
  * place, and none for an entry that counts events past a cap; the empty
  * words; the Passkeys section above the events list.
+ *
+ * And the security briefing section: after the Passkeys section and before
+ * the events list, inside <Suspense> (so a slow briefing never delays the
+ * passkey switches); handed the ?org= value and the platform admin the gate
+ * answered; an ?org= that is not a uuid is Page not found before anything is
+ * read.
  */
 
-const h = vi.hoisted(() => ({ order: [] as string[], list: vi.fn(), gate: vi.fn() }));
+const h = vi.hoisted(() => ({
+  order: [] as string[],
+  list: vi.fn(),
+  gate: vi.fn(),
+  briefingProps: [] as Array<Record<string, unknown>>,
+}));
 
 vi.mock('next/link', async () => {
   const React = await import('react');
@@ -50,7 +62,28 @@ vi.mock('@/components/platform/platform-passkeys-section', () => ({
   },
 }));
 
-import PlatformSecurityEventsPage from './page';
+vi.mock('@/components/platform/platform-security-briefing-section', () => ({
+  PlatformSecurityBriefingSection: (props: Record<string, unknown>) => {
+    h.order.push('briefing');
+    h.briefingProps.push(props);
+    return <section aria-label="Security briefing section" />;
+  },
+}));
+vi.mock('next/navigation', () => ({
+  notFound: () => {
+    throw new Error('NEXT_NOT_FOUND');
+  },
+}));
+
+import { PlatformPasskeysSection } from '@/components/platform/platform-passkeys-section';
+import { PlatformSecurityBriefingSection } from '@/components/platform/platform-security-briefing-section';
+
+import Page from './page';
+
+/** The page as a request for /platform/security, with its query string. */
+function PlatformSecurityEventsPage(query: { org?: string | string[] } = {}) {
+  return Page({ searchParams: Promise.resolve(query) });
+}
 
 const ORG = '5eed0000-0001-4000-8000-000000000001';
 
@@ -74,15 +107,16 @@ function row(over: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   h.order = [];
-  h.gate.mockResolvedValue({ userId: 'p1' });
+  h.briefingProps = [];
+  h.gate.mockResolvedValue({ userId: 'p1', email: 'owner@example.com' });
   h.list.mockResolvedValue([row()]);
 });
 
 describe('the gate', () => {
   it('requirePlatformAdmin runs before the reads', async () => {
     render(await PlatformSecurityEventsPage());
-    // The gate first; then the events, then the passkey switches.
-    expect(h.order).toEqual(['gate', 'read', 'passkeys']);
+    // The gate first; then the events, then the passkey switches, then the briefing.
+    expect(h.order).toEqual(['gate', 'read', 'passkeys', 'briefing']);
     expect(h.list).toHaveBeenCalledWith({ limit: 200 });
   });
 
@@ -182,7 +216,6 @@ describe('the table', () => {
 
   it('shows the Passkeys section after the gate, and a refused gate shows none', async () => {
     h.order = [];
-    h.gate.mockResolvedValue(undefined);
     h.list.mockResolvedValue([]);
     render(await PlatformSecurityEventsPage());
     expect(screen.getByRole('region', { name: 'Passkeys section' })).toBeInTheDocument();
@@ -191,6 +224,92 @@ describe('the table', () => {
     h.order = [];
     h.gate.mockRejectedValue(new Error('NOT_FOUND'));
     await expect(PlatformSecurityEventsPage()).rejects.toThrow('NOT_FOUND');
+    expect(h.order).toEqual(['gate']);
+  });
+});
+
+/** Every element of a rendered tree, in document order, with the elements it sits inside. */
+function elements(
+  node: ReactNode,
+  inside: ReactElement[] = [],
+): Array<{ el: ReactElement; inside: ReactElement[] }> {
+  if (Array.isArray(node)) return node.flatMap((child) => elements(child, inside));
+  if (!isValidElement(node)) return [];
+  const el = node as ReactElement<{ children?: ReactNode }>;
+  return [{ el, inside }, ...elements(el.props.children, [...inside, el])];
+}
+
+describe('the security briefing section', () => {
+  const ORG_PARAM = '5eed0000-0001-4000-8000-0000000000aa';
+
+  it('comes after the Passkeys section and before the events list', async () => {
+    render(await PlatformSecurityEventsPage());
+    const passkeys = screen.getByRole('region', { name: 'Passkeys section' });
+    const briefing = screen.getByRole('region', { name: 'Security briefing section' });
+    const events = screen.getByRole('region', { name: 'Security events' });
+    expect(
+      passkeys.compareDocumentPosition(briefing) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      briefing.compareDocumentPosition(events) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('is inside <Suspense>, and the Passkeys section is not: the switches never wait for the briefing', async () => {
+    const tree = elements(await PlatformSecurityEventsPage());
+    const briefing = tree.find((e) => e.el.type === PlatformSecurityBriefingSection);
+    const passkeys = tree.find((e) => e.el.type === PlatformPasskeysSection);
+    expect(briefing).toBeDefined();
+    expect(passkeys).toBeDefined();
+
+    const boundary = briefing!.inside.find((e) => e.type === Suspense) as
+      ReactElement<{ fallback: ReactNode }> | undefined;
+    expect(boundary).toBeDefined();
+    expect(passkeys!.inside.some((e) => e.type === Suspense)).toBe(false);
+    // The Passkeys section is before the boundary in the page.
+    expect(tree.indexOf(passkeys!)).toBeLessThan(tree.findIndex((e) => e.el === boundary));
+
+    // What is shown while the briefing is being read.
+    render(<>{boundary!.props.fallback}</>);
+    expect(screen.getByText("Checking this week's summary...")).toBeInTheDocument();
+  });
+
+  it('no ?org=: the section is asked for all organizations only, for the admin the gate answered', async () => {
+    render(await PlatformSecurityEventsPage());
+    expect(h.briefingProps).toEqual([
+      { organizationId: null, actor: { userId: 'p1', email: 'owner@example.com' } },
+    ]);
+  });
+
+  it('?org=<uuid>: the section is handed that organization; a repeated ?org= hands the first', async () => {
+    render(await PlatformSecurityEventsPage({ org: ORG_PARAM }));
+    expect(h.briefingProps[0]).toMatchObject({ organizationId: ORG_PARAM });
+    h.briefingProps = [];
+    render(await PlatformSecurityEventsPage({ org: [ORG_PARAM, 'second'] }));
+    expect(h.briefingProps[0]).toMatchObject({ organizationId: ORG_PARAM });
+  });
+
+  it('an ?org= that is not a uuid is Page not found: no read, and no section to write an audit row', async () => {
+    for (const org of [
+      'not-a-uuid',
+      '',
+      '------------------------------------',
+      ['x', ORG_PARAM],
+    ]) {
+      h.order = [];
+      await expect(PlatformSecurityEventsPage({ org })).rejects.toThrow('NEXT_NOT_FOUND');
+      // The gate ran; nothing was read and nothing was rendered.
+      expect(h.order).toEqual(['gate']);
+    }
+    expect(h.list).not.toHaveBeenCalled();
+    expect(h.briefingProps).toEqual([]);
+  });
+
+  it('a refused gate checks no ?org= and renders no section', async () => {
+    h.gate.mockRejectedValueOnce(new Error('NEXT_REDIRECT'));
+    await expect(PlatformSecurityEventsPage({ org: 'not-a-uuid' })).rejects.toThrow(
+      'NEXT_REDIRECT',
+    );
     expect(h.order).toEqual(['gate']);
   });
 });

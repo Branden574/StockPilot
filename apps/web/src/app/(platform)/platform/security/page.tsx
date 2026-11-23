@@ -1,14 +1,17 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { Suspense } from 'react';
 
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { PlatformPage } from '@/components/platform/platform-page';
 import { PlatformPasskeysSection } from '@/components/platform/platform-passkeys-section';
+import { PlatformSecurityBriefingSection } from '@/components/platform/platform-security-briefing-section';
 import { PlatformTable } from '@/components/platform/platform-table';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { formatExactUtc } from '@/lib/platform/last-active';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import {
   listPlatformSecurityEvents,
   PLATFORM_SECURITY_EVENT_LIMIT,
@@ -48,9 +51,25 @@ const OVER_CAP = new Set(['over_minute_cap', 'over_buffer_cap']);
  * server/actions/platform/passkeys.ts, each re-gated with a fresh step-up).
  * First on the page, so in an incident the kill switch is never below the
  * events list.
+ *
+ * Between the two, THE SECURITY BRIEFING (components/platform/
+ * platform-security-briefing-section.tsx): this week across every
+ * organization in counts, and one organization's briefing with ?org=<uuid>.
+ * It is after the Passkeys section and inside <Suspense>, so a slow or
+ * failed briefing never delays the passkey switches. An ?org= value that is
+ * not a uuid is Page not found here, before anything is read with it.
  */
-export default async function PlatformSecurityEventsPage() {
-  await requirePlatformAdmin();
+export default async function PlatformSecurityEventsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ org?: string | string[] }>;
+}) {
+  const admin = await requirePlatformAdmin();
+
+  // A repeated ?org= arrives as a list: the first one is the one read.
+  const { org: orgParam } = await searchParams;
+  const org = (Array.isArray(orgParam) ? orgParam[0] : orgParam) ?? null;
+  if (org !== null) notFoundUnlessUuid(org);
 
   const rows = await listPlatformSecurityEvents({ limit: PLATFORM_SECURITY_EVENT_LIMIT });
 
@@ -64,6 +83,19 @@ export default async function PlatformSecurityEventsPage() {
       {/* The passkey switches (part 2, stage 6): read with the service
           client, after the gate above, like the events. */}
       <PlatformPasskeysSection />
+
+      {/* The briefing: after the passkey switches, and streamed in on its
+          own, so the switches never wait for it. */}
+      <Suspense
+        fallback={
+          <p className="text-muted-foreground text-[13px]">Checking this week&apos;s summary...</p>
+        }
+      >
+        <PlatformSecurityBriefingSection
+          organizationId={org}
+          actor={{ userId: admin.userId, email: admin.email }}
+        />
+      </Suspense>
 
       <PlatformTable label="Security events" minWidth={980}>
         <TableHeader>
