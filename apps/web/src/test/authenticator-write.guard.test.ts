@@ -850,6 +850,25 @@ const REVIEWED: Record<string, Reviewed> = {
       "Triages a support ticket (status, priority, the platform's own notes); currentUserIsPlatformAdmin answers first.",
     writes: ['support_tickets.update'],
   },
+  'server/actions/platform/passkeys.ts#setNewPasskeysSwitchAction': {
+    kind: 'platform',
+    reason: PLATFORM_CONSOLE,
+    writes: ['platform_admin_audit.insert', 'platform_settings.insert', 'platform_settings.update'],
+  },
+  'server/actions/platform/passkeys.ts#setOrganizationPasskeysAction': {
+    kind: 'platform',
+    reason: PLATFORM_CONSOLE,
+    writes: [
+      'organization_passkey_switches.delete',
+      'organization_passkey_switches.insert',
+      'platform_admin_audit.insert',
+    ],
+  },
+  'server/actions/platform/passkeys.ts#setPasskeysKillSwitchAction': {
+    kind: 'platform',
+    reason: PLATFORM_CONSOLE,
+    writes: ['platform_admin_audit.insert', 'platform_settings.insert', 'platform_settings.update'],
+  },
   'server/actions/platform/permission-exceptions.ts#setOrderItemsAccessAction': {
     kind: 'platform',
     reason: PLATFORM_CONSOLE,
