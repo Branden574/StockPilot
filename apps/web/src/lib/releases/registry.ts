@@ -159,7 +159,9 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: '2026-11-22T05:42:00Z'): the
     // sign-in alerts release below is dated 2026-11-22T06:08:00Z (the minute #635 went live), so the
     // placeholder is that same minute.
-    publishedAt: '2026-11-22T06:08:00Z',
+    // Moved again by docs/whats-new-phone-large-text (2026-11-23; was: '2026-11-22T06:08:00Z'): the phone
+    // large text release below is dated 2026-11-23T06:00:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-23T06:00:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -243,6 +245,35 @@ export const RELEASES: Release[] = [
           "Before, the app always followed your phone's light or dark setting, with no way to choose.",
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-large-text-2026-11',
+    revision: 1,
+    // The phone update of 2026-11-23: the sign-in, authenticator code, Face ID or
+    // Touch ID lock and account-disabled screens scroll when the text is too large to
+    // fit. publishedAt is 06:00 UTC on the day the update goes out, set in advance.
+    // No links, no audience: every entry is about the app and every member sees these
+    // screens. Platform: the mobile app.
+    status: 'published',
+    title: 'Sign-in screens scroll at large text sizes in the mobile app',
+    summary:
+      'In the mobile app, the sign-in, authenticator code, Face ID or Touch ID lock and account-disabled screens now scroll at the largest text sizes, so every button can be reached.',
+    publishedAt: '2026-11-23T06:00:00Z',
+    entries: [
+      {
+        id: 'app-sign-in-screens-scroll-large-text',
+        category: 'fixed',
+        area: 'Account',
+        title: 'Sign-in screens scroll at large text sizes in the mobile app',
+        whatChanged:
+          'The sign-in, authenticator code, Face ID or Touch ID lock and account-disabled screens in the mobile app scroll when the text is too large to fit.',
+        whyItMatters:
+          'At the largest text sizes, some buttons on these screens were below the bottom of the screen and could not be reached.',
+        howItAffectsYou:
+          'If you use a large text size on your iPhone or iPad, you can scroll to every button on these screens. At standard sizes they look the same as before.',
         whatToDo: 'No action needed.',
       },
     ],
