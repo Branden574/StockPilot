@@ -1015,6 +1015,12 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0475_passkey_races.sh; the migration's and its
   # rollback's locks are scripts/db-concurrency/0475_migration_lock_footprint.sh.
   supabase/tests/0475_passkeys.test.sql
+  # The platform console's words for the passkey switches (0476): the
+  # platform audit check accepts passkeys_switched and org_passkeys_switched
+  # and every word it accepted before, and still refuses any other word (by
+  # the action check itself, not the actor check); it is validated; row
+  # security stays on with no policy.
+  supabase/tests/0476_passkey_console_audit_words.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
