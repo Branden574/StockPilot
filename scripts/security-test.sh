@@ -1021,6 +1021,31 @@ PGTAP_TESTS=(
   # the action check itself, not the actor check); it is validated; row
   # security stays on with no policy.
   supabase/tests/0476_passkey_console_audit_words.test.sql
+  # The platform console's security briefing (0477): five read-only
+  # functions and no table. anon and authenticated hold EXECUTE on none of
+  # them, service_role on the four public ones only, nobody on the private
+  # one: the grant is the whole control. No body names a gate word, so if
+  # EXECUTE ever reached authenticated INV-25 would name the function (shown
+  # with the grant made inside a savepoint), and even then the second lock in
+  # each body refuses a signed-in owner and a signed-out caller. A member is
+  # accepted, not an act-as seat and not disabled; a second step is any
+  # verified factor; a sign-in is idle only when it has not ended and was
+  # last used before now minus 30 days (refreshed_at read as UTC in any
+  # session time zone). The all-organizations numbers equal the
+  # per-organization read's, and totals count a person in two organizations
+  # once. Reported sign-ins come from sign_in_alerts, never from
+  # security_events. Events are split by outcome and by week, with the two
+  # passkey reasons and the rows about no organization kept apart. Admin
+  # changes: promoted, demoted or removed, ownership moved once per transfer
+  # (never as an admin added or removed, never set aside for an invitation),
+  # the invitation that wins over a promotion or demotion of the same member
+  # and UTC day, both shapes of a role change; the sign-in policy loosened,
+  # tightened or neither. Every object
+  # has exactly its documented keys (no session id, address, user agent,
+  # device or factor detail), before and after are cut down to four known
+  # keys, and the caps (500 organizations, 200 people, 200 changes) say when
+  # they cut.
+  supabase/tests/0477_platform_security_briefing.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
