@@ -322,6 +322,110 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     motionAsset: null,
     footer: 'ess',
   }),
+  // Outside the design package (2026-11-21, passkeys, plan 2.8): a passkey
+  // added to or removed from the account. Never the member's name for the
+  // passkey (review 1 F5): "a passkey" and the kind of device our server read.
+  d({
+    id: 'passkey-added',
+    family: 'security',
+    name: 'Passkey Added',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A passkey was added to the account (Settings, Security)',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'A passkey was added to your StockPilot account',
+    preheader: (p: { device: string }) =>
+      `A passkey was added from ${p.device}. If this was not you, remove it in Settings, Security, and change your password.`,
+    badge: { variant: 'sec', label: () => 'Passkey added' },
+    cta: 'Contact support',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
+  d({
+    id: 'passkey-removed',
+    family: 'security',
+    name: 'Passkey Removed',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A passkey was removed from the account (Settings, Security)',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'A passkey was removed from your StockPilot account',
+    preheader: () =>
+      'A passkey was removed and your other devices were signed out. If this was not you, change your password now.',
+    badge: { variant: 'sec', label: () => 'Passkey removed' },
+    cta: 'Contact support',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
+  // A sign-in ended by the hourly passkey check (integrator decision C,
+  // 2026-11-21): its second step was answered by a code our server did not
+  // send. At most one a day per account (server/security/passkey-detector.ts).
+  // Sent only when the check really ended the sign-in, which it does only
+  // while platform_settings.passkey_check_ends_sessions is on (off by
+  // default: report only, review 3 A7).
+  d({
+    id: 'passkey-sign-in-ended',
+    family: 'security',
+    name: 'Sign-in Ended',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger:
+      'The hourly passkey check ended a sign-in whose second step did not come from the member\'s passkey (at most one a day)',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: () => 'We ended a sign-in to your StockPilot account',
+    preheader: () =>
+      'We could not confirm a sign-in to your account was you, so we ended it. Reset your password now.',
+    badge: { variant: 'sec', label: () => 'Sign-in ended' },
+    cta: 'Reset your password',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
+  // A recovery code was used (2026-11-21, answers Q6 and Q7 of the passkey
+  // plan): every authenticator app (and passkey) of the account was removed
+  // and its other sessions ended. Sent to every account that spends a code.
+  // The subject takes two flags only, so nothing a member typed reaches it:
+  // when a method could not be removed (the review of stage 5, finding 1),
+  // or the code removed nothing (REVIEW-STAGE-6B finding 2), it says only
+  // that a code was used.
+  d({
+    id: 'recovery-code-used',
+    family: 'security',
+    name: 'Sign-in Methods Removed',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A recovery code was used on the code page or in Settings, Security',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: (p: { methodsLeft?: boolean; nothingRemoved?: boolean } = {}) =>
+      p.methodsLeft || p.nothingRemoved
+        ? 'A recovery code was used on your StockPilot account'
+        : 'Your StockPilot sign-in methods were removed',
+    preheader: () =>
+      'A recovery code was used on your account. If this was not you, reset your password now.',
+    badge: {
+      variant: 'sec',
+      label: (p: { methodsLeft?: boolean; nothingRemoved?: boolean } = {}) =>
+        p.methodsLeft || p.nothingRemoved ? 'Recovery code used' : 'Methods removed',
+    },
+    cta: 'Reset your password',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
 
   // ── Invitations ───────────────────────────────────────────────────
   d({

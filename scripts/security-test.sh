@@ -2382,7 +2382,7 @@ WEB_TESTS=(
   # the table is missing every one is refused (fail closed): the code check,
   # the step-up list and the code page with try-again words, the code page
   # keeping its recovery code and sign-out, and the reset with no code box,
-  # saying a reset is not available for the account yet. A reserved-name
+  # saying to try again and that the password was not changed. A reserved-name
   # factor that is not recorded is listed in Settings like an app and
   # reported (limited per account); the records missing with a reserved-name
   # factor listed is reported (limited); an unreadable record hides nothing
@@ -2482,6 +2482,55 @@ WEB_TESTS=(
   src/server/actions/auth.sign-in.security-events.test.ts
   src/lib/auth/verify-password.security-events.test.ts
   src/server/actions/mfa.set-up.security-events.test.ts
+  # Passkeys (stage 4): the ceremonies run the real WebAuthn library against
+  # a software authenticator. Adding a passkey needs both switches, the
+  # bridge key and every organization of the member (each condition alone);
+  # the second step needs the site, the key and the platform switch, and an
+  # organization switched off never takes it from an existing holder; a
+  # member always lists and removes their own passkeys on an aal2 session. A
+  # challenge is used once, by its own account, session, purpose, binding
+  # cookie and site; the answer must name this account and come from this
+  # site, not from a frame; a passkey's backup flag and counter may not go
+  # back; the raised session must be the same session and account; a use
+  # that cannot be stored refuses. The last second-step method (apps, and
+  # passkeys that can serve now) stays while a policy requires one; what
+  # cannot be read is "try again", never allowed. Removing an authenticator
+  # app from an account with no passkey is exactly the rule from before
+  # passkeys (the active organization's policy, the same words), with no
+  # passkey table read. The account states
+  # read times to the microsecond. The console refuses a bridge holder. The
+  # Security page has no trace of passkeys unless the server allows them.
+  # The scheduled sweep never finishes a fail-closed state; the bridge
+  # session check acts only after its own read finds no row near the raise,
+  # ends only that session, and never deletes a factor or a passkey.
+  src/server/security/passkeys.test.ts
+  src/server/security/passkey-state.test.ts
+  src/server/security/passkey-maintenance.test.ts
+  src/server/security/passkey-detector.test.ts
+  src/server/security/second-step-methods.test.ts
+  src/server/actions/mfa.unenroll-no-change.test.ts
+  src/lib/auth/platform-admin.passkeys.test.ts
+  'src/app/(auth)/signin/mfa/page.passkeys.test.tsx'
+  'src/app/(dashboard)/dashboard/settings/security/page.passkeys.test.tsx'
+  src/components/settings/passkeys-panel.test.tsx
+  src/components/auth/step-up-modal.passkeys.test.tsx
+  # A recovery code is spent only by a session Auth still holds: Auth is asked
+  # with the held token after the limits and the password and before any code
+  # is checked; a refused token, another account, or no answer spends no
+  # code, removes no method, ends no session and sends no mail.
+  src/server/actions/mfa-recovery.session-live.test.ts
+  # The password reset of a passkey holder: the emailed link alone never sets
+  # the password; the passkey is offered only when it serves now, and its
+  # ceremony is bound to the reset, the link's own session and this browser;
+  # a sign-in session, a link over an hour old, another account's passkey, a
+  # used answer or the limits are refused with the password unchanged.
+  src/server/actions/auth.reset-passkey.test.ts
+  # A used recovery code ends the account's OTHER sessions as the held token
+  # and keeps this one; the security email goes only to the address Auth
+  # answers (none when it gives none) and says only what is true; the words
+  # after the press count only methods that were set up; a refused press
+  # ends nothing and sends nothing.
+  src/server/actions/mfa-recovery.other-sessions.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -6,6 +6,11 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import {
+  RECOVERY_CODE_WORDS,
+  recoveryCodeDoneReportsProblem,
+  recoveryCodeDoneWords,
+} from '@/lib/auth/recovery-code-words';
 import { safeRedirectPath } from '@/lib/auth/safe-redirect';
 import {
   Dialog,
@@ -86,9 +91,14 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(
-      `Recovery code accepted. ${res.data.unenrolled} factor${res.data.unenrolled === 1 ? '' : 's'} removed — re-enroll a new device on the next page.`,
-    );
+    // A used code removed the methods and ended the other sessions (Q6);
+    // the words say which happened. Words that report a problem (a method
+    // left, the other devices not signed out) are a warning, never a success.
+    if (recoveryCodeDoneReportsProblem(res.data)) {
+      toast.warning(recoveryCodeDoneWords(res.data));
+    } else {
+      toast.success(recoveryCodeDoneWords(res.data));
+    }
     setRecoveryOpen(false);
     setRecoveryPassword('');
     router.replace('/dashboard/settings/security');
@@ -110,11 +120,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Use a recovery code</DialogTitle>
-          <DialogDescription>
-            Enter one of the recovery codes you saved when you set up two-factor authentication. The
-            code will be consumed and your authenticator factor will be removed so you can re-enroll
-            a new device.
-          </DialogDescription>
+          <DialogDescription>{RECOVERY_CODE_WORDS.dialogBody}</DialogDescription>
         </DialogHeader>
         <form onSubmit={recover} className="space-y-4">
           <div className="space-y-2">

@@ -197,8 +197,14 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/auth.ts#completePasswordResetAction': {
     kind: 'sign-in',
     reason:
-      'Sets the new password on the recovery session the emailed link created; asks an enrolled account for its code.',
-    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:admin_revoke_user_sessions'],
+      "Sets the new password on the recovery session the emailed link created; asks an enrolled account for its code, or its passkey (stage 5): the passkey's answer spends its challenge, stores the passkey's use (counter, time) and writes the required raise row and the use row. It never seals a bridge again.",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'member_passkeys.update',
+      'rpc:admin_revoke_user_sessions',
+      'rpc:take_passkey_challenge',
+    ],
   },
   'server/actions/team.ts#acceptInviteAction': {
     kind: 'sign-in',
@@ -299,6 +305,10 @@ const REVIEWED: Record<string, Reviewed> = {
       'rpc:consume_mfa_recovery_code',
       'rpc:consume_recovery_code_with_passkeys',
       'rpc:passkey_remove_all',
+      // Stage 5 (answers Q6): a used code ends the account's other sessions;
+      // when Auth's sign-out of them fails, the database ends them, as the
+      // member, keeping this session.
+      'rpc:revoke_my_other_sessions',
     ],
   },
   'server/actions/mfa-recovery.ts#generateMfaRecoveryCodesAction': {
@@ -306,6 +316,110 @@ const REVIEWED: Record<string, Reviewed> = {
     reason:
       "The caller's own recovery codes, per account, on a verified aal2 token (its own rule).",
     writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:generate_mfa_recovery_codes'],
+  },
+
+  // Passkeys (stage 4, server/security/passkeys.ts): the second step a
+  // policy asks for, and the caller's own passkeys. Each reads the account
+  // from the verified token. Adding needs the site, the key, both passkey
+  // switches and every organization of the member; the second step (and a
+  // repair) the site, the key and the platform switch; listing, renaming and
+  // removing one's own passkeys the site and an aal2 session (decision A).
+  'server/actions/passkeys.ts#startSecondStepAction': {
+    kind: 'sign-in',
+    reason:
+      "The passkey prompt: a one-use challenge for this account and session. When the account's state is a removal the member started and the session signed in with the password (never one an emailed link opened), it finishes it instead (the bridge factor at Auth, then its row); the only start that can.",
+    writes: [
+      'auth.admin.mfa.deleteFactor',
+      'rpc:issue_passkey_challenge',
+      'rpc:passkey_drop_bridge',
+    ],
+  },
+  'server/actions/passkeys.ts#finishSecondStepAction': {
+    kind: 'sign-in',
+    reason:
+      "The passkey answer: spends its challenge, stores the passkey's use (counter, time), writes the required raise row and the use row, and seals the bridge again when a newer key exists.",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'member_passkeys.update',
+      'rpc:passkey_replace_bridge',
+      'rpc:take_passkey_challenge',
+    ],
+  },
+  // Stage 5: the password reset's passkey prompt.
+  'server/actions/passkeys.ts#startPasswordResetPasskeyAction': {
+    kind: 'sign-in',
+    reason:
+      "The password reset's passkey prompt, on a session an emailed link opened within the hour: a one-use challenge for this account, this session and the reset, nothing else. It never finishes a removal (only the second step's start does).",
+    writes: ['rpc:issue_passkey_challenge'],
+  },
+  'server/actions/passkeys.ts#startConfirmAddAction': {
+    kind: 'set-up',
+    reason:
+      "The prompt a member with a passkey answers before adding another: a one-use challenge, nothing else (only the second step's start finishes a removal the member started).",
+    writes: ['rpc:issue_passkey_challenge'],
+  },
+  'server/actions/passkeys.ts#startAddPasskeyAction': {
+    kind: 'set-up',
+    reason:
+      "Starts adding a passkey: checks the proof (password, app code, or a passkey answer that stores its use), writes the code check's audit row, deletes the account's own leftover of a failed add (an unverified factor with the reserved name that no bridge row records; never a verified one), then a one-use challenge.",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.mfa.deleteFactor',
+      'member_passkeys.update',
+      'rpc:issue_passkey_challenge',
+      'rpc:take_passkey_challenge',
+    ],
+  },
+  'server/actions/passkeys.ts#finishAddPasskeyAction': {
+    kind: 'set-up',
+    reason:
+      "Stores the new passkey and, for a first one, its bridge, after deleting the account's own unverified leftover of a failed add (never a verified factor); a failed store or answer is undone in the same request (marked setup_failed, the new factor deleted).",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.mfa.deleteFactor',
+      'rpc:passkey_mark_removed',
+      'rpc:passkey_register',
+      'rpc:take_passkey_challenge',
+    ],
+  },
+  'server/actions/passkeys.ts#startPasskeySetupAction': {
+    kind: 'set-up',
+    reason:
+      "The prompt for Finish setup: a one-use challenge, nothing else (only the second step's start finishes a removal the member started).",
+    writes: ['rpc:issue_passkey_challenge'],
+  },
+  'server/actions/passkeys.ts#finishPasskeySetupAction': {
+    kind: 'set-up',
+    reason:
+      'Finish setup: the passkey answer first, then a new bridge enrolled, answered and recorded in place of the old one; a factor it cannot record is deleted.',
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.mfa.deleteFactor',
+      'member_passkeys.update',
+      'rpc:passkey_replace_bridge',
+      'rpc:take_passkey_challenge',
+    ],
+  },
+  'server/actions/passkeys.ts#removePasskeyAction': {
+    kind: 'own-account',
+    reason:
+      "Removes one of the caller's own passkeys on an aal2 session, unless it is the last second-step method a policy requires: the row marked removed, the bridge factor deleted with the last one, the other sessions ended.",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'auth.admin.mfa.deleteFactor',
+      'rpc:passkey_mark_removed',
+      'rpc:revoke_my_other_sessions',
+    ],
+  },
+  'server/actions/passkeys.ts#renamePasskeyAction': {
+    kind: 'own-account',
+    reason: "Renames one of the caller's own passkeys on an aal2 session.",
+    writes: ['member_passkeys.update'],
   },
 
   // ── the person's own account ──

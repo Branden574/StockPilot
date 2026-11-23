@@ -119,8 +119,12 @@ export async function readVerifiedSessionClaims(
 /**
  * The cookie session's access token with its verified claims, or null: the
  * file's one session load, then the checks described above. Never throws.
+ *
+ * Exported for the passkey actions (server/security/passkeys.ts, plan 2.1
+ * rule 2): each reads the session ONCE at its start and keeps the token and
+ * its claims in local variables, for every Auth call it makes as the member.
  */
-async function readVerifiedSession(supabase: AuthReader): Promise<VerifiedSessionToken | null> {
+export async function readVerifiedSession(supabase: AuthReader): Promise<VerifiedSessionToken | null> {
   // The access token only: never `session.user`, the stored object auth-js
   // warns about.
   let token: string | undefined;

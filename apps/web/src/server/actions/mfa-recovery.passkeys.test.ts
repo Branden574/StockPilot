@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 import { PASSKEY_RECOVERY_NOT_YET } from '@/test/passkey-records';
-import { verifiedSessionAuth } from '@/test/verified-session-stub';
+import { liveSessionAuth, verifiedSessionAuth } from '@/test/verified-session-stub';
 
 /**
  * Security invariant: a recovery code removes every sign-in method of the
@@ -28,6 +28,13 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
  * spent it before its answer was lost: "try again", with no refused-code
  * record (finding 12).
  *
+ * The answer never says a passkey was removed when its records are not KNOWN
+ * to be removed (the review of the last deltas, finding 3): when a factor the
+ * code removed carries the bridge's reserved name and the function is missing,
+ * or the combined call and the second removal both failed, the answer and the
+ * email say a passkey may be left (`methodsLeft: 'passkey'`), never
+ * `passkeysRemoved`. An account with no such factor is answered as before.
+ *
  * ORDER (review 2-3 finding 1): the service-role call takes the account as a
  * parameter, so it runs only after the three closed limits, the password
  * check and the held-session check. A press stopped by any of them makes no
@@ -36,6 +43,18 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// Stage 5 (answers Q6 and Q7 of the passkey plan): a used code also ends the
+// account's other sessions as the held token and emails the account
+// (mfa-recovery.other-sessions.test.ts covers both). Here Auth's sign-out
+// answers, so nothing reaches a network, and no email is sent.
+vi.mock('@/server/security/passkey-auth', () => ({
+  signOutAs: vi.fn(async () => ({ ok: true, status: 204, code: null, body: null })),
+}));
+vi.mock('@/server/security/recovery-code-email', () => ({ sendRecoveryCodeUsedEmail: vi.fn() }));
+vi.mock('@/server/services/sessions', () => ({
+  listMySessionIds: vi.fn(async () => []),
+  broadcastEndedSessions: vi.fn(async () => undefined),
+}));
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/security/account-events', () => ({ recordAccountCodeBlocked: vi.fn() }));
 vi.mock('@/lib/auth/session', () => ({
@@ -72,6 +91,7 @@ vi.mock('@/lib/supabase/server', () => ({
       auth: Object.assign(
         h.cookie.client.auth,
         verifiedSessionAuth(() => ({ sub: h.sessionSub, aal: 'aal1' })),
+        liveSessionAuth(),
       ),
     }),
   ),
@@ -87,6 +107,7 @@ import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { recordAccountCodeBlocked } from '@/server/security/account-events';
+import { sendRecoveryCodeUsedEmail } from '@/server/security/recovery-code-email';
 import { emitAuthAudit } from '@/server/services/auth-audit';
 
 import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
@@ -171,7 +192,10 @@ describe('the recovery code with passkey records (0475 live)', () => {
 
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
-    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    // Stage 5 (the review's finding 1): the answer also says the passkeys went; the
+    // count of apps is pinned with factors as Auth names them
+    // (mfa-recovery.other-sessions.test.ts).
+    expect(res).toMatchObject({ ok: true, data: { unenrolled: 2, passkeysRemoved: true } });
     expect(rpcNames(admin)).toEqual(['consume_recovery_code_with_passkeys']);
     expect(
       admin.rpcCalls.find((c) => c.name === 'consume_recovery_code_with_passkeys')!.args,
@@ -179,8 +203,9 @@ describe('the recovery code with passkey records (0475 live)', () => {
       p_user_id: 'user-1',
       p_code: CODE,
     });
-    // Never through the member's token, and the member's own consume is not called.
-    expect(createAccessTokenClient).not.toHaveBeenCalled();
+    // Never through the member's token: the member's own consume is not
+    // called. (Since stage 5 the held token's client lists and ends the other
+    // sessions after the factors: mfa-recovery.other-sessions.test.ts.)
     expect(h.member && rpcNames(h.member as Stub)).toEqual([]);
     expect(deleteFactorOf(admin).mock.calls.map((c) => (c[0] as { id: string }).id)).toEqual([
       'app-1',
@@ -327,7 +352,12 @@ describe('before 0475 is live: the function does not exist', () => {
 
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
-    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    // The function is missing, so the passkey records were not removed: the
+    // answer says a passkey may be left, never that the passkeys were removed.
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
     expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
     expect(
       admin.rpcCalls.some(
@@ -356,7 +386,10 @@ describe('before 0475 is live: the function does not exist', () => {
       NAMED_FACTORS,
     );
     const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
-    expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
     expect(recordsMissingReports()).toEqual([]);
   });
 
@@ -405,7 +438,10 @@ describe('any other failure of the new call', () => {
 
       const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
 
-      expect(res).toEqual({ ok: true, data: { unenrolled: 2 } });
+      // Stage 5 (the review's finding 1): the answer also says the passkeys went; the
+      // count of apps is pinned with factors as Auth names them
+      // (mfa-recovery.other-sessions.test.ts).
+      expect(res).toMatchObject({ ok: true, data: { unenrolled: 2, passkeysRemoved: true } });
       expect((h.member as Stub).rpcCalls.map((c) => c.name)).toEqual(['consume_mfa_recovery_code']);
       expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
       expect(rpcNames(admin)).toEqual([
@@ -451,6 +487,71 @@ describe('any other failure of the new call', () => {
       tag: 'actions.mfa_recovery.passkey_removal',
       level: 'error',
       extra: { records_left: 'unknown' },
+    });
+  });
+
+  it('when the second removal fails too and a removed factor carries the reserved name: a passkey may be left, never "removed", in the answer and the email', async () => {
+    const admin = adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: null,
+          error: { code: '57014', message: 'x' },
+        },
+        'rpc:passkey_remove_all': { data: null, error: { code: '57014', message: 'x' } },
+      },
+      NAMED_FACTORS,
+    );
+
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+
+    // Both factors went at Auth; the passkey records are not known removed.
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, appsRemoved: 1, methodsLeft: 'passkey' },
+    });
+    expect(res.ok && 'passkeysRemoved' in res.data).toBe(false);
+    expect(deleteFactorOf(admin)).toHaveBeenCalledTimes(2);
+    expect(rpcNames(admin)).toEqual(['consume_recovery_code_with_passkeys', 'passkey_remove_all']);
+    expect(sendRecoveryCodeUsedEmail).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendRecoveryCodeUsedEmail).mock.calls[0]![2]).toEqual({
+      passkeys: true,
+      othersSignedOut: true,
+      methodsLeft: 'passkey',
+    });
+    expect(consumedAudit()!.extra).toEqual({ unenrolled: 2 });
+    const reports = vi.mocked(reportError).mock.calls.map((c) => [c[1].tag, c[1].extra]);
+    expect(reports).toEqual([
+      ['actions.mfa_recovery.passkey_removal', { failure: '57014', records_left: 'unknown' }],
+      ['actions.mfa_recovery.methods_left', { methods_left: 'passkey', failed: 0 }],
+    ]);
+    const text = JSON.stringify(vi.mocked(reportError).mock.calls.map((c) => [String(c[0]), c[1]]));
+    for (const secret of [CODE, BRIDGE_ID, 'user-1', 'sp-passkey-bridge']) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it('when the second removal answers, the passkeys are known removed: said so, as before', async () => {
+    adminWith(
+      {
+        'rpc:consume_recovery_code_with_passkeys': {
+          data: null,
+          error: { code: '57014', message: 'x' },
+        },
+        'rpc:passkey_remove_all': {
+          data: [{ removed: 1, bridge_factor_id: BRIDGE_ID }],
+          error: null,
+        },
+      },
+      NAMED_FACTORS,
+    );
+    const res = await consumeMfaRecoveryCodeAction({ code: CODE, password: PW });
+    expect(res).toEqual({
+      ok: true,
+      data: { unenrolled: 2, passkeysRemoved: true, appsRemoved: 1 },
+    });
+    expect(vi.mocked(sendRecoveryCodeUsedEmail).mock.calls[0]![2]).toEqual({
+      passkeys: true,
+      othersSignedOut: true,
     });
   });
 

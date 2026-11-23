@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
-import { verifiedSessionAuth } from '@/test/verified-session-stub';
+import { liveSessionAuth, verifiedSessionAuth } from '@/test/verified-session-stub';
 
 /**
  * A RECOVERY CODE ON A SERVER WITHOUT THE SERVICE-ROLE KEY (S31).
@@ -47,6 +47,7 @@ vi.mock('@/lib/supabase/server', () => ({
       auth: Object.assign(
         h.stub!.client.auth,
         verifiedSessionAuth(() => ({ sub: 'user-1', aal: 'aal1' })),
+        liveSessionAuth(),
       ),
     }),
   ),

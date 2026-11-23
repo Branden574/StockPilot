@@ -290,6 +290,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     "The caller's own passkeys, removed after a recovery code; no organization.",
   ],
+  'server/actions/mfa-recovery.ts::revoke_my_other_sessions': [
+    'not_org_data',
+    "The caller's own sessions, ended after a recovery code is used when the Auth server's sign-out of them answers an error (0213: auth.uid()'s rows only, this session kept).",
+  ],
   'server/actions/movements.ts::edit_movement_note': S39('11 (web movement note)'),
   'server/actions/team.ts::auth_user_exists_by_email': RO(),
   'server/actions/team.ts::transfer_org_ownership': [
@@ -346,6 +350,58 @@ const REGISTRY: Record<string, Entry> = {
   'server/security/events.ts::record_security_events': [
     'not_org_data',
     "The security-events recorder's flush: the service client stores counts in fixed words. An event's organization comes from the server (the sign-in email's account, the session's account), never from a row id in a request.",
+  ],
+  'server/security/passkey-detector.ts::passkey_bridge_sessions': [
+    'not_org_data',
+    'The hourly check (service role, from a cron): Auth sessions held by a passkey bridge factor, with the time each was raised; no organization.',
+  ],
+  'server/security/passkey-detector.ts::passkey_end_bridge_session': [
+    'not_org_data',
+    'The hourly check (service role, from a cron) ends ONE Auth session raised through a recorded bridge factor with no raise row near it; the function refuses any other session. No organization.',
+  ],
+  'server/security/passkey-maintenance.ts::passkey_account_states': [
+    'not_org_data',
+    'The passkey upkeep, four times a day (service role, from the retention cron): the passkey state of every account; no organization.',
+  ],
+  'server/security/passkey-maintenance.ts::passkey_drop_bridge': [
+    'not_org_data',
+    "The passkey upkeep, four times a day, finishing a removal the member started: the account's own bridge row, refused while a passkey is active.",
+  ],
+  'server/security/passkey-maintenance.ts::purge_passkey_records': [
+    'not_org_data',
+    'The passkey upkeep, four times a day: old challenges and long-removed passkeys; no organization.',
+  ],
+  'server/security/passkeys.ts::issue_passkey_challenge': [
+    'not_org_data',
+    "The account's own passkey records, keyed on the account read from the verified token; no organization.",
+  ],
+  'server/security/passkeys.ts::passkey_add_allowed': [
+    'not_org_data',
+    'Whether the account may add or use passkeys: the switches and every organization of the account, one word read for the account from the verified token (never chosen by the request).',
+  ],
+  'server/security/passkeys.ts::passkey_drop_bridge': [
+    'not_org_data',
+    "The account's own passkey records, keyed on the account read from the verified token; no organization.",
+  ],
+  'server/security/passkeys.ts::passkey_mark_removed': [
+    'not_org_data',
+    "The account's own passkey records, keyed on the account read from the verified token; no organization.",
+  ],
+  'server/security/passkeys.ts::passkey_register': [
+    'not_org_data',
+    "The account's own passkey records, keyed on the account read from the verified token; no organization.",
+  ],
+  'server/security/passkeys.ts::passkey_replace_bridge': [
+    'not_org_data',
+    "The account's own passkey records, keyed on the account read from the verified token; no organization.",
+  ],
+  'server/security/passkeys.ts::revoke_my_other_sessions': [
+    'not_org_data',
+    "The caller's own sessions, ended after a passkey is removed when the Auth server's sign-out of them answers an error.",
+  ],
+  'server/security/passkeys.ts::take_passkey_challenge': [
+    'not_org_data',
+    "The account's own passkey records, keyed on the account read from the verified token; no organization.",
   ],
   'server/services/security-events.ts::security_event_totals_for_organization': [
     'takes_org',
@@ -827,6 +883,14 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
   'app/api/v1/me/announcements/route.ts#POST::user_onboarding.upsert': [
     'own_row',
     "The caller's own onboarding row.",
+  ],
+  'server/security/passkeys.ts#renamePasskey::member_passkeys.update': [
+    'own_row',
+    "The caller's own passkey row (filtered by the account from the verified token and the row id).",
+  ],
+  'server/security/passkeys.ts#verifyAssertion::member_passkeys.update': [
+    'own_row',
+    "The caller's own passkey row: its counter and last use, a compare-and-set on the counter.",
   ],
   'app/api/v1/push/register/route.ts#DELETE::push_tokens.delete': [
     'own_row',

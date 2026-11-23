@@ -22,7 +22,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * records cannot be read (a failed read, or the table missing) a factor that
  * carries the reserved name is still never asked for (fail closed): the code
  * of the member's app is, whatever the order, and an account with no app
- * gets the plain answer with no code box. An account with no reserved-name
+ * gets a try-again answer with no code box (stage 5: a reset it can finish
+ * once the record is read, so never "not available"). An account with no reserved-name
  * factor makes no record read. The record read is the account's own.
  */
 
@@ -267,7 +268,7 @@ describe('while the bridge record cannot be read, the reset asks for no reserved
     }
   });
 
-  it.each(UNREAD)('%s, and no app: no code box, no code checked, the plain answer', async (_name, arrange) => {
+  it.each(UNREAD)('%s, and no app: no code box, no code checked, and a true try-again answer (stage 5)', async (_name, arrange) => {
     arrange();
     listed(BRIDGE);
     updateUser.mockResolvedValue({
@@ -282,10 +283,13 @@ describe('while the bridge record cannot be read, the reset asks for no reserved
     for (const input of [INPUT, { password: RESET_VALUE, confirmPassword: RESET_VALUE }]) {
       expect(await completePasswordResetAction(input)).toEqual({
         ok: false,
+        // Stage 5 can finish a passkey-only reset once the record is read,
+        // so "isn't available for this account yet" would be untrue here
+        // (REVIEW-STAGE-6A finding 2). No `details`: no code box.
         error: {
-          code: 'forbidden',
+          code: 'internal_error',
           message:
-            "A password reset isn't available for this account yet. Ask your organization's owner or StockPilot support for help.",
+            'Could not check your second step just now, so your password was not changed. Try again in a moment.',
         },
       });
     }

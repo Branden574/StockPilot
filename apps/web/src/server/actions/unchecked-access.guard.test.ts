@@ -310,6 +310,10 @@ const REVIEWED: Record<string, { count: number; why: string }> = {
     count: 1,
     why: 'around creating the service client alone: only a server without its key throws there',
   },
+  'mfa-recovery.ts#removeFactors': {
+    count: 2,
+    why: 'the factor list and one factor delete, after the recovery code is spent: a throw is read as a method that may be left, said so to the member and reported (stage 5 review, finding 1)',
+  },
   'mfa.ts#challengeFactorAction': {
     count: 1,
     why: "around the read of the account's own factor list alone (an Auth call): no organization context",

@@ -11,6 +11,8 @@ import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
+import { passkeyStepFor, servingPasskeyIds } from '@/server/security/passkeys';
+import { appRemovalVerdict, LAST_METHOD_WORDS } from '@/server/security/second-step-methods';
 import {
   checkMfaCode,
   MFA_CHALLENGE_NOT_STARTED,
@@ -27,6 +29,7 @@ import {
   signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { contextFactorsOf } from '@/lib/auth/context-factor-list';
+import { carriesBridgeName, reservedFactorInFlight } from '@/lib/auth/passkey-bridge-name';
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import {
@@ -152,11 +155,17 @@ export async function enrollFactorAction(): Promise<
     // factor that carries the reserved name (factorChangeRefusal: left for a
     // later clean-up; the failed read is reported). A reserved-name factor
     // that is not the recorded one goes like any unfinished set-up.
+    // Stage 4 (review 2-3 finding 13, plan review 12): an unverified factor
+    // that carries the reserved name and is younger than two minutes is a
+    // passkey registration in flight in another tab (enrolled, not yet
+    // stored): left alone; its own clean-up, the sweep or Auth's 300-second
+    // rule takes it. A time that cannot be read is treated as young.
     const { data: existing } = await supabase.auth.mfa.listFactors();
     const unfinished = (existing?.all ?? []).filter((f) => f.status !== 'verified');
     const bridge = await readPasskeyBridge(session.userId, unfinished, 'enroll_cleanup');
     for (const f of unfinished) {
       if (factorChangeRefusal(bridge, f)) continue;
+      if (carriesBridgeName(f) && reservedFactorInFlight(f.created_at)) continue;
       await supabase.auth.mfa.unenroll({ factorId: f.id });
     }
 
@@ -395,12 +404,35 @@ export async function unenrollFactorAction(input: {
     const required =
       policy === 'all_required' ||
       (policy === 'admins_required' && (role === 'owner' || role === 'admin'));
-    if (required) {
+
+    // The factor list withContext() already read (lib/auth/context-factor-
+    // list): null when it could not be read, or was another account's.
+    const listed = await contextFactorsOf(svcCtx, session.userId);
+    // The no-change rule (stage 4, 2026-11-21): for an account that holds no
+    // passkey, exactly the rule from before passkeys: refused while the
+    // ACTIVE organization's policy requires a second step, in the same
+    // words, with no passkey table read (names first). For an account that
+    // holds an active passkey of this site, the last-method rule shared with
+    // a passkey's removal: the LAST second-step method (verified apps, never
+    // the bridge, and passkeys that can serve now, judged by the second-step
+    // page's own rule only when no app would remain) cannot be removed while
+    // a policy of any organization of the member requires one; what cannot
+    // be read is "try again" (server/security/second-step-methods.ts).
+    const verdict = await appRemovalVerdict({
+      userId: session.userId,
+      factorId: parsed.data.factorId,
+      factors: listed,
+      activeRequired: required,
+      servingPasskeys: () => servingPasskeyIds(session.userId, listed),
+    });
+    if (verdict === 'policy') {
       return err(
         'forbidden',
         'Your organization requires MFA. Ask an admin to lower the policy before disabling.',
       );
     }
+    if (verdict === 'last_method') return err('forbidden', LAST_METHOD_WORDS);
+    if (verdict === 'unreadable') return err('internal_error', FACTOR_CHECK_RETRY);
 
     // Never the account's recorded passkey bridge (lib/auth/passkey-bridge):
     // Auth would remove it like any factor (proof B6) and the passkey would
@@ -411,7 +443,6 @@ export async function unenrollFactorAction(input: {
     // reserved name is not removed (try again in a moment; the failed read is
     // reported). A list the context could not read, or another account's,
     // names nothing: the removal goes on as before (Auth decides).
-    const listed = await contextFactorsOf(svcCtx, session.userId);
     const named = (listed ?? []).filter((f) => f.id === parsed.data.factorId);
     const bridge = await readPasskeyBridge(session.userId, named, 'unenroll');
     const held = named[0] ? factorChangeRefusal(bridge, named[0]) : null;
@@ -674,6 +705,7 @@ export async function challengeFactorAction(input: {
 export async function stepUpMethodsAction(): Promise<
   ActionResult<{
     apps: Array<{ id: string; friendlyName: string | null }>;
+    passkey: boolean;
     /** Present only when the bridge record could not be read. */
     recordsUnread?: true;
   }>
@@ -713,6 +745,10 @@ export async function stepUpMethodsAction(): Promise<
         f.status === 'verified' && f.factor_type === 'totp' && typeof f.id === 'string',
     );
     const bridge = await readPasskeyBridge(claims.userId, verified, 'step_up_methods');
+    // Stage 4: whether the account's passkey answers here (every condition of
+    // server/security/passkeys.ts passkeyGate, and a healthy bridge). False
+    // keeps the modal exactly as stage 2 left it.
+    const passkey = (await passkeyStepFor(claims.userId, verified)) === 'ready';
     return ok({
       // Never the recorded bridge, nor any other factor that carries the
       // reserved name, whatever the record read answered (appFactorsForCode).
@@ -720,6 +756,7 @@ export async function stepUpMethodsAction(): Promise<
         id: f.id,
         friendlyName: f.friendly_name ?? null,
       })),
+      passkey,
       ...(passkeyRecordsUnread(bridge) ? { recordsUnread: true as const } : {}),
     });
   } catch (e) {
