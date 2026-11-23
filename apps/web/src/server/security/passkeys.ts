@@ -1619,7 +1619,7 @@ export async function startAddPasskey(input: {
       return fail('validation_error', PASSKEY_WORDS.proofNeeded, 'proof');
     }
     if (!picture.email) return fail('internal_error', PASSKEY_WORDS.couldNotFinish, 'no_email');
-    const checked = await verifyPasswordSideChannel(picture.email, proof.password);
+    const checked = await verifyPasswordSideChannel(picture.email, proof.password, userId);
     if (!checked.ok) {
       return checked.reason === 'invalid_password'
         ? fail('validation_error', PASSKEY_WORDS.passwordWrong, 'password')

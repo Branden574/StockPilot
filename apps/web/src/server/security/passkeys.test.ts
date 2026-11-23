@@ -3124,6 +3124,15 @@ describe('review B2: the leftover clean-up deletes only an unverified factor old
     expect(world.factors.find((f) => f.id === leftover.id)?.status).toBe('verified');
   });
 
+  it("the Add's password check names the account, so a refused password is recorded for it", async () => {
+    const userId = world.addAccount('password-names-account@example.test');
+    world.signIn(userId, 'aal1');
+    vi.mocked(passwordCheck).mockClear();
+    await pk.startAddPasskey({ proof: { kind: 'password', password: SAMPLE_PASSWORD } });
+    expect(passwordCheck).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(passwordCheck).mock.calls[0]?.[2]).toBe(userId);
+  });
+
   it("a clean-up read that fails deletes nothing, is reported, and the member gets the Add's own words", async () => {
     const userId = world.addAccount('reread-fails@example.test');
     world.signIn(userId, 'aal1');
