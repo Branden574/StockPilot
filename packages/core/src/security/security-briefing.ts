@@ -955,13 +955,12 @@ export interface PlatformSecurityBriefingInput {
    * there is nothing to check (not a failure, and not "in good shape").
    */
   passkeyRepair: PlatformBriefingRepairInput | 'not_configured' | null;
-  /** Names for organizations the members read did not name. */
-  organizationNames?: ReadonlyMap<string, string>;
 }
 
 /** One organization's row in the console's table. A null number: could not check. */
 export interface PlatformBriefingRow {
   organizationId: string;
+  /** Null when the members read, which names the organizations, failed or did not list it. */
   name: string | null;
   /** The highest severity of the organization's items; null when it has none. */
   attention: BriefingSeverity | null;
@@ -986,6 +985,8 @@ export interface PlatformSecurityBriefing {
   totalsLine: string | null;
   /** The events of no organization, in a sentence; null when events could not be read or there are none. */
   noOrganizationLine: string | null;
+  /** False when none of the three organization reads answered: there is no table to show. */
+  organizationsChecked: boolean;
   /** Organizations with something to show, the ones needing attention first; at most PLATFORM_BRIEFING_ROWS_SHOWN. */
   organizations: PlatformBriefingRow[];
   /** Organizations with something to show that the table does not list. */
@@ -1127,7 +1128,7 @@ export function buildPlatformSecurityBriefing(
 
     rows.push({
       organizationId: id,
-      name: m?.name ?? input.organizationNames?.get(id) ?? null,
+      name: m?.name ?? null,
       attention: briefing.items[0]?.severity ?? null,
       blockedThisWeek: e ? sumOutcome(e.thisWeek, 'blocked') : null,
       blockedLastWeek: e ? sumOutcome(e.lastWeek, 'blocked') : null,
@@ -1238,6 +1239,7 @@ export function buildPlatformSecurityBriefing(
         ? null
         : `${counted(members.accounts, 'account', 'accounts')} in ${counted(members.totalOrganizations, 'organization', 'organizations')}. ${counted(members.accountsWithoutSecondStep, 'has', 'have')} no second step, ${num(members.adminAccountsWithoutSecondStep)} of them an owner or admin.`,
     noOrganizationLine,
+    organizationsChecked: organizationsRead,
     organizations: shown.slice(0, PLATFORM_BRIEFING_ROWS_SHOWN),
     organizationsNotListed: Math.max(shown.length - PLATFORM_BRIEFING_ROWS_SHOWN, 0),
     organizationsNeedingAttention: needing,

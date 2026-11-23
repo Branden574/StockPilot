@@ -1363,6 +1363,7 @@ describe('the platform briefing: its own items', () => {
     ]);
     expect(b.bottomLine).toBe('No organization needs attention this week.');
     expect(b.organizations).toEqual([]);
+    expect(b.organizationsChecked).toBe(true);
   });
 
   it('an unexplained passkey sign-in or a counter that went back: high, for one of either', () => {
@@ -1443,6 +1444,7 @@ describe('the platform briefing: its own items', () => {
       'Passkey set-ups that need repair could not be checked.',
     ]);
     expect(b.bottomLine).toBe('The organizations could not be checked.');
+    expect(b.organizationsChecked).toBe(false);
     expect(b.totalsLine).toBeNull();
     expect(b.noOrganizationLine).toBeNull();
     expect(b.organizationsWithNothingToReport).toBeNull();
@@ -1593,15 +1595,6 @@ describe('the platform briefing: the organizations table', () => {
       expect(row.adminChanges).toBeNull();
       expect(row.policyChanges).toBeNull();
     }
-  });
-
-  it('names for organizations the members read did not name', () => {
-    const b = buildPlatformSecurityBriefing({
-      ...three(),
-      members: null,
-      organizationNames: new Map([[ORG_A, 'Example Academy']]),
-    });
-    expect(b.organizations.map((r) => r.name)).toEqual(['Example Academy', null]);
   });
 
   it('a read cut short at its cap: an organization missing from it is not known, not zero', () => {
