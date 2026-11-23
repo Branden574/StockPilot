@@ -273,7 +273,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'At the largest text sizes, some buttons on these screens were below the bottom of the screen and could not be reached.',
         howItAffectsYou:
-          'If you use a large text size on your iPhone or iPad, you can scroll to every button on these screens. At standard sizes they look the same as before.',
+          'If you use a large text size on your iPhone or iPad, you can scroll to every button on these screens.',
         whatToDo: 'No action needed.',
       },
     ],
