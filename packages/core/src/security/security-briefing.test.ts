@@ -1768,7 +1768,7 @@ describe('the platform briefing: its own items', () => {
       expect(b.unchecked).toContain(PARTS[failed]);
       expect(b.bottomLine).not.toContain(CLAIM);
       expect(b.bottomLine).toBe(
-        'Nothing needs attention in what could be checked. Some checks could not be made.',
+        'No organization needs attention in what could be checked. Some checks could not be made.',
       );
       // Never "N organizations have nothing to report" either.
       expect(b.organizationsWithNothingToReport).toBeNull();
@@ -1801,6 +1801,53 @@ describe('the platform briefing: its own items', () => {
     expect(found.bottomLine).toBe(
       '1 organization needs attention this week. Some checks could not be made.',
     );
+  });
+
+  it('a platform check that needs attention next to an organization read that failed: the two sentences do not contradict', () => {
+    const repair = { accounts: 2, capped: false };
+    // Each organization read failing alone, with a platform item above it.
+    for (const failed of ['members', 'events', 'changes'] as const) {
+      const b = buildPlatformSecurityBriefing(
+        platformInput({ [failed]: null, passkeyRepair: repair }),
+      );
+      expect(b.items.map((i) => i.id)).toEqual(['passkey_setup_needs_repair']);
+      expect(b.status).toBe('needs_attention');
+      expect(b.bottomLine).toBe(
+        '1 platform check needs attention. No organization needs attention in what could be checked. Some checks could not be made.',
+      );
+      // The sentence after the count is about organizations, never "nothing".
+      expect(b.bottomLine).not.toMatch(/Nothing needs attention/);
+    }
+    // A read cut short at its cap: the same sentence, and no failed check to name.
+    expect(
+      buildPlatformSecurityBriefing(
+        platformInput({ events: platformEvents({ truncated: true }), passkeyRepair: repair }),
+      ).bottomLine,
+    ).toBe(
+      '1 platform check needs attention. No organization needs attention in what could be checked.',
+    );
+    // Every other pairing of the first sentence with what follows it.
+    expect(buildPlatformSecurityBriefing(platformInput({ passkeyRepair: repair })).bottomLine).toBe(
+      '1 platform check needs attention. No organization needs attention this week.',
+    );
+    expect(
+      buildPlatformSecurityBriefing(
+        platformInput({
+          members: platformMembers([
+            orgMembers(ORG_A, 'Example Academy', { adminsWithoutSecondStep: 1 }),
+          ]),
+          events: null,
+          passkeyRepair: repair,
+        }),
+      ).bottomLine,
+    ).toBe(
+      '1 platform check needs attention. 1 organization needs attention this week. Some checks could not be made.',
+    );
+    expect(
+      buildPlatformSecurityBriefing(
+        platformInput({ members: null, events: null, changes: null, passkeyRepair: repair }),
+      ).bottomLine,
+    ).toBe('1 platform check needs attention. The organizations could not be checked.');
   });
 
   it('an unexplained passkey sign-in or a counter that went back: high, for one of either', () => {

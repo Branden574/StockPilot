@@ -170,7 +170,7 @@ function AllOrganizations({ briefing }: { briefing: PlatformSecurityBriefing }) 
                 <TableHead className="text-right">Members without a second step</TableHead>
                 <TableHead className="text-right">Sign-ins reported</TableHead>
                 <TableHead className="text-right">Admins added</TableHead>
-                <TableHead className="text-right">Admins removed or moved</TableHead>
+                <TableHead className="text-right">Admins removed or changed role</TableHead>
                 <TableHead className="text-right">Ownership moves</TableHead>
                 <TableHead className="text-right">Policy changes</TableHead>
               </TableRow>
@@ -457,8 +457,8 @@ function OneOrganization({ part }: { part: OrganizationPart }) {
         {detail?.changesTruncated ? (
           <p className="text-muted-foreground text-[12.5px]">
             {detail.changes.length === 0
-              ? `Showing the newest ${num(detail.changesRowsRead)} audit entries, and none of them is an admin or sign-in policy change.`
-              : `Showing the newest ${num(detail.changesRowsRead)} audit entries.`}{' '}
+              ? `This list is made from the newest ${num(detail.changesRowsRead)} audit entries, and none of them is an admin or sign-in policy change.`
+              : `This list is made from the newest ${num(detail.changesRowsRead)} audit entries.`}{' '}
             Older ones in the 30 days are not listed. This week&apos;s numbers above count every
             entry.
           </p>

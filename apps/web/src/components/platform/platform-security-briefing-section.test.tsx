@@ -279,7 +279,7 @@ describe('all organizations', () => {
       'Sign-ins reported',
       // Each its own number: admins added is never summed with another.
       'Admins added',
-      'Admins removed or moved',
+      'Admins removed or changed role',
       'Ownership moves',
       'Policy changes',
     ]);
@@ -408,7 +408,7 @@ describe('all organizations', () => {
         within(section).queryByText('No organization has anything to report this week.'),
       ).toBeNull();
       expect(section.textContent).not.toMatch(/nothing to report/i);
-      expect(section.textContent).not.toContain('No organization needs attention');
+      expect(section.textContent).not.toContain('No organization needs attention this week');
       // What is said instead, with the part that could not be checked.
       const table = within(section)
         .getByRole('heading', { name: 'Organizations with something to report' })
@@ -417,7 +417,7 @@ describe('all organizations', () => {
       expect(table?.textContent).toContain(part);
       expect(
         within(section).getByText(
-          'Nothing needs attention in what could be checked. Some checks could not be made.',
+          'No organization needs attention in what could be checked. Some checks could not be made.',
         ),
       ).toBeInTheDocument();
     },
@@ -651,7 +651,7 @@ describe('one organization (?org=)', () => {
     ).toBeNull();
     expect(
       within(section).getByText(
-        /^Showing the newest 200 audit entries, and none of them is an admin or sign-in policy change\. Older ones in the 30 days are not listed\./,
+        /^This list is made from the newest 200 audit entries, and none of them is an admin or sign-in policy change\. Older ones in the 30 days are not listed\./,
       ),
     ).toBeInTheDocument();
   });
@@ -748,7 +748,7 @@ describe('one organization (?org=)', () => {
     // The number is the rows read, never the number of lines listed (1 here).
     expect(
       within(cut).getByText(
-        /^Showing the newest 200 audit entries\. Older ones in the 30 days are not listed\./,
+        /^This list is made from the newest 200 audit entries\. Older ones in the 30 days are not listed\./,
       ),
     ).toBeInTheDocument();
     expect(cut.textContent).not.toMatch(/newest 1 audit/);

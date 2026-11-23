@@ -1281,6 +1281,9 @@ export function buildPlatformSecurityBriefing(
   // "No organization ..." is a statement about every part of every
   // organization: it needs all three reads, whole.
   const organizationsAllChecked = organizationsUnchecked.length === 0 && !organizationsTruncated;
+  // Every sentence after the first is about the organizations only, and says
+  // so: it stands next to "N platform checks need attention." without
+  // contradicting it.
   const line: string[] = [];
   if (pressing > 0) {
     line.push(`${counted(pressing, 'platform check needs', 'platform checks need')} attention.`);
@@ -1293,7 +1296,7 @@ export function buildPlatformSecurityBriefing(
         ? `${counted(needing, 'organization needs', 'organizations need')} attention this week.`
         : organizationsAllChecked
           ? 'No organization needs attention this week.'
-          : 'Nothing needs attention in what could be checked.',
+          : 'No organization needs attention in what could be checked.',
     );
     if (unchecked.length > 0) line.push('Some checks could not be made.');
   }
