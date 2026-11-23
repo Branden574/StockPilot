@@ -46,11 +46,13 @@ function PlatformSwitchRow({ setting, on }: { setting: PlatformPasskeySetting; o
 
 /**
  * PASSKEYS in the platform console (part 2, plan 2.6 H and section 4): the
- * kill switch ("Passkeys for everyone"), "New passkeys", the organizations
- * that have passkeys on, and Turn on for an organization. Everything starts
- * OFF and only these controls turn anything on; each press needs the typed
- * word PASSKEYS and a fresh authenticator code, and is recorded in the
- * platform audit (server/actions/platform/passkeys.ts).
+ * kill switch ("Passkeys for everyone"), "New passkeys" and Turn on for an
+ * organization in the section's card, then the organizations that have
+ * passkeys on in a console table straight on the page (never a card inside
+ * the card, review L4). Everything starts OFF and only these controls turn
+ * anything on; each press needs the typed word PASSKEYS and a fresh
+ * authenticator code, and is recorded in the platform audit
+ * (server/actions/platform/passkeys.ts).
  *
  * A server component that reads with the service client: the page that
  * renders it must have called requirePlatformAdmin() first. A read that
@@ -64,98 +66,100 @@ export async function PlatformPasskeysSection() {
   const onIds = new Set((state.organizations ?? []).map((o) => o.id));
 
   return (
-    <DetailSection title="Passkeys">
-      <div className="space-y-6">
-        {state.switches ? (
-          <div className="divide-border divide-y">
-            <PlatformSwitchRow setting="passkeys_on" on={state.switches.passkeysOn} />
-            <PlatformSwitchRow setting="passkey_adds_on" on={state.switches.passkeyAddsOn} />
-          </div>
-        ) : (
-          <p className="text-destructive text-[13px]">
-            Could not read the passkey switches. Reload this page to try again.
-          </p>
-        )}
-
-        <div className="space-y-2">
-          <h3 className="text-foreground text-[13px] font-medium">
-            Organizations with passkeys on
-          </h3>
-          <p className="text-muted-foreground max-w-2xl text-[12.5px]">
-            A member can add a passkey only when every organization they belong to has passkeys on.
-            Turning one off stops new passkeys; existing ones keep working until removed.
-          </p>
-          {state.organizations === null ? (
-            <p className="text-destructive text-[13px]">
-              Could not read which organizations have passkeys on. Reload this page to try again.
-            </p>
-          ) : state.organizations.length === 0 ? (
-            <p className="text-muted-foreground text-[13px]">No organization has passkeys on.</p>
+    <div className="flex flex-col gap-4">
+      <DetailSection title="Passkeys">
+        <div className="space-y-6">
+          {state.switches ? (
+            <div className="divide-border divide-y">
+              <PlatformSwitchRow setting="passkeys_on" on={state.switches.passkeysOn} />
+              <PlatformSwitchRow setting="passkey_adds_on" on={state.switches.passkeyAddsOn} />
+            </div>
           ) : (
-            <PlatformTable label="Organizations with passkeys on" minWidth={640}>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>Organization</TableHead>
-                  <TableHead title="In UTC.">Turned on</TableHead>
-                  <TableHead className="text-right">Members with passkeys</TableHead>
-                  <TableHead className="text-right">Passkeys</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {state.organizations.map((o) => (
-                  <TableRow key={o.id}>
-                    <TableCell>
-                      <Link
-                        href={`/platform/orgs/${o.id}`}
-                        // Never prefetched: rendering an organization's page
-                        // writes a viewed_org row to the audit trail.
-                        prefetch={false}
-                        className={
-                          o.name
-                            ? 'text-ink-2 hover:text-foreground'
-                            : 'text-muted-foreground hover:text-foreground font-mono text-[12px]'
-                        }
-                      >
-                        {o.name ?? o.id}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                      {formatExactUtc(o.switchedOnAt) ?? '—'}
-                    </TableCell>
-                    <TableCell className="text-right font-mono tabular-nums">
-                      {o.membersWithPasskeys === null
-                        ? 'Unknown'
-                        : o.membersWithPasskeys.toLocaleString('en-US')}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <PasskeySwitchControl
-                        target={{
-                          kind: 'organization',
-                          organizationId: o.id,
-                          organizationName: o.name ?? o.id,
-                        }}
-                        on
-                      />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </PlatformTable>
+            <p className="text-destructive text-[13px]">
+              Could not read the passkey switches. Reload this page to try again.
+            </p>
+          )}
+
+          {choices === null ? (
+            <p className="text-destructive text-[13px]">
+              Could not load the organizations. Reload this page to try again.
+            </p>
+          ) : (
+            <OrganizationPasskeysTurnOn
+              organizations={choices.organizations.filter((o) => !onIds.has(o.id))}
+              capped={choices.capped}
+              cap={PASSKEY_ORGANIZATION_CHOICES_CAP}
+            />
           )}
         </div>
+      </DetailSection>
 
-        {choices === null ? (
+      {/* Straight on the page, as every console table is: the table's card
+          is never nested inside the section's card. */}
+      <div className="flex flex-col gap-2">
+        <h3 className="text-foreground text-[13px] font-medium">Organizations with passkeys on</h3>
+        <p className="text-muted-foreground max-w-2xl text-[12.5px]">
+          A member can add a passkey only when every organization they belong to has passkeys on.
+          Turning one off stops new passkeys; existing ones keep working until removed.
+        </p>
+        {state.organizations === null ? (
           <p className="text-destructive text-[13px]">
-            Could not load the organizations. Reload this page to try again.
+            Could not read which organizations have passkeys on. Reload this page to try again.
           </p>
+        ) : state.organizations.length === 0 ? (
+          <p className="text-muted-foreground text-[13px]">No organization has passkeys on.</p>
         ) : (
-          <OrganizationPasskeysTurnOn
-            organizations={choices.organizations.filter((o) => !onIds.has(o.id))}
-            capped={choices.capped}
-            cap={PASSKEY_ORGANIZATION_CHOICES_CAP}
-          />
+          <PlatformTable label="Organizations with passkeys on" minWidth={640}>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Organization</TableHead>
+                <TableHead title="In UTC.">Turned on</TableHead>
+                <TableHead className="text-right">Members with passkeys</TableHead>
+                <TableHead className="text-right">Passkeys</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {state.organizations.map((o) => (
+                <TableRow key={o.id}>
+                  <TableCell>
+                    <Link
+                      href={`/platform/orgs/${o.id}`}
+                      // Never prefetched: rendering an organization's page
+                      // writes a viewed_org row to the audit trail.
+                      prefetch={false}
+                      className={
+                        o.name
+                          ? 'text-ink-2 hover:text-foreground'
+                          : 'text-muted-foreground hover:text-foreground font-mono text-[12px]'
+                      }
+                    >
+                      {o.name ?? o.id}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
+                    {formatExactUtc(o.switchedOnAt) ?? '—'}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {o.membersWithPasskeys === null
+                      ? 'Unknown'
+                      : o.membersWithPasskeys.toLocaleString('en-US')}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <PasskeySwitchControl
+                      target={{
+                        kind: 'organization',
+                        organizationId: o.id,
+                        organizationName: o.name ?? o.id,
+                      }}
+                      on
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </PlatformTable>
         )}
       </div>
-    </DetailSection>
+    </div>
   );
 }

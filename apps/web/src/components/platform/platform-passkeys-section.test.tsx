@@ -142,6 +142,30 @@ describe('PlatformPasskeysSection', () => {
     ).toBeInTheDocument();
   });
 
+  it('the organizations table sits straight on the page, as every console table does: never inside the section card', async () => {
+    h.read.mockResolvedValue({
+      switches: { passkeysOn: true, passkeyAddsOn: true, rowExists: true },
+      organizations: [
+        {
+          id: ORG_A,
+          name: 'Example Academy',
+          switchedOnAt: '2026-11-20T17:05:00Z',
+          membersWithPasskeys: 1,
+        },
+      ],
+    });
+    await renderSection();
+    const table = screen.getByRole('region', { name: 'Organizations with passkeys on' });
+    expect(table).toHaveAttribute('data-glass', 'card');
+    // No frosted card or panel around the table's own card.
+    expect(table.parentElement?.closest('[data-glass]')).toBeNull();
+    // The switches stay in the section's card.
+    const panel = screen.getByRole('heading', { name: 'Passkeys' }).closest('[data-glass="panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel).toContainElement(switchRow('Passkeys for everyone'));
+    expect(panel).not.toContainElement(table);
+  });
+
   it('a switch-row read that failed says so', async () => {
     h.read.mockResolvedValue({
       switches: { passkeysOn: false, passkeyAddsOn: false, rowExists: false },
