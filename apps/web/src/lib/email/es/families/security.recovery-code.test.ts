@@ -1,0 +1,214 @@
+import { describe, expect, it } from 'vitest';
+
+import { renderRecoveryCodeUsedEmail } from './security';
+
+/**
+ * The email of a used recovery code (stage 5, answer Q7; plan section 4):
+ * "Your StockPilot sign-in methods were removed". It says what happened, in
+ * the words that are true for this account (passkeys named only when the
+ * account had one; the other devices said signed out only when they were),
+ * and "If this was not you, reset your password now". The subject is fixed:
+ * nothing a member typed reaches it. No link signs in: the one action is the
+ * password reset page.
+ */
+
+const base = {
+  email: 'member@example.test',
+  usedAt: 'Nov 21, 2026, 9:41 AM UTC',
+  appUrl: 'https://app.example.test',
+};
+const hrefs = (html: string) => [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1]!);
+
+describe('the recovery code email', () => {
+  it('the subject and the sender, the time, and what to do if it was not you', () => {
+    const m = renderRecoveryCodeUsedEmail({ ...base, passkeys: false, othersSignedOut: true });
+    expect(m.subject).toBe('Your StockPilot sign-in methods were removed');
+    expect(m.from).toBe('StockPilot Security <security@stockpilotusa.com>');
+    expect(m.text).toContain(
+      'a recovery code was used on your StockPilot account on Nov 21, 2026, 9:41 AM UTC.',
+    );
+    expect(m.text).toContain(
+      'If this was not you, reset your password now: https://app.example.test/reset',
+    );
+    expect(m.html).toContain('Reset your password');
+  });
+
+  it.each([
+    [false, true, 'Every authenticator app was removed, and your other devices were signed out.'],
+    [
+      true,
+      true,
+      'Every authenticator app and passkey was removed, and your other devices were signed out.',
+    ],
+    [
+      false,
+      false,
+      'Every authenticator app was removed. We could not sign out your other devices.',
+    ],
+    [
+      true,
+      false,
+      'Every authenticator app and passkey was removed. We could not sign out your other devices.',
+    ],
+  ])(
+    'passkeys %s, other devices signed out %s: the true sentence',
+    (passkeys, othersSignedOut, sentence) => {
+      const m = renderRecoveryCodeUsedEmail({ ...base, passkeys, othersSignedOut });
+      expect(m.text).toContain(sentence);
+      expect(m.html).toContain(sentence.replace(/'/g, '&rsquo;'));
+    },
+  );
+
+  it('an account with no passkey never reads the word passkey', () => {
+    for (const othersSignedOut of [true, false]) {
+      const m = renderRecoveryCodeUsedEmail({ ...base, passkeys: false, othersSignedOut });
+      expect(`${m.subject}\n${m.preheader}\n${m.text}\n${m.html}`).not.toMatch(/passkey/i);
+    }
+  });
+
+  it('the subject is the same whatever the address: nothing a member typed reaches it', () => {
+    const odd = renderRecoveryCodeUsedEmail({
+      ...base,
+      email: 'sample+<b>x</b>@example.test',
+      passkeys: true,
+      othersSignedOut: false,
+    });
+    expect(odd.subject).toBe('Your StockPilot sign-in methods were removed');
+    expect(odd.html).not.toContain('<b>x</b>');
+  });
+
+  it('its one action is the reset page: no link signs in, none carries a token or a code', () => {
+    const m = renderRecoveryCodeUsedEmail({ ...base, passkeys: true, othersSignedOut: true });
+    const own = hrefs(m.html).filter((h) => h.startsWith('https://app.example.test'));
+    expect(own).toContain('https://app.example.test/reset');
+    for (const href of hrefs(m.html)) {
+      expect(href, href).not.toMatch(/signin|sign-in|token=|code=|verify|magic/i);
+    }
+  });
+});
+
+describe('a method that could not be removed (the review of stage 5, finding 1)', () => {
+  it.each([
+    ['app', 'An authenticator app could not be removed, so it is still on your account.'],
+    // The passkey records are not known to be removed: it may be left.
+    ['passkey', 'A passkey may still be on your account.'],
+    [
+      'app_and_passkey',
+      'An authenticator app could not be removed, so it is still on your account. A passkey may still be on it too.',
+    ],
+    // The passkeys went; the account still lists a second step.
+    ['second_step', 'Your passkeys were removed, but your account still asks for a second step.'],
+    // No removal was tried: never "we could not check".
+    ['unchecked', 'Your sign-in methods could not be removed.'],
+  ] as const)('%s: says so, never that every method was removed', (methodsLeft, sentence) => {
+    for (const othersSignedOut of [true, false]) {
+      const m = renderRecoveryCodeUsedEmail({
+        ...base,
+        passkeys: methodsLeft !== 'app',
+        othersSignedOut,
+        methodsLeft,
+      });
+      expect(m.subject).toBe('A recovery code was used on your StockPilot account');
+      expect(m.text).toContain(sentence);
+      expect(m.text).toContain(
+        othersSignedOut
+          ? 'Your other devices were signed out.'
+          : 'We could not sign out your other devices.',
+      );
+      expect(m.html).toContain(sentence);
+      expect(`${m.subject}\n${m.preheader}\n${m.text}\n${m.html}`).not.toMatch(
+        /Every authenticator app|Your StockPilot sign-in methods were removed|Sign-in methods removed/,
+      );
+      expect(m.text).toContain('If this was not you, reset your password now');
+      const all = `${m.subject}\n${m.preheader}\n${m.text}\n${m.html}`;
+      expect(all).not.toMatch(/could not check/i);
+      if (methodsLeft === 'second_step') {
+        expect(all).not.toMatch(/passkey (could not be removed|may still be|is still)/i);
+        // The plain-text part holds every sentence a person reads (the HTML
+        // part adds only markup and styles): no word of the mechanism.
+        expect(`${m.subject}\n${m.preheader}\n${m.text}`).not.toMatch(/bridge|factor|hidden/i);
+      }
+      if (methodsLeft === 'passkey' || methodsLeft === 'app_and_passkey') {
+        expect(all).not.toMatch(/passkeys? (was|were) removed/i);
+      }
+    }
+  });
+
+  it('no removal was tried, but the passkeys went with the code: says both', () => {
+    const m = renderRecoveryCodeUsedEmail({
+      ...base,
+      passkeys: true,
+      passkeysRemoved: true,
+      othersSignedOut: true,
+      methodsLeft: 'unchecked',
+    });
+    const sentence = 'Your passkeys were removed. Your other sign-in methods could not be removed.';
+    expect(m.text).toContain(sentence);
+    expect(m.html).toContain(sentence);
+    expect(m.subject).toBe('A recovery code was used on your StockPilot account');
+  });
+
+  it('an account with no passkey and an app left never reads the word passkey', () => {
+    const m = renderRecoveryCodeUsedEmail({
+      ...base,
+      passkeys: false,
+      othersSignedOut: true,
+      methodsLeft: 'app',
+    });
+    expect(`${m.subject}\n${m.preheader}\n${m.text}\n${m.html}`).not.toMatch(/passkey/i);
+  });
+});
+
+describe('a code that removed nothing (REVIEW-STAGE-6B finding 2)', () => {
+  it.each([
+    [true, 'Your other devices were signed out.'],
+    [false, 'We could not sign out your other devices.'],
+  ])(
+    'other devices signed out %s: says a code was used and that, and no sentence about methods',
+    (othersSignedOut, sentence) => {
+      for (const passkeys of [false, true]) {
+        const m = renderRecoveryCodeUsedEmail({
+          ...base,
+          passkeys,
+          othersSignedOut,
+          nothingRemoved: true,
+        });
+        expect(m.subject).toBe('A recovery code was used on your StockPilot account');
+        expect(m.text).toContain(
+          `a recovery code was used on your StockPilot account on Nov 21, 2026, 9:41 AM UTC. ${sentence}`,
+        );
+        expect(m.html).toContain(sentence);
+        expect(m.html).toContain('Recovery code used');
+        expect(m.text).toContain(
+          'If this was not you, reset your password now: https://app.example.test/reset',
+        );
+        expect(m.text).toContain('Then tell your administrator.');
+        const all = `${m.subject}\n${m.preheader}\n${m.text}\n${m.html}`;
+        expect(all).not.toMatch(/removed|could not be removed|set up your sign-in methods again/i);
+        expect(all).not.toMatch(/passkey/i);
+      }
+    },
+  );
+
+  it('a method left wins: its sentence is said, never the nothing-removed words alone', () => {
+    const m = renderRecoveryCodeUsedEmail({
+      ...base,
+      passkeys: false,
+      othersSignedOut: true,
+      methodsLeft: 'app',
+      nothingRemoved: true,
+    });
+    expect(m.text).toContain(
+      'An authenticator app could not be removed, so it is still on your account.',
+    );
+    expect(m.text).toContain('Then set up your sign-in methods again');
+  });
+
+  it('without the flag the email is as before: the removed sentence', () => {
+    const m = renderRecoveryCodeUsedEmail({ ...base, passkeys: false, othersSignedOut: true });
+    expect(m.subject).toBe('Your StockPilot sign-in methods were removed');
+    expect(m.text).toContain(
+      'Every authenticator app was removed, and your other devices were signed out.',
+    );
+  });
+});

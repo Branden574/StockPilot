@@ -6,7 +6,8 @@ import { headers } from 'next/headers';
 import { accountIdHash, reportPasskeyRecordsMissing } from '@/lib/auth/passkey-bridge';
 import { carriesBridgeName } from '@/lib/auth/passkey-bridge-name';
 import { requireSession } from '@/lib/auth/session';
-import { readVerifiedSessionTokenOf } from '@/lib/auth/verified-claims';
+import type { RecoveryCodeDone, RecoveryMethodsLeft } from '@/lib/auth/recovery-code-words';
+import { readVerifiedSessionTokenOf, type VerifiedSessionToken } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { rethrowControlFlow } from '@/lib/control-flow';
@@ -16,8 +17,11 @@ import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { recordAccountCodeBlocked } from '@/server/security/account-events';
+import { signOutAs } from '@/server/security/passkey-auth';
+import { sendRecoveryCodeUsedEmail } from '@/server/security/recovery-code-email';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { ServiceError } from '@/server/services/context';
+import { broadcastEndedSessions, listMySessionIds } from '@/server/services/sessions';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
 import {
   actionErrorResult,
@@ -229,16 +233,257 @@ function reportPasskeyRemoval(
 const RECOVERY_NOT_CHECKED = 'Could not check your recovery code just now. Try again.';
 
 /**
+ * Whether Auth still holds the session of `token` (the held, verified token
+ * of `userId`): GET /user with that token, which Auth answers only while the
+ * session exists. The token was checked LOCALLY (getClaims) and PostgREST
+ * accepts it until it expires, so a session already ended at Auth (signed
+ * out, revoked from another device, ended by a used recovery code) could
+ * still spend a code with the password while its token lasted (the second
+ * lab walk, RS5 20). One round trip, made only for a press that got past the
+ * three limiters and the password, right before any code is checked.
+ *   - 'live': Auth answered with this account;
+ *   - 'ended': Auth refused the token (auth-js names Auth's session_not_found
+ *     AuthSessionMissingError; a 401 or 403), or answered another account;
+ *   - 'unknown': any other error answer (Auth not reached, a 5xx).
+ * The caller refuses both of the last two before any code is checked; a
+ * throw goes to the action's catch, which refuses too. On 'ended' for
+ * session_not_found, auth-js also removes the stored session of the client it
+ * ran on, the cookie client here, so that answer clears this browser's
+ * sign-in cookies too (the session is already gone at Auth; pinned in
+ * mfa-recovery.held-reads.test.ts).
+ *
+ * With 'live' comes the account's own sign-in address as Auth answers it
+ * (null when Auth gives none). The security email goes only to that address,
+ * never to `session.email`, which for an account with no profile row is a
+ * request header the caller can choose (lib/auth/session.ts; the release
+ * review of stage 5, finding 1).
+ */
+async function sessionAtAuth(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  token: string,
+  userId: string,
+): Promise<{ state: 'live'; email: string | null } | { state: 'ended' } | { state: 'unknown' }> {
+  // A throw is not caught here: it reaches the action's own catch
+  // (actionErrorResult), which refuses before any code is checked.
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error) {
+    const { name, status } = error as { name?: string; status?: number };
+    if (name === 'AuthSessionMissingError') return { state: 'ended' };
+    if (name === 'AuthApiError' && (status === 401 || status === 403)) return { state: 'ended' };
+    return { state: 'unknown' };
+  }
+  const user = data?.user;
+  if (user?.id !== userId) return { state: 'ended' };
+  const email = typeof user.email === 'string' && user.email ? user.email : null;
+  return { state: 'live', email };
+}
+
+/** The client that acts as the held token alone (made once per press, when first needed). */
+type MemberClient = ReturnType<typeof createAccessTokenClient>;
+
+/** A factor as Auth's admin API lists it (only what the removal reads). */
+type ListedAdminFactor = {
+  id: string;
+  factor_type: string;
+  status?: string;
+  friendly_name?: string | null;
+};
+
+/** What the factor removal did at Auth: the true count, and what is left there. */
+type FactorRemoval = {
+  /** The factors listed (none when the list could not be read). */
+  factors: ListedAdminFactor[];
+  /** TOTP factors deleted, the passkey's hidden one and any never set up included (the audit row's count). */
+  unenrolled: number;
+  /**
+   * Of those, the sign-in methods: every one but a factor never set up
+   * (unverified). A factor whose status is not given counts (closed).
+   */
+  methodsRemoved: number;
+  /**
+   * Of the sign-in methods, the authenticator apps: not the passkey's own
+   * factor (no reserved name), and never a factor never set up, so the words
+   * after the press agree with the email (the release review of stage 5,
+   * finding 2).
+   */
+  appsRemoved: number;
+  /** Deletes that failed (any factor). */
+  failed: number;
+  /** The list could not be read: no delete was tried. */
+  unchecked: boolean;
+  /** A verified authenticator app could not be deleted. */
+  appLeft: boolean;
+  /** A verified factor carrying the bridge's reserved name could not be deleted. */
+  passkeyFactorLeft: boolean;
+};
+
+/**
+ * Removes every TOTP factor of the account with the service role, reading
+ * the list's error and each delete's error (the review of stage 5, finding
+ * 1). A list that cannot be read (an error, or a throw) is `unchecked`: no
+ * factor is deleted and none is called removed. A verified factor whose
+ * delete failed (an error, or a throw) is left: the passkey's own when it
+ * carries the bridge's reserved name, else an authenticator app. A factor
+ * never set up (`unverified`) is no sign-in method, so its failed delete
+ * leaves nothing. What the member is told is decided with the passkey
+ * records' own outcome (methodsLeftOf). Never throws for a failed Auth call:
+ * the code is already spent.
+ */
+async function removeFactors(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+): Promise<FactorRemoval> {
+  let factors: ListedAdminFactor[];
+  try {
+    const listed = await admin.auth.admin.mfa.listFactors({ userId });
+    if (listed.error || !listed.data) throw new Error('list');
+    factors = (listed.data.factors ?? []) as ListedAdminFactor[];
+  } catch {
+    return {
+      factors: [],
+      unenrolled: 0,
+      appsRemoved: 0,
+      methodsRemoved: 0,
+      failed: 0,
+      unchecked: true,
+      appLeft: false,
+      passkeyFactorLeft: false,
+    };
+  }
+  let unenrolled = 0;
+  let appsRemoved = 0;
+  let methodsRemoved = 0;
+  let failed = 0;
+  let appLeft = false;
+  let passkeyFactorLeft = false;
+  for (const f of factors) {
+    // We only deliberately enroll TOTP today; play it safe and only
+    // remove totp factors so we don't surprise SSO/SAML setups later.
+    if (f.factor_type !== 'totp') continue;
+    let deleted = false;
+    try {
+      const r = await admin.auth.admin.mfa.deleteFactor({ userId, id: f.id });
+      deleted = !r.error;
+    } catch {
+      deleted = false;
+    }
+    if (deleted) {
+      unenrolled += 1;
+      // A factor never set up is removed, but it was no sign-in method.
+      if (f.status === 'unverified') continue;
+      methodsRemoved += 1;
+      if (!carriesBridgeName(f)) appsRemoved += 1;
+      continue;
+    }
+    failed += 1;
+    if (f.status === 'unverified') continue;
+    if (carriesBridgeName(f)) passkeyFactorLeft = true;
+    else appLeft = true;
+  }
+  return {
+    factors,
+    unenrolled,
+    appsRemoved,
+    methodsRemoved,
+    failed,
+    unchecked: false,
+    appLeft,
+    passkeyFactorLeft,
+  };
+}
+
+/**
+ * What a used code left, for the answer and the email (the review of the
+ * last deltas, findings 3 and 8), or undefined when nothing was:
+ *   - the list of methods could not be read: no removal was tried
+ *     ('unchecked');
+ *   - `passkeyMaybeLeft` (a listed factor carries the bridge's reserved name
+ *     and the passkey records are not known to be removed): a passkey may be
+ *     left ('passkey', or 'app_and_passkey' with an app left), whether or not
+ *     its factor went;
+ *   - an app could not be deleted ('app');
+ *   - the passkey records are known removed and only the passkey's own
+ *     factor could not be deleted: the passkeys are removed, and the account
+ *     still asks for a second step ('second_step').
+ */
+function methodsLeftOf(
+  removal: FactorRemoval,
+  passkeyMaybeLeft: boolean,
+): RecoveryMethodsLeft | undefined {
+  if (removal.unchecked) return 'unchecked';
+  if (removal.appLeft) return passkeyMaybeLeft ? 'app_and_passkey' : 'app';
+  if (passkeyMaybeLeft) return 'passkey';
+  return removal.passkeyFactorLeft ? 'second_step' : undefined;
+}
+
+/**
+ * Answers Q6 (stage 5 of the passkey plan): a used code ends every OTHER
+ * session of the account, and the session that used it stays signed in.
+ *   1. The sessions are listed first, as the member (they cannot be listed
+ *      once ended), for the devices' message below.
+ *   2. Auth's sign-out of scope `others`, AS the held token (never the cookie
+ *      session, never `global` or `local`).
+ *   3. When Auth's sign-out fails, the database ends them instead
+ *      (revoke_my_other_sessions, 0213, as the member), keeping THIS
+ *      session's id; only with an id, since null would end this one too.
+ *   4. Once they ended, the devices hear which sessions ended, never the one
+ *      that stays (services/sessions.ts broadcastEndedSessions).
+ * A sign-out that could not be confirmed is reported: a warning when the
+ * database ended them, an error when nothing did. The calls it makes answer
+ * a failure rather than throw (a throw would reach the action's catch, after
+ * the code is spent and the factors removed). Returns whether every other
+ * session ended.
+ */
+async function endOtherSessions(
+  held: VerifiedSessionToken,
+  member: () => MemberClient,
+  userId: string,
+): Promise<boolean> {
+  const keep = held.claims.sessionId;
+  // Never throws: unreadable is null, and nothing is named to the devices.
+  const listed = await listMySessionIds(member());
+  const signedOut = await signOutAs(held.token, 'others');
+  if (signedOut.ok) {
+    if (keep) await broadcastEndedSessions(userId, listed, keep);
+    return true;
+  }
+  let databaseRevoke: 'ok' | 'failed' | 'no_session_id' = 'no_session_id';
+  if (keep) {
+    // supabase-js answers a failed call (the network included) as `error`.
+    const { error } = await member().rpc('revoke_my_other_sessions', {
+      p_keep_session_id: keep,
+    });
+    databaseRevoke = error ? 'failed' : 'ok';
+  }
+  // Never the token, the code or a session id: Auth's code and status only.
+  void reportError(new Error('A recovery code could not confirm that the other sessions ended'), {
+    tag: 'actions.mfa_recovery.other_sessions_not_ended',
+    level: databaseRevoke === 'ok' ? 'warning' : 'error',
+    userIdHash: accountIdHash(userId),
+    extra: { code: signedOut.code, status: signedOut.status, database_revoke: databaseRevoke },
+  });
+  if (databaseRevoke !== 'ok' || !keep) return false;
+  await broadcastEndedSessions(userId, listed, keep);
+  return true;
+}
+
+/**
  * Used by /signin/mfa when the user can't reach their TOTP device.
  * Verifies one of their unused recovery codes, and on success removes their
  * passkeys (0475) and unenrolls every TOTP factor on the account using the
- * admin client (RLS on auth.mfa requires service-role for this). The user can
- * then sign in normally and re-enroll a fresh device.
+ * admin client (RLS on auth.mfa requires service-role for this), then ends
+ * the account's OTHER sessions (this one stays) and emails the account
+ * (answers Q6 and Q7). The user then sets up a new method on this session.
+ * `otherSessionsLeft` is there only when the other sessions could not be
+ * ended, and `methodsLeft` only when something was left (methodsLeftOf), so
+ * the form says so, as a warning. An account with passkeys also gets
+ * `appsRemoved` and, only when its passkeys are KNOWN removed,
+ * `passkeysRemoved`.
  */
 export async function consumeMfaRecoveryCodeAction(input: {
   code: string;
   password?: string;
-}): Promise<ActionResult<{ unenrolled: number }>> {
+}): Promise<ActionResult<RecoveryCodeDone>> {
   try {
     const session = await requireSession();
 
@@ -328,6 +573,10 @@ export async function consumeMfaRecoveryCodeAction(input: {
     const supabase = await createClient();
     const held = await readVerifiedSessionTokenOf(supabase, session.userId);
     if (!held) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    // One client of the held token for this press, made when first needed
+    // (today's consume, the session list, the database revoke).
+    let asMember: MemberClient | null = null;
+    const member = () => (asMember ??= createAccessTokenClient(held.token));
 
     if (
       !(await allowRecoveryPress(
@@ -339,6 +588,18 @@ export async function consumeMfaRecoveryCodeAction(input: {
     ) {
       return err('validation_error', RECOVERY_PAUSED);
     }
+
+    // The session must still exist at Auth, not only carry a token that has
+    // not expired yet (RS5 20): an ended session spends no code, removes no
+    // method and ends no other session. Closed: an answer that cannot be had
+    // refuses too, with "try again".
+    const atAuth = await sessionAtAuth(supabase, held.token, session.userId);
+    if (atAuth.state === 'ended') {
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    }
+    if (atAuth.state === 'unknown') return err('internal_error', RECOVERY_NOT_CHECKED);
+    // The account's own address, as Auth answered it for the held token.
+    const accountEmail = atAuth.email;
 
     // The service client spends the code with the passkey records and removes
     // the factors, so it is made before any code is checked.
@@ -376,10 +637,9 @@ export async function consumeMfaRecoveryCodeAction(input: {
       consumed = spent.consumed;
       passkeysRemoved = spent.passkeysRemoved;
     } else {
-      const { data: ok_, error } = await createAccessTokenClient(held.token).rpc(
-        'consume_mfa_recovery_code',
-        { p_code: input.code },
-      );
+      const { data: ok_, error } = await member().rpc('consume_mfa_recovery_code', {
+        p_code: input.code,
+      });
       if (error) throw new ServiceError('internal_error', error.message);
       consumed = Boolean(ok_);
       if (spent.kind === 'failed' && !consumed) {
@@ -408,30 +668,26 @@ export async function consumeMfaRecoveryCodeAction(input: {
     }
 
     // Unenroll every TOTP factor for this user via the admin client: the
-    // passkey bridge among them.
-    const { data: factors } = await admin.auth.admin.mfa.listFactors({
-      userId: session.userId,
-    });
+    // passkey bridge among them. The list's error and each delete's error are
+    // read (the review of stage 5, finding 1): a list that cannot be read, or
+    // a verified factor that could not be deleted, is a method that may be
+    // left, said so in the answer and the email, never called removed.
+    const removal = await removeFactors(admin, session.userId);
+    const factors = removal.factors;
     // The function missing (0475 not live, or lost from the schema cache) and a
     // factor carrying the bridge's reserved name: a bridge may have existed,
     // and its passkey records were not removed. Reported at error level, once
     // per hour (review 2-3 finding 3); an account with no such factor reports
     // nothing.
-    if (spent.kind === 'not_yet' && (factors?.factors ?? []).some(carriesBridgeName)) {
+    if (spent.kind === 'not_yet' && factors.some(carriesBridgeName)) {
       await reportPasskeyRecordsMissing('function', 'recovery_code', session.userId);
     }
-    let unenrolled = 0;
-    for (const f of factors?.factors ?? []) {
-      // We only deliberately enroll TOTP today; play it safe and only
-      // remove totp factors so we don't surprise SSO/SAML setups later.
-      if (f.factor_type !== 'totp') continue;
-      const r = await admin.auth.admin.mfa.deleteFactor({
-        userId: session.userId,
-        id: f.id,
-      });
-      if (!r.error) unenrolled += 1;
-    }
+    const { unenrolled, appsRemoved, methodsRemoved } = removal;
 
+    // Whether the passkey records are KNOWN removed: the combined call
+    // answered, or the second removal below did. Not when the function is
+    // missing, and not when both calls failed.
+    let recordsKnownRemoved = spent.kind === 'answered';
     if (spent.kind === 'failed') {
       // The code is spent and the factors are gone; the passkey records may
       // not be. One more try, then one report either way.
@@ -440,9 +696,37 @@ export async function consumeMfaRecoveryCodeAction(input: {
         p_reason: 'recovery_code',
       });
       const removed = removedCount(retry);
-      if (removed !== null) passkeysRemoved = removed;
+      if (removed !== null) {
+        passkeysRemoved = removed;
+        recordsKnownRemoved = true;
+      }
       reportPasskeyRemoval(spent.code, removed === null ? 'unknown' : false, session.userId);
     }
+
+    // Q6: every OTHER session of the account ends; this one stays, whether
+    // or not every method was removed.
+    const othersEnded = await endOtherSessions(held, member, session.userId);
+    // A listed factor carries the bridge's reserved name, and the passkey
+    // records are not known removed: a passkey may be left, and is never
+    // called removed (the review of the last deltas, finding 3). An account
+    // with no such factor is told nothing about passkeys here.
+    const reservedListed = factors.some(carriesBridgeName);
+    const methodsLeft = methodsLeftOf(removal, reservedListed && !recordsKnownRemoved);
+    if (methodsLeft) {
+      // Which kind, and how many deletes failed: never a factor, the account
+      // id or the code.
+      void reportError(new Error('A recovery code could not remove every sign-in method'), {
+        tag: 'actions.mfa_recovery.methods_left',
+        level: 'error',
+        userIdHash: accountIdHash(session.userId),
+        extra: { methods_left: methodsLeft, failed: removal.failed },
+      });
+    }
+    // The account had a passkey: one was removed, or a factor carrying the
+    // bridge's reserved name was listed.
+    const hadPasskeys = (passkeysRemoved ?? 0) > 0 || reservedListed;
+    // Its passkeys are said removed only when that is known.
+    const passkeysKnownRemoved = hadPasskeys && recordsKnownRemoved;
 
     // A used code removes every authenticator of the account: the person's
     // own act, recorded in their default organization. Never the code.
@@ -456,8 +740,55 @@ export async function consumeMfaRecoveryCodeAction(input: {
           ? { unenrolled }
           : { unenrolled, passkeys_removed: passkeysRemoved },
     });
+    // Q7: the security email, after the response, for every code known spent
+    // here (a press refused before this point spent nothing and sends none;
+    // a code the combined call may have spent before its answer was lost is
+    // answered "try again" above and sends none either). It goes only to the
+    // account's own address as Auth answered it for the held token, never to
+    // `session.email` (the release review of stage 5, finding 1); an account
+    // Auth gives no address gets no email, and that is reported, with no
+    // address. It names passkeys only for an account that had one, and says
+    // so when a method was left. Its sentences are only the true ones (the
+    // second lab walk, RS5 25, and REVIEW-STAGE-6B finding 2): "removed" only
+    // when a sign-in method was removed (a verified factor, or passkeys with
+    // the code), "could not be removed" only when one was left; a code that
+    // did neither (an account with no method, or only a factor never set up)
+    // says only that a code was used and whether the other devices were
+    // signed out.
+    const nothingRemoved =
+      methodsRemoved === 0 && (passkeysRemoved ?? 0) === 0 && methodsLeft === undefined;
+    if (accountEmail) {
+      sendRecoveryCodeUsedEmail(accountEmail, session.userId, {
+        passkeys: hadPasskeys,
+        othersSignedOut: othersEnded,
+        ...(methodsLeft ? { methodsLeft } : {}),
+        ...(methodsLeft === 'unchecked' && passkeysKnownRemoved ? { passkeysRemoved: true } : {}),
+        ...(nothingRemoved ? { nothingRemoved: true } : {}),
+      });
+    } else {
+      void reportError(new Error('A recovery code was used on an account with no sign-in address'), {
+        tag: 'actions.mfa_recovery.email_no_address',
+        level: 'warning',
+        userIdHash: accountIdHash(session.userId),
+      });
+    }
     revalidatePath('/dashboard', 'layout');
-    return ok({ unenrolled });
+    // `unenrolled` in the answer counts the sign-in methods removed at Auth,
+    // never a factor never set up (the release review of stage 5, finding 2:
+    // the words then agree with the email); the audit row above keeps the
+    // count of every factor deleted. The answer of an account with no passkey
+    // whose methods all went, and whose other sessions ended, is
+    // `{ unenrolled }`, as before stage 5.
+    const answer: RecoveryCodeDone = { unenrolled: methodsRemoved };
+    if (hadPasskeys) {
+      if (passkeysKnownRemoved) answer.passkeysRemoved = true;
+      // The count of apps set up, apart from the passkey's own factor; not
+      // known when the list could not be read.
+      if (methodsLeft !== 'unchecked') answer.appsRemoved = appsRemoved;
+    }
+    if (methodsLeft) answer.methodsLeft = methodsLeft;
+    if (!othersEnded) answer.otherSessionsLeft = true;
+    return ok(answer);
   } catch (e) {
     return actionErrorResult(e, 'actions.mfa_recovery.consume_mfa_recovery_code');
   }

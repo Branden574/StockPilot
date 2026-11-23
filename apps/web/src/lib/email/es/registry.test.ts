@@ -376,6 +376,13 @@ const EXPECTED: Expected[] = [
     badge: 'Sign-in ended',
   },
   {
+    id: 'recovery-code-used',
+    subject: 'Your StockPilot sign-in methods were removed',
+    preheader:
+      'A recovery code was used on your account. If this was not you, reset your password now.',
+    badge: 'Methods removed',
+  },
+  {
     id: 'return-update',
     subject: 'Return RMA-20261005-ABC123: approved',
     subjectParams: { returnNumber: 'RMA-20261005-ABC123', summary: 'approved' },
@@ -396,15 +403,16 @@ const EXPECTED: Expected[] = [
 ];
 
 describe('es registry — shape', () => {
-  it('carries every row of ES.EMAILS (40 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25 + Return Update 2026-10-05 + Account Deletion Code 2026-11-15 + the 2 sign-in alert answers 2026-11-21 + the passkey emails)', () => {
-    expect(ES_EMAILS).toHaveLength(40);
-    expect(EXPECTED).toHaveLength(40);
-    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(40);
+  it('carries every row of ES.EMAILS (41 — 29 design-package rows + Maintenance Resolved 2026-08-06 + the 3 email-change rows 2026-08-25 + Return Update 2026-10-05 + Account Deletion Code 2026-11-15 + the 2 sign-in alert answers 2026-11-21 + the passkey emails)', () => {
+    // + the recovery code email (stage 5 of the passkeys, 2026-11-21).
+    expect(ES_EMAILS).toHaveLength(41);
+    expect(EXPECTED).toHaveLength(41);
+    expect(new Set(ES_EMAILS.map((e) => e.id)).size).toBe(41);
   });
 
-  it('splits into 36 live + 2 latent + 2 concept', () => {
+  it('splits into 37 live + 2 latent + 2 concept', () => {
     const by = (st: string) => ES_EMAILS.filter((e) => e.status === st).length;
-    expect(by('live')).toBe(36);
+    expect(by('live')).toBe(37);
     expect(by('latent')).toBe(2);
     expect(by('concept')).toBe(2);
   });
@@ -415,7 +423,7 @@ describe('es registry — shape', () => {
     // account deletion code (2026-11-15) + the member's "every session
     // ended" and the admins' "reported a sign-in" (2026-11-21) + the passkey
     // emails.
-    expect(by('security')).toBe(11);
+    expect(by('security')).toBe(12);
     expect(by('invites')).toBe(4);
     expect(by('orders')).toBe(9);
     // 4 design-package rows + Return Update (returns RX-1, 2026-10-05).
@@ -505,6 +513,7 @@ describe('es registry — shape', () => {
       'passkey-added',
       'passkey-removed',
       'passkey-sign-in-ended',
+      'recovery-code-used',
     ]) {
       expect(asset(id), id).toBeNull();
     }
@@ -522,4 +531,29 @@ describe('es registry — subjects, preheaders, badges (byte-identical)', () => 
       }
     });
   }
+});
+
+describe('recovery-code-used when a method could not be removed (the review of stage 5, finding 1)', () => {
+  it('the subject and the badge never say the methods were removed', () => {
+    const def = esEmailById('recovery-code-used');
+    expect(def.subject({ methodsLeft: true })).toBe(
+      'A recovery code was used on your StockPilot account',
+    );
+    expect(def.badge.label({ methodsLeft: true })).toBe('Recovery code used');
+    // Nothing a member typed reaches the subject: it takes only the flag.
+    expect(def.subject({ methodsLeft: false })).toBe(
+      'Your StockPilot sign-in methods were removed',
+    );
+  });
+
+  it('a code that removed nothing (REVIEW-STAGE-6B finding 2): only that a code was used', () => {
+    const def = esEmailById('recovery-code-used');
+    expect(def.subject({ nothingRemoved: true })).toBe(
+      'A recovery code was used on your StockPilot account',
+    );
+    expect(def.badge.label({ nothingRemoved: true })).toBe('Recovery code used');
+    expect(def.subject({ nothingRemoved: false })).toBe(
+      'Your StockPilot sign-in methods were removed',
+    );
+  });
 });

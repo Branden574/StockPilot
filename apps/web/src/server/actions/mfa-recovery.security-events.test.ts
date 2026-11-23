@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
-import { verifiedSessionAuth } from '@/test/verified-session-stub';
+import { liveSessionAuth, verifiedSessionAuth } from '@/test/verified-session-stub';
 
 /**
  * consumeMfaRecoveryCodeAction's security event (part 1 of the security
@@ -18,6 +18,14 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
+// Stage 5 (answers Q6 and Q7 of the passkey plan): a used code also ends the
+// account's other sessions as the held token and emails the account
+// (mfa-recovery.other-sessions.test.ts covers both). Here Auth's sign-out
+// answers, so nothing reaches a network, and no email is sent.
+vi.mock('@/server/security/passkey-auth', () => ({
+  signOutAs: vi.fn(async () => ({ ok: true, status: 204, code: null, body: null })),
+}));
+vi.mock('@/server/security/recovery-code-email', () => ({ sendRecoveryCodeUsedEmail: vi.fn() }));
 
 const request = vi.hoisted(() => ({ headers: new Headers({ 'x-real-ip': '198.51.100.4' }) }));
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => request.headers) }));
@@ -42,6 +50,7 @@ vi.mock('@/lib/supabase/server', () => ({
       auth: Object.assign(
         stubHolder.stub!.client.auth,
         verifiedSessionAuth(() => ({ sub: 'user-1', aal: 'aal1' })),
+        liveSessionAuth(),
       ),
     }),
   ),

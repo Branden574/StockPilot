@@ -1287,3 +1287,172 @@ export function renderPasskeySignInEndedEmail(params: PasskeySignInEndedEmailPar
 
   return { id: def.id, subject, preheader, html, text, from: def.from };
 }
+
+// ── recovery-code-used ──────────────────────────────────────────────
+
+export interface RecoveryCodeUsedEmailParams {
+  /** Recipient: the account's current sign-in address. */
+  email: string;
+  /** Preformatted time the code was used, e.g. "Nov 21, 2026, 9:41 AM UTC". */
+  usedAt: string;
+  /** The account had a passkey (one was removed, or its bridge factor was). */
+  passkeys: boolean;
+  /**
+   * The passkeys are known removed while `methodsLeft` is 'unchecked' (they
+   * went with the code; no other removal was tried).
+   */
+  passkeysRemoved?: boolean;
+  /** Every other session of the account was ended. */
+  othersSignedOut: boolean;
+  /**
+   * What the code left, by kind, never which one (the review of stage 5,
+   * finding 1; lib/auth/recovery-code-words.ts RecoveryMethodsLeft): an app
+   * that could not be removed, a passkey whose records are not known to be
+   * removed, passkeys removed while the account still asks for a second
+   * step, or a list of methods that could not be read (no removal tried).
+   */
+  methodsLeft?: 'app' | 'passkey' | 'app_and_passkey' | 'second_step' | 'unchecked';
+  /**
+   * The code removed no sign-in method and none was left (the account had no
+   * verified factor and no passkey; REVIEW-STAGE-6B finding 2). The email
+   * then says only that a code was used and what became of the other
+   * devices. Not read with `methodsLeft`.
+   */
+  nothingRemoved?: boolean;
+  firstName?: string | null;
+  appUrl?: string;
+}
+
+/**
+ * The sentence for what was left. It never says a method was removed unless
+ * that is known, and never that a check was made when no removal was tried
+ * (the review of the last deltas, findings 3 and 8).
+ */
+const RECOVERY_METHODS_LEFT = {
+  app: 'An authenticator app could not be removed, so it is still on your account.',
+  passkey: 'A passkey may still be on your account.',
+  app_and_passkey:
+    'An authenticator app could not be removed, so it is still on your account. A passkey may still be on it too.',
+  second_step: 'Your passkeys were removed, but your account still asks for a second step.',
+  unchecked: 'Your sign-in methods could not be removed.',
+} as const;
+/** No removal was tried, but the passkeys went with the code. */
+const RECOVERY_UNCHECKED_AFTER_PASSKEYS =
+  'Your passkeys were removed. Your other sign-in methods could not be removed.';
+
+/**
+ * A recovery code was used (answers Q6 and Q7 of the passkey plan): every
+ * authenticator app, and every passkey when the account had one, was removed,
+ * and the other devices were signed out when that could be done. Only true
+ * sentences: an account with no passkey never reads the word, devices that
+ * could not be signed out are said not to be, and when a method could not be
+ * removed (or the list of them could not be read) the email says so and never
+ * that they were removed: its subject, pill and first line then say only that
+ * a code was used (the review of stage 5, finding 1). A code that removed
+ * nothing (and left nothing) still sends it, saying only that a code was used
+ * and whether the other devices were signed out (REVIEW-STAGE-6B finding 2).
+ * The subject takes only those flags: nothing a member typed reaches it. The
+ * one action is the password reset page; no link signs in.
+ */
+export function renderRecoveryCodeUsedEmail(params: RecoveryCodeUsedEmailParams): RenderedEsEmail {
+  const def = esEmailById('recovery-code-used');
+  const appUrl = params.appUrl ?? DEFAULT_APP_URL;
+  const urls = marketingUrls(appUrl);
+  const email = escapeHtml(params.email);
+  const usedAt = escapeHtml(params.usedAt);
+  const resetUrl = `${appUrl.replace(/\/$/, '')}/reset`;
+
+  const methodsLeft = params.methodsLeft !== undefined;
+  // Nothing removed and nothing left: no sentence about methods at all.
+  const nothingRemoved = !methodsLeft && params.nothingRemoved === true;
+  const removed = params.passkeys
+    ? 'Every authenticator app and passkey was removed'
+    : 'Every authenticator app was removed';
+  const others = params.othersSignedOut
+    ? 'Your other devices were signed out.'
+    : 'We could not sign out your other devices.';
+  const left =
+    params.methodsLeft === 'unchecked' && params.passkeysRemoved === true
+      ? RECOVERY_UNCHECKED_AFTER_PASSKEYS
+      : params.methodsLeft
+        ? RECOVERY_METHODS_LEFT[params.methodsLeft]
+        : '';
+  const outcome = params.methodsLeft
+    ? `${left} ${others}`
+    : nothingRemoved
+      ? others
+      : params.othersSignedOut
+      ? `${removed}, and your other devices were signed out.`
+      : `${removed}. ${others}`;
+  const used = `a recovery code was used on your StockPilot account on ${params.usedAt}.`;
+
+  const subject = def.subject({ methodsLeft, nothingRemoved });
+  // What to do if it was not you: set the methods up again only when some
+  // were removed or left.
+  const thenWhat = nothingRemoved
+    ? 'Then tell your administrator.'
+    : 'Then set up your sign-in methods again in Settings, Security, and tell your administrator.';
+  const preheader = def.preheader({});
+
+  const styles = { darkPills: ['sec' as const] };
+  const html = emailShell({
+    title: escapeHtml(subject),
+    preheader,
+    preheaderPad: 6,
+    styles,
+    rows: [
+      brandStrip({ tag: def.tag }),
+      section(
+        '36px 36px 24px',
+        [
+          statusPill({
+            variant: 'sec',
+            label:
+              methodsLeft || nothingRemoved
+                ? 'Security &middot; Recovery code used'
+                : 'Security &middot; Sign-in methods removed',
+          }),
+          headline({ lead: 'A recovery code was used.', turn: 'This is the record of it.' }),
+          bodyText(
+            `${greeting(params.firstName)}— a recovery code was used on your StockPilot account on ${usedAt}. ${outcome}`,
+          ),
+        ].join('\n      '),
+      ),
+      section(
+        '0 36px 20px',
+        banner({
+          tone: 'err',
+          titleHtml: 'Was this not you?',
+          bodyHtml: `If this was not you, reset your password now. ${thenWhat}`,
+        }),
+      ),
+      section(
+        '0 36px 30px',
+        [
+          ctaRow({
+            primary: { label: def.cta, href: escapeHtml(resetUrl) },
+          }),
+          linkFallback(escapeHtml(resetUrl), { marginTop: 12 }),
+        ].join('\n      '),
+      ),
+      footer({
+        kind: 'ess',
+        reasonHtml: `Sent to <span class="ink2" style="color:${L.ink2};text-decoration:underline">${email}</span> because a recovery code was used on this StockPilot account — a core account-safety notice.`,
+        urls,
+      }),
+    ].join('\n    '),
+  });
+  assertEmailWeight(html);
+
+  const text = [
+    `${subject}.`,
+    '',
+    `${greetingText(params.firstName)}— ${used} ${outcome}`,
+    '',
+    `If this was not you, reset your password now: ${resetUrl}`,
+    '',
+    thenWhat,
+  ].join('\n');
+
+  return { id: def.id, subject, preheader, html, text, from: def.from };
+}

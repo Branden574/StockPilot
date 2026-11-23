@@ -197,8 +197,14 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/auth.ts#completePasswordResetAction': {
     kind: 'sign-in',
     reason:
-      'Sets the new password on the recovery session the emailed link created; asks an enrolled account for its code.',
-    writes: ['audit_logs.insert', 'audit_logs.upsert', 'rpc:admin_revoke_user_sessions'],
+      "Sets the new password on the recovery session the emailed link created; asks an enrolled account for its code, or its passkey (stage 5): the passkey's answer spends its challenge, stores the passkey's use (counter, time) and writes the required raise row and the use row. It never seals a bridge again.",
+    writes: [
+      'audit_logs.insert',
+      'audit_logs.upsert',
+      'member_passkeys.update',
+      'rpc:admin_revoke_user_sessions',
+      'rpc:take_passkey_challenge',
+    ],
   },
   'server/actions/team.ts#acceptInviteAction': {
     kind: 'sign-in',
@@ -299,6 +305,10 @@ const REVIEWED: Record<string, Reviewed> = {
       'rpc:consume_mfa_recovery_code',
       'rpc:consume_recovery_code_with_passkeys',
       'rpc:passkey_remove_all',
+      // Stage 5 (answers Q6): a used code ends the account's other sessions;
+      // when Auth's sign-out of them fails, the database ends them, as the
+      // member, keeping this session.
+      'rpc:revoke_my_other_sessions',
     ],
   },
   'server/actions/mfa-recovery.ts#generateMfaRecoveryCodesAction': {
@@ -335,6 +345,13 @@ const REVIEWED: Record<string, Reviewed> = {
       'rpc:passkey_replace_bridge',
       'rpc:take_passkey_challenge',
     ],
+  },
+  // Stage 5: the password reset's passkey prompt.
+  'server/actions/passkeys.ts#startPasswordResetPasskeyAction': {
+    kind: 'sign-in',
+    reason:
+      "The password reset's passkey prompt, on a session an emailed link opened within the hour: a one-use challenge for this account, this session and the reset, nothing else. It never finishes a removal (only the second step's start does).",
+    writes: ['rpc:issue_passkey_challenge'],
   },
   'server/actions/passkeys.ts#startConfirmAddAction': {
     kind: 'set-up',

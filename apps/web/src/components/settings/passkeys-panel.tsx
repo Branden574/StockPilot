@@ -4,6 +4,7 @@ import { browserSupportsWebAuthn, startAuthentication, startRegistration } from 
 import { KeyRound, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -16,6 +17,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  recoveryCodeDoneReportsProblem,
+  recoveryCodeDoneWords,
+} from '@/lib/auth/recovery-code-words';
 import { isControlFlow } from '@/lib/control-flow';
 import {
   consumeMfaRecoveryCodeAction,
@@ -531,6 +536,13 @@ function RecoveryCodeDialog({ onClose }: { onClose: () => void }) {
       const res = await consumeMfaRecoveryCodeAction({ code: code.trim(), password });
       if (!res.ok) return setError(res.error.message);
       setPassword('');
+      // What a used code did (Q6): the other devices signed out, or not.
+      // Words that report a problem are a warning, never a success.
+      if (recoveryCodeDoneReportsProblem(res.data)) {
+        toast.warning(recoveryCodeDoneWords(res.data));
+      } else {
+        toast.success(recoveryCodeDoneWords(res.data));
+      }
       onClose();
       router.refresh();
     } catch (err) {

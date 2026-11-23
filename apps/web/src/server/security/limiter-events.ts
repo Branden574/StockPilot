@@ -108,6 +108,10 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   // their own limits as passkey_checks_paused at the call site.
   'passkey-start:': RECORDED_AT_CALL_SITE,
   'passkey-start-account:': RECORDED_AT_CALL_SITE,
+  // A start on a session that did not sign in with the password (an emailed
+  // link's, the reset's own start among them; stage 5 review, finding 6).
+  'passkey-link-start:': RECORDED_AT_CALL_SITE,
+  'passkey-link-start-account:': RECORDED_AT_CALL_SITE,
   'passkey-finish:': RECORDED_AT_CALL_SITE,
   'passkey-register:': RECORDED_AT_CALL_SITE,
   'passkey-remove:': RECORDED_AT_CALL_SITE,

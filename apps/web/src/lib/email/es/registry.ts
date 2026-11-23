@@ -392,6 +392,40 @@ export const ES_EMAILS: readonly EsEmailDefinition[] = [
     motionAsset: null,
     footer: 'ess',
   }),
+  // A recovery code was used (2026-11-21, answers Q6 and Q7 of the passkey
+  // plan): every authenticator app (and passkey) of the account was removed
+  // and its other sessions ended. Sent to every account that spends a code.
+  // The subject takes two flags only, so nothing a member typed reaches it:
+  // when a method could not be removed (the review of stage 5, finding 1),
+  // or the code removed nothing (REVIEW-STAGE-6B finding 2), it says only
+  // that a code was used.
+  d({
+    id: 'recovery-code-used',
+    family: 'security',
+    name: 'Sign-in Methods Removed',
+    status: 'live',
+    category: 'ess',
+    tag: 'Security',
+    trigger: 'A recovery code was used on the code page or in Settings, Security',
+    to: 'Account holder (current address)',
+    from: 'StockPilot Security <security@stockpilotusa.com>',
+    replyTo: 'Not monitored — support link inside',
+    subject: (p: { methodsLeft?: boolean; nothingRemoved?: boolean } = {}) =>
+      p.methodsLeft || p.nothingRemoved
+        ? 'A recovery code was used on your StockPilot account'
+        : 'Your StockPilot sign-in methods were removed',
+    preheader: () =>
+      'A recovery code was used on your account. If this was not you, reset your password now.',
+    badge: {
+      variant: 'sec',
+      label: (p: { methodsLeft?: boolean; nothingRemoved?: boolean } = {}) =>
+        p.methodsLeft || p.nothingRemoved ? 'Recovery code used' : 'Methods removed',
+    },
+    cta: 'Reset your password',
+    motionNote: 'None',
+    motionAsset: null,
+    footer: 'ess',
+  }),
 
   // ── Invitations ───────────────────────────────────────────────────
   d({
