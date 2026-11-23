@@ -1,7 +1,8 @@
 -- supabase/tests/0477_platform_security_briefing.test.sql
--- Proves migration 0477: the five read functions behind the platform
+-- Proves migration 0477: the six read functions behind the platform
 -- console's security briefing.
 --   public._security_briefing_members(uuid)                       private
+--   public._security_briefing_change_counts(uuid)                 private: the week's counting rules, once
 --   public.platform_security_briefing_members()                   every organization's member state
 --   public.platform_security_briefing_events()                    events, this week and last
 --   public.platform_security_briefing_changes()                   admin and sign-in policy changes
@@ -9,8 +10,8 @@
 --
 -- WHAT IS WORTH PINNING
 --   1. The grant is the whole control. anon and authenticated hold EXECUTE on
---      none of the five; service_role on the four public ones and nothing
---      else; nobody on the private one. No body names any of the four words
+--      none of the six; service_role on the four public ones and nothing
+--      else; nobody on the two private ones. No body names any of the four words
 --      security_invariants INV-25 accepts as a gate, so if EXECUTE ever
 --      reaches authenticated INV-25 names the function: shown here by
 --      granting it inside a savepoint. With that grant in place the second
@@ -32,13 +33,28 @@
 --      kept apart, the oldest event time.
 --   8. The admin-change rules: promoted, demoted or removed, ownership moved
 --      once per transfer, never as an admin added or removed and never set
---      aside for an invitation; the invitation that wins over a promotion
---      or demotion of the same member on the same UTC day; both shapes of a
---      role change; the sign-in policy loosened, tightened or neither.
+--      aside for an invitation; both shapes of a role change; the sign-in
+--      policy loosened, tightened or neither.
 --   9. Every object has exactly the documented keys, so no session id,
 --      address, device or factor detail can appear; before and after are cut
 --      down to four known keys; the caps (500 organizations, 200 people, 200
 --      changes) and their flags.
+--  10. The counting rules are written once: one organization's detail carries
+--      the very object the read of all organizations gives for it (zeros
+--      when that read does not list it), and its numbers stay exact when
+--      its list of rows is cut short.
+--  11. An invitation acceptance seen twice is not a promotion or a demotion,
+--      and nothing else is set aside: the same member, the same UTC day
+--      whatever the session's time zone, the role the invitation gave, and
+--      recorded no later than the acceptance. A member named only by a
+--      membership id is looked up in the row's own organization.
+--  12. Admins added counts people, not rows: whoever joined this week as an
+--      admin or owner or was promoted this week, each once for an
+--      organization; an ownership move adds nobody.
+--  13. A member's name is cut at 200 characters, and a value of an audit row
+--      that is not text is not returned.
+--  14. 7, 14 and 30 days are 168, 336 and 720 hours, also in a session whose
+--      zone changed its clocks inside the window.
 --
 -- now() is fixed for the whole transaction and every function uses it, so
 -- every time below is computed from now() and no assertion depends on the
@@ -48,7 +64,7 @@
 
 begin;
 
-select plan(80);
+select plan(104);
 
 \set orgA '\'a0477000-0000-0000-0000-0000000000a1\''
 \set orgB '\'a0477000-0000-0000-0000-0000000000b1\''
@@ -171,6 +187,28 @@ returns void language sql as $$
     'entity_type', 'organization', 'entity_id', p_org, 'warehouse_id', null,
     'before', jsonb_build_object('mfa_policy', p_before), 'after', jsonb_build_object('mfa_policy', p_after),
     'reason', null, 'source', 'database', 'made_as', 'authenticated', 'aal', 'aal2'));
+$$;
+-- An invitation accepted, as the app records it: by the member, with the
+-- role the invitation gave.
+create function pg_temp.invite(p_org uuid, p_user uuid, p_role text, p_at timestamptz)
+returns void language sql as $$
+  select pg_temp.audit(p_org, p_user, 'user.invite.accepted', p_at, jsonb_build_object(
+    'invite_id', gen_random_uuid(), 'role', p_role, 'warehouse_id', null, 'charter_id', null,
+    'charter_ids', '[]'::jsonb, 'all_warehouses', false));
+$$;
+-- One organization's counts of the week as its detail carries them, and
+-- the object expected: promoted, demoted or removed, ownership moved, the
+-- policy loosened, tightened, other, and admins added.
+create function pg_temp.week(p_org uuid) returns jsonb language sql as $$
+  select public.platform_security_briefing_for_organization(p_org) -> 'changes_this_week';
+$$;
+create function pg_temp.counts(p_org uuid, p_promoted int, p_demoted int, p_moved int, p_loosened int,
+                               p_tightened int, p_other int, p_added int)
+returns jsonb language sql as $$
+  select jsonb_build_object('organization_id', p_org,
+    'admins_promoted', p_promoted, 'admins_demoted_or_removed', p_demoted, 'ownership_moved', p_moved,
+    'sign_in_policy_loosened', p_loosened, 'sign_in_policy_tightened', p_tightened,
+    'sign_in_policy_changed_other', p_other, 'admins_added_this_week', p_added);
 $$;
 create function pg_temp.alert(p_user uuid, p_status text, p_resolved timestamptz)
 returns void language sql as $$
@@ -452,25 +490,30 @@ select is(
   (select array_agg(p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ') ' || pg_get_function_result(p.oid)
                     order by p.proname)
      from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like '%security\_briefing%'),
-  array['_security_briefing_members(p_organization_id uuid) TABLE(user_id uuid, role text, full_name text, email text, has_second_step boolean, sign_ins integer, idle_sign_ins integer, oldest_idle_at timestamp with time zone)',
+  array['_security_briefing_change_counts(p_organization_id uuid) TABLE(organization_id uuid, total bigint, counts jsonb)',
+        '_security_briefing_members(p_organization_id uuid) TABLE(user_id uuid, role text, full_name text, email text, has_second_step boolean, sign_ins integer, idle_sign_ins integer, oldest_idle_at timestamp with time zone)',
         'platform_security_briefing_changes() jsonb',
         'platform_security_briefing_events() jsonb',
         'platform_security_briefing_for_organization(p_organization_id uuid) jsonb',
         'platform_security_briefing_members() jsonb'],
-  '0477/1: exactly the five functions, with the designed arguments and results');
+  '0477/1: exactly the six functions, with the designed arguments and results');
 select is(
   (select array_agg(p.proname || ':' || l.lanname || ':' || p.prosecdef::text || ':' || p.provolatile::text || ':'
                     || array_to_string(p.proconfig, ',') order by p.proname)
      from pg_proc p join pg_language l on l.oid = p.prolang
     where p.pronamespace = 'public'::regnamespace and p.proname like '%security\_briefing%'),
-  array['_security_briefing_members:plpgsql:false:s:search_path=""',
+  array['_security_briefing_change_counts:plpgsql:false:s:search_path=""',
+        '_security_briefing_members:plpgsql:false:s:search_path=""',
         'platform_security_briefing_changes:plpgsql:true:s:search_path=""',
         'platform_security_briefing_events:plpgsql:true:s:search_path=""',
         'platform_security_briefing_for_organization:plpgsql:true:s:search_path=""',
         'platform_security_briefing_members:plpgsql:true:s:search_path=""'],
-  '0477/2: all plpgsql and STABLE with an empty search_path and no other setting; the four public ones SECURITY DEFINER, the private one SECURITY INVOKER');
-select is(pg_temp.grants_of('public._security_briefing_members(uuid)'), array[]::text[],
-  '0477/3: the private function has no grant to any role');
+  '0477/2: all plpgsql and STABLE with an empty search_path and no other setting; the four public ones SECURITY DEFINER, the two private ones SECURITY INVOKER');
+select is(
+  array[array_to_string(pg_temp.grants_of('public._security_briefing_members(uuid)'), ' '),
+        array_to_string(pg_temp.grants_of('public._security_briefing_change_counts(uuid)'), ' ')],
+  array['', ''],
+  '0477/3: the two private functions have no grant to any role');
 select is(
   array[array_to_string(pg_temp.grants_of('public.platform_security_briefing_members()'), ' '),
         array_to_string(pg_temp.grants_of('public.platform_security_briefing_events()'), ' '),
@@ -481,17 +524,19 @@ select is(
 select is(
   (select array_agg(has_function_privilege(r.role, f.fn, 'execute') order by f.n, r.n)
      from unnest(array['public._security_briefing_members(uuid)',
+                       'public._security_briefing_change_counts(uuid)',
                        'public.platform_security_briefing_members()',
                        'public.platform_security_briefing_events()',
                        'public.platform_security_briefing_changes()',
                        'public.platform_security_briefing_for_organization(uuid)']) with ordinality as f(fn, n),
           unnest(array['anon', 'authenticated', 'service_role']) with ordinality as r(role, n)),
   array[false, false, false,
+        false, false, false,
         false, false, true,
         false, false, true,
         false, false, true,
         false, false, true],
-  '0477/5: anon and authenticated may execute none of the five; service_role the four public ones and not the private one');
+  '0477/5: anon and authenticated may execute none of the six; service_role the four public ones and neither private one');
 select is(
   (select count(*)::int from pg_proc p
     where p.pronamespace = 'public'::regnamespace and p.proname like '%security\_briefing%'
@@ -509,7 +554,7 @@ select is(
   (select count(*)::int from pg_proc p
     where p.pronamespace = 'public'::regnamespace and p.proname like '%security\_briefing%'
       and p.prosrc !~* '\m(insert|update|delete|merge|truncate)\M'),
-  5,
+  6,
   '0477/9: no body holds a write statement: none of the five write verbs appears as a word');
 select is(
   array[(select string_agg(m[1], ',' order by m[1])
@@ -523,49 +568,55 @@ select is(
 
 -- ── 2. Who may call ─────────────────────────────────────────────────────────
 -- An owner of Example Academy holding the second step, and a signed-out
--- caller: refused by the grant, by name, on all five.
+-- caller: refused by the grant, by name, on all six.
 set local role authenticated;
 select set_config('request.jwt.claims',
   json_build_object('sub', 'a0477000-0000-0000-0000-000000000001', 'role', 'authenticated', 'aal', 'aal2')::text, true);
 select is(
   array[pg_temp.refusal($$ select * from public._security_briefing_members('a0477000-0000-0000-0000-0000000000a1') $$),
+        pg_temp.refusal($$ select * from public._security_briefing_change_counts('a0477000-0000-0000-0000-0000000000a1') $$),
         pg_temp.refusal($$ select public.platform_security_briefing_members() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_events() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_changes() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_for_organization('a0477000-0000-0000-0000-0000000000a1') $$)],
   array['42501|permission denied for function _security_briefing_members',
+        '42501|permission denied for function _security_briefing_change_counts',
         '42501|permission denied for function platform_security_briefing_members',
         '42501|permission denied for function platform_security_briefing_events',
         '42501|permission denied for function platform_security_briefing_changes',
         '42501|permission denied for function platform_security_briefing_for_organization'],
-  '0477/11: a signed-in member, even an owner holding the second step, can call none of the five: no EXECUTE');
+  '0477/11: a signed-in member, even an owner holding the second step, can call none of the six: no EXECUTE');
 reset role;
 set local role anon;
 select set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
 select is(
   array[pg_temp.refusal($$ select * from public._security_briefing_members('a0477000-0000-0000-0000-0000000000a1') $$),
+        pg_temp.refusal($$ select * from public._security_briefing_change_counts('a0477000-0000-0000-0000-0000000000a1') $$),
         pg_temp.refusal($$ select public.platform_security_briefing_members() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_events() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_changes() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_for_organization('a0477000-0000-0000-0000-0000000000a1') $$)],
   array['42501|permission denied for function _security_briefing_members',
+        '42501|permission denied for function _security_briefing_change_counts',
         '42501|permission denied for function platform_security_briefing_members',
         '42501|permission denied for function platform_security_briefing_events',
         '42501|permission denied for function platform_security_briefing_changes',
         '42501|permission denied for function platform_security_briefing_for_organization'],
-  '0477/12: a signed-out caller can call none of the five: no EXECUTE');
+  '0477/12: a signed-out caller can call none of the six: no EXECUTE');
 reset role;
 select set_config('request.jwt.claims', '', true);
 
 -- If a grant to the member roles ever slipped in: INV-25 names each of the
--- four, and the second lock in each body still refuses the call. Undone by
--- the savepoint.
+-- four, and the second lock in each body still refuses the call; the
+-- private count carries the same lock, the private member read ends at the
+-- auth tables. Undone by the savepoint.
 savepoint slipped_grant;
 grant execute on function public.platform_security_briefing_members() to authenticated, anon;
 grant execute on function public.platform_security_briefing_events() to authenticated, anon;
 grant execute on function public.platform_security_briefing_changes() to authenticated, anon;
 grant execute on function public.platform_security_briefing_for_organization(uuid) to authenticated, anon;
 grant execute on function public._security_briefing_members(uuid) to authenticated, anon;
+grant execute on function public._security_briefing_change_counts(uuid) to authenticated, anon;
 select is(pg_temp.inv25_names(),
   'platform_security_briefing_changes, platform_security_briefing_events, '
   'platform_security_briefing_for_organization, platform_security_briefing_members',
@@ -578,9 +629,11 @@ select is(
         pg_temp.refusal($$ select public.platform_security_briefing_events() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_changes() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_for_organization('a0477000-0000-0000-0000-0000000000a1') $$),
-        pg_temp.refusal($$ select public.platform_security_briefing_for_organization(null) $$)],
-  array_fill('42501|platform_security_briefing_not_allowed'::text, array[5]),
-  '0477/14: and even then the second lock refuses a signed-in owner on each of the four (before the null check too)');
+        pg_temp.refusal($$ select public.platform_security_briefing_for_organization(null) $$),
+        pg_temp.refusal($$ select * from public._security_briefing_change_counts('a0477000-0000-0000-0000-0000000000a1') $$),
+        pg_temp.refusal($$ select * from public._security_briefing_change_counts(null) $$)],
+  array_fill('42501|platform_security_briefing_not_allowed'::text, array[7]),
+  '0477/14: and even then the second lock refuses a signed-in owner on each of the four (before the null check too), and on the private count, which holds the same lock');
 select ok(
   pg_temp.refusal($$ select * from public._security_briefing_members('a0477000-0000-0000-0000-0000000000a1') $$)
     ~ '^42501\|permission denied for table (sessions|mfa_factors)$',
@@ -592,9 +645,10 @@ select is(
   array[pg_temp.refusal($$ select public.platform_security_briefing_members() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_events() $$),
         pg_temp.refusal($$ select public.platform_security_briefing_changes() $$),
-        pg_temp.refusal($$ select public.platform_security_briefing_for_organization('a0477000-0000-0000-0000-0000000000a1') $$)],
-  array_fill('42501|platform_security_briefing_not_allowed'::text, array[4]),
-  '0477/16: the second lock refuses a signed-out caller on each of the four as well');
+        pg_temp.refusal($$ select public.platform_security_briefing_for_organization('a0477000-0000-0000-0000-0000000000a1') $$),
+        pg_temp.refusal($$ select * from public._security_briefing_change_counts('a0477000-0000-0000-0000-0000000000a1') $$)],
+  array_fill('42501|platform_security_briefing_not_allowed'::text, array[5]),
+  '0477/16: the second lock refuses a signed-out caller on each of the four as well, and on the private count');
 reset role;
 select set_config('request.jwt.claims', '', true);
 rollback to savepoint slipped_grant;
@@ -617,9 +671,11 @@ select is(public.platform_security_briefing_changes(), :'j_changes'::jsonb,
 select is(public.platform_security_briefing_for_organization('a0477000-0000-0000-0000-0000000000a1'), :'j_a'::jsonb,
   '0477/21: service_role reads one organization in detail');
 select is(
-  pg_temp.refusal($$ select * from public._security_briefing_members('a0477000-0000-0000-0000-0000000000a1') $$),
-  '42501|permission denied for function _security_briefing_members',
-  '0477/22: service_role cannot call the private function');
+  array[pg_temp.refusal($$ select * from public._security_briefing_members('a0477000-0000-0000-0000-0000000000a1') $$),
+        pg_temp.refusal($$ select * from public._security_briefing_change_counts('a0477000-0000-0000-0000-0000000000a1') $$)],
+  array['42501|permission denied for function _security_briefing_members',
+        '42501|permission denied for function _security_briefing_change_counts'],
+  '0477/22: service_role cannot call either private function');
 reset role;
 
 -- ── 4. The private member read ──────────────────────────────────────────────
@@ -719,15 +775,15 @@ select is(
 
 -- ── 6. One organization in detail ───────────────────────────────────────────
 select is(pg_temp.keys_of((select da from ans)),
-  array['admins', 'admins_joined_this_week', 'admins_without_second_step', 'changes', 'changes_truncated',
-        'idle_after_days', 'idle_sign_ins', 'members', 'members_with_idle_sign_ins', 'mfa_policy', 'name',
+  array['admins', 'admins_joined_this_week', 'admins_without_second_step', 'changes', 'changes_this_week',
+        'changes_truncated', 'idle_after_days', 'idle_sign_ins', 'members', 'members_with_idle_sign_ins', 'mfa_policy', 'name',
         'organization_id', 'people', 'people_truncated', 'sign_ins_reported_this_week', 'without_second_step'],
-  '0477/36: the detail has exactly its sixteen keys');
+  '0477/36: the detail has exactly its seventeen keys');
 select is(
-  (select array[ans.da - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days',
-                ans.db - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days',
-                ans.dc - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days',
-                ans.dz - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days']
+  (select array[ans.da - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days' - 'changes_this_week',
+                ans.db - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days' - 'changes_this_week',
+                ans.dc - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days' - 'changes_this_week',
+                ans.dz - 'people' - 'people_truncated' - 'changes' - 'changes_truncated' - 'idle_after_days' - 'changes_this_week']
      from ans),
   (select array[pg_temp.org_of(ans.members, :orgA), pg_temp.org_of(ans.members, :orgB),
                 pg_temp.org_of(ans.members, :orgC), pg_temp.org_of(ans.members, :orgZ)]
@@ -834,13 +890,15 @@ select is(pg_temp.keys_of((select changes from ans)),
 select is(pg_temp.org_of((select changes from ans), :orgA),
   jsonb_build_object('organization_id', :orgA,
     'admins_promoted', 4, 'admins_demoted_or_removed', 3, 'ownership_moved', 2,
-    'sign_in_policy_loosened', 2, 'sign_in_policy_tightened', 3, 'sign_in_policy_changed_other', 3),
-  '0477/51: Example Academy this week. Promoted 4: the database''s row, the app''s older row, the promotion whose invitation fell on the next UTC day, and the one beside an "already a member" press; not the one 8 days ago, not the one an invitation of the same member and day explains, not the new owner. Demoted or removed 3: one admin made staff, an admin removed, an owner removed; not a staff member removed, a deleted account or the previous owner. Ownership moved 2: the transfer''s two rows once, and a lone owner row. Policy: loosened 2, tightened 3 (one exactly 7 days ago; not a microsecond older), other 3 (an unknown value, no before, the same value)');
+    'sign_in_policy_loosened', 2, 'sign_in_policy_tightened', 3, 'sign_in_policy_changed_other', 3,
+    'admins_added_this_week', 4),
+  '0477/51: Example Academy this week. Promoted 4: the database''s row, the app''s older row, the promotion whose invitation fell on the next UTC day, and the one beside an "already a member" press; not the one 8 days ago, not the one an invitation of the same member and day explains, not the new owner. Demoted or removed 3: one admin made staff, an admin removed, an owner removed; not a staff member removed, a deleted account or the previous owner. Ownership moved 2: the transfer''s two rows once, and a lone owner row. Policy: loosened 2, tightened 3 (one exactly 7 days ago; not a microsecond older), other 3 (an unknown value, no before, the same value). Admins added 4, people not rows: the two admins who joined this week (three days ago and exactly seven) are two of the four members promoted, so each is one');
 select is(pg_temp.org_of((select changes from ans), :orgB),
   jsonb_build_object('organization_id', :orgB,
     'admins_promoted', 1, 'admins_demoted_or_removed', 0, 'ownership_moved', 0,
-    'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0),
-  '0477/52: Example Charter: its promotion counts although the member accepted another organization''s invitation that day');
+    'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0,
+    'admins_added_this_week', 2),
+  '0477/52: Example Charter: its promotion counts although the member accepted another organization''s invitation that day; admins added 2, the member promoted and the admin who joined a day ago (who is staff in Example Academy and adds nothing there)');
 select is(
   (select array_agg(e ->> 'organization_id' order by n)
      from ans, jsonb_array_elements(ans.changes -> 'organizations') with ordinality as t(e, n)),
@@ -861,11 +919,13 @@ select is(
         pg_temp.org_of(public.platform_security_briefing_changes(), :orgC)],
   array[jsonb_build_object('organization_id', :orgB,
           'admins_promoted', 2, 'admins_demoted_or_removed', 1, 'ownership_moved', 0,
-          'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0),
+          'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0,
+          'admins_added_this_week', 1),
         jsonb_build_object('organization_id', :orgC,
           'admins_promoted', 0, 'admins_demoted_or_removed', 0, 'ownership_moved', 0,
-          'sign_in_policy_loosened', 1, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0)],
-  '0477/55: a real promotion, a real demotion and a real loosening of the policy, recorded by the database''s own triggers, are counted');
+          'sign_in_policy_loosened', 1, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0,
+          'admins_added_this_week', 0)],
+  '0477/55: a real promotion, a real demotion and a real loosening of the policy, recorded by the database''s own triggers, are counted; the member promoted twice this week is one admin added, and the admin who joined this week and was demoted is none');
 select is(
   (select jsonb_agg(c - 'entity_id' order by c ->> 'target_user_id')
      from jsonb_array_elements(public.platform_security_briefing_for_organization(:orgB) -> 'changes') c
@@ -1107,46 +1167,389 @@ select is(
   '0477/78: with 502 organizations that have a change the changes read lists the 500 with the most and says it is truncated');
 rollback to savepoint org_cap;
 
--- An ownership move is never set aside for an invitation. Example
--- Institute: a member accepts an invitation and, the same UTC day, becomes
--- the owner while the previous owner (who also accepted one that day) steps
--- down: the two rows of one transfer. Example Empty: a lone row makes a
--- member the owner on the day of their invitation. Each is one move, and
--- neither is an admin promoted or demoted.
+-- An ownership move is never set aside for an invitation, even in the
+-- very shape of an acceptance seen twice (the same member and UTC day, the
+-- invitation for the role the row ends at, recorded a second after it).
+-- Example Institute: a member becomes the owner while the previous owner
+-- steps down, the two rows of one transfer, and each accepts such an
+-- invitation. Example Empty: a lone row makes a member the owner. Each is
+-- one move, and neither is an admin promoted or demoted.
 savepoint owner_and_invite;
-select pg_temp.audit(:orgC, :staffB, 'user.invite.accepted',
-  date_trunc('day', now() - interval '2 days', 'UTC') + interval '9 hours',
-  jsonb_build_object('invite_id', gen_random_uuid(), 'role', 'admin'));
-select pg_temp.audit(:orgC, :ownerC, 'user.invite.accepted',
-  date_trunc('day', now() - interval '2 days', 'UTC') + interval '9 hours 30 minutes',
-  jsonb_build_object('invite_id', gen_random_uuid(), 'role', 'admin'));
 select pg_temp.role_row(:orgC, gen_random_uuid(), :staffB, 'admin', 'owner',
   date_trunc('day', now() - interval '2 days', 'UTC') + interval '13 hours', null, 'service_role');
 select pg_temp.role_row(:orgC, gen_random_uuid(), :ownerC, 'owner', 'admin',
   date_trunc('day', now() - interval '2 days', 'UTC') + interval '13 hours', null, 'service_role');
-select pg_temp.audit(:orgZ, :staffNone, 'user.invite.accepted',
-  date_trunc('day', now() - interval '2 days', 'UTC') + interval '9 hours',
-  jsonb_build_object('invite_id', gen_random_uuid(), 'role', 'staff'));
+select pg_temp.invite(:orgC, :staffB, 'owner',
+  date_trunc('day', now() - interval '2 days', 'UTC') + interval '13 hours 1 second');
+select pg_temp.invite(:orgC, :ownerC, 'admin',
+  date_trunc('day', now() - interval '2 days', 'UTC') + interval '13 hours 1 second');
 select pg_temp.role_row(:orgZ, gen_random_uuid(), :staffNone, 'staff', 'owner',
   date_trunc('day', now() - interval '2 days', 'UTC') + interval '14 hours', null, 'direct');
+select pg_temp.invite(:orgZ, :staffNone, 'owner',
+  date_trunc('day', now() - interval '2 days', 'UTC') + interval '14 hours 1 second');
 select is(
   array[pg_temp.org_of(public.platform_security_briefing_changes(), :orgC),
         pg_temp.org_of(public.platform_security_briefing_changes(), :orgZ)],
   array[jsonb_build_object('organization_id', :orgC,
           'admins_promoted', 0, 'admins_demoted_or_removed', 0, 'ownership_moved', 1,
-          'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0),
+          'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0,
+          'admins_added_this_week', 0),
         jsonb_build_object('organization_id', :orgZ,
           'admins_promoted', 0, 'admins_demoted_or_removed', 0, 'ownership_moved', 1,
-          'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0)],
-  '0477/79: a change with owner on either side is always an ownership move, also on the day the member accepted an invitation: the transfer counts once and a lone owner row counts once, with nobody promoted or demoted');
+          'sign_in_policy_loosened', 0, 'sign_in_policy_tightened', 0, 'sign_in_policy_changed_other', 0,
+          'admins_added_this_week', 0)],
+  '0477/79: a change with owner on either side is always an ownership move, also when the member accepts, a second later, an invitation for the role it ends at: the transfer counts once and a lone owner row counts once, with nobody promoted or demoted');
 rollback to savepoint owner_and_invite;
+
+-- ── 11. The week's counts, written once ─────────────────────────────────────
+select is(
+  array[(select count(*) from public._security_briefing_change_counts(:orgA)),
+        (select count(*) from public._security_briefing_change_counts(null)) - (select count(*) from public.organizations),
+        (select count(*) from public._security_briefing_change_counts('a0477000-0000-0000-0000-00000000dead'))],
+  array[1, 0, 0]::bigint[],
+  '0477/80: the private count gives one row for the organization asked for, one for every organization when none is named, and none for an id that names no organization');
+select is(
+  (select array[(a.organization_id = :orgA)::text, a.total::text, (a.counts = pg_temp.org_of(ans.changes, :orgA))::text,
+                (z.organization_id = :orgZ)::text, z.total::text,
+                (z.counts = pg_temp.counts(:orgZ, 0, 0, 0, 0, 0, 0, 0))::text]
+     from public._security_briefing_change_counts(:orgA) a, public._security_briefing_change_counts(:orgZ) z, ans),
+  array['true', '21', 'true', 'true', '0', 'true'],
+  '0477/81: its counts are the object the changes read returns and its total is the sum of the seven numbers; an organization with nothing this week has a row of zeros');
+select is(
+  (select array[ans.da -> 'changes_this_week', ans.db -> 'changes_this_week',
+                ans.dc -> 'changes_this_week', ans.dz -> 'changes_this_week'] from ans),
+  (select array[pg_temp.org_of(ans.changes, :orgA), pg_temp.org_of(ans.changes, :orgB),
+                pg_temp.counts(:orgC, 0, 0, 0, 0, 0, 0, 0), pg_temp.counts(:orgZ, 0, 0, 0, 0, 0, 0, 0)] from ans),
+  '0477/82: one organization''s detail carries in changes_this_week the very object the read of all organizations gives for it, and all zeros (with exactly the same keys) when that read does not list it');
+select is(
+  array[(select count(*)::int
+           from regexp_matches((select p.prosrc from pg_proc p
+                                 where p.oid = 'public._security_briefing_change_counts(uuid)'::regprocedure),
+                               'public\.audit_logs', 'g')),
+        (select count(*)::int from pg_proc p
+          where p.pronamespace = 'public'::regnamespace and p.proname like '%security\_briefing%'
+            and p.prosrc ~ 'admins_promoted'),
+        (select count(*)::int from pg_proc p
+          where p.oid in ('public.platform_security_briefing_changes()'::regprocedure,
+                          'public.platform_security_briefing_for_organization(uuid)'::regprocedure)
+            and p.prosrc ~ 'public\._security_briefing_change_counts\(')],
+  array[1, 1, 2],
+  '0477/83: the counting rules are written once: the private count reads the audit log in one place (one pass over the week''s rows, nothing read again for a row), it alone names the counts, and both public reads call it');
+select is(
+  (select count(*)::int from pg_proc p
+    where p.pronamespace = 'public'::regnamespace and p.proname like '%security\_briefing%'
+      and p.prosrc ~* 'interval\s+''[^'']*(day|week|month|year)'),
+  0,
+  '0477/84: no body measures its windows in days: 7, 14 and 30 days are written as 168, 336 and 720 hours');
+
+-- ── 12. An invitation and the role change it explains ───────────────────────
+-- D is the UTC day that holds now - 72 hours; d(h) is h hours into it.
+-- Eight more organizations, each with one case. The acceptance of an
+-- invitation onto a row that is not accepted yet writes the role first (the
+-- database's row) and its own row after: only that pair is one event.
+create function pg_temp.d(p_hours numeric) returns timestamptz language sql as $$
+  select date_trunc('day', now() - interval '72 hours', 'UTC') + make_interval(secs => p_hours * 3600);
+$$;
+\set e1 '\'a0477000-0000-0000-0003-000000000001\''
+\set e2 '\'a0477000-0000-0000-0003-000000000002\''
+\set e3 '\'a0477000-0000-0000-0003-000000000003\''
+\set e4 '\'a0477000-0000-0000-0003-000000000004\''
+\set e5 '\'a0477000-0000-0000-0003-000000000005\''
+\set e6 '\'a0477000-0000-0000-0003-000000000006\''
+\set e7 '\'a0477000-0000-0000-0003-000000000007\''
+\set e8 '\'a0477000-0000-0000-0003-000000000008\''
+\set x1 '\'a0477000-0000-0000-0004-000000000001\''
+\set x2 '\'a0477000-0000-0000-0004-000000000002\''
+\set x3 '\'a0477000-0000-0000-0004-000000000003\''
+\set x4 '\'a0477000-0000-0000-0004-000000000004\''
+\set x5 '\'a0477000-0000-0000-0004-000000000005\''
+\set x6 '\'a0477000-0000-0000-0004-000000000006\''
+\set x7 '\'a0477000-0000-0000-0004-000000000007\''
+\set x8 '\'a0477000-0000-0000-0004-000000000008\''
+\set x9 '\'a0477000-0000-0000-0004-000000000009\''
+\set mX9 '\'a0477000-0000-0000-0005-000000000009\''
+savepoint invitation_rules;
+insert into public.organizations (id, name, slug, mfa_policy)
+select ('a0477000-0000-0000-0003-' || lpad(g::text, 12, '0'))::uuid, 'Example Annex ' || g,
+       'a0477000-example-annex-' || g, 'optional'
+  from generate_series(1, 8) g;
+insert into auth.users (id, email, raw_user_meta_data)
+select ('a0477000-0000-0000-0004-' || lpad(g::text, 12, '0'))::uuid, 'annex-' || g || '@example.com',
+       jsonb_build_object('full_name', 'Briefing Annex ' || g)
+  from generate_series(1, 9) g;
+-- Annex 1: the acceptance seen twice, as a promotion (the row was viewer,
+-- the invitation is for admin) and as a demotion (the row was admin, the
+-- invitation is for staff).
+select pg_temp.role_row(:e1, gen_random_uuid(), :x1, 'viewer', 'admin', pg_temp.d(9), null, 'service_role');
+select pg_temp.invite(:e1, :x1, 'admin', pg_temp.d(9) + interval '1 second');
+select pg_temp.role_row(:e1, gen_random_uuid(), :x2, 'admin', 'staff', pg_temp.d(10), null, 'service_role');
+select pg_temp.invite(:e1, :x2, 'staff', pg_temp.d(10) + interval '1 second');
+-- Annex 2: joined as staff in the morning, made an admin that afternoon.
+select pg_temp.invite(:e2, :x3, 'staff', pg_temp.d(9));
+select pg_temp.role_row(:e2, gen_random_uuid(), :x3, 'staff', 'admin', pg_temp.d(15), :ownerA, 'authenticated');
+-- Annex 3: joined as staff, made an admin, made staff again, all that day.
+-- The last row ends at the role the invitation gave, after the acceptance.
+select pg_temp.invite(:e3, :x4, 'staff', pg_temp.d(9));
+select pg_temp.role_row(:e3, gen_random_uuid(), :x4, 'staff', 'admin', pg_temp.d(15), :ownerA, 'authenticated');
+select pg_temp.role_row(:e3, gen_random_uuid(), :x4, 'admin', 'staff', pg_temp.d(18), :ownerA, 'authenticated');
+-- Annex 4: joined as an admin, made staff, made an admin again that day.
+select pg_temp.invite(:e4, :x5, 'admin', pg_temp.d(9));
+select pg_temp.role_row(:e4, gen_random_uuid(), :x5, 'admin', 'staff', pg_temp.d(12), :ownerA, 'authenticated');
+select pg_temp.role_row(:e4, gen_random_uuid(), :x5, 'staff', 'admin', pg_temp.d(15), :ownerA, 'authenticated');
+-- Annex 5: a promotion a second before the member accepts an invitation
+-- for another role; and a promotion a second before an "already a member"
+-- press, which changed nothing, even were its row to carry the role.
+select pg_temp.role_row(:e5, gen_random_uuid(), :x6, 'staff', 'admin', pg_temp.d(9), :ownerA, 'authenticated');
+select pg_temp.invite(:e5, :x6, 'staff', pg_temp.d(9) + interval '1 second');
+select pg_temp.role_row(:e5, gen_random_uuid(), :x1, 'viewer', 'admin', pg_temp.d(11), :ownerA, 'authenticated');
+select pg_temp.audit(:e5, :x1, 'user.invite.accepted', pg_temp.d(11) + interval '1 second', jsonb_build_object(
+  'invite_id', gen_random_uuid(), 'already_member', true, 'invite_role', 'admin', 'member_role', 'viewer',
+  'role', 'admin'));
+-- Annex 6 and 7: the day is the UTC day. 07:00 and 09:00 UTC are one UTC
+-- day and two days in a zone eight hours behind; 23:00 and 01:00 UTC are
+-- two UTC days and one day there.
+select pg_temp.role_row(:e6, gen_random_uuid(), :x7, 'viewer', 'admin', pg_temp.d(7), null, 'service_role');
+select pg_temp.invite(:e6, :x7, 'admin', pg_temp.d(9));
+select pg_temp.role_row(:e7, gen_random_uuid(), :x8, 'viewer', 'admin', pg_temp.d(23), null, 'service_role');
+select pg_temp.invite(:e7, :x8, 'admin', pg_temp.d(25));
+-- Annex 8: the older shape, which names a membership and no member. One row
+-- names a membership of Example Charter, whose member accepts an invitation
+-- to Annex 8 a second later: a membership is never looked up in another
+-- organization, so the member is not known and the promotion counts (as one
+-- admin added). The other names a membership of Annex 8 itself.
+insert into public.organization_members (id, organization_id, user_id, role, accepted_at)
+values (:mX9, :e8, :x9, 'admin', now() - interval '60 days');
+select pg_temp.audit(:e8, null, 'user.role.changed', pg_temp.d(9), jsonb_build_object(
+  'entity_type', 'organization_member', 'entity_id', :mStaffB,
+  'before', jsonb_build_object('role', 'manager'), 'after', jsonb_build_object('role', 'admin'), 'reason', null));
+select pg_temp.invite(:e8, :staffB, 'admin', pg_temp.d(9) + interval '1 second');
+select pg_temp.audit(:e8, null, 'user.role.changed', pg_temp.d(10), jsonb_build_object(
+  'entity_type', 'organization_member', 'entity_id', :mX9,
+  'before', jsonb_build_object('role', 'viewer'), 'after', jsonb_build_object('role', 'admin'), 'reason', null));
+select pg_temp.invite(:e8, :x9, 'admin', pg_temp.d(10) + interval '1 second');
+
+select is(pg_temp.week(:e1), pg_temp.counts(:e1, 0, 0, 0, 0, 0, 0, 0),
+  '0477/85: an invitation acceptance seen twice is not counted: a role change of the member, on the same UTC day, to the role the invitation gave, recorded just before the acceptance, is neither a promotion nor a demotion');
+select is(pg_temp.week(:e2), pg_temp.counts(:e2, 1, 0, 0, 0, 0, 0, 1),
+  '0477/86: a member who joined as staff and was made an admin later the same day is one admin promoted');
+select is(
+  array[pg_temp.week(:e3), pg_temp.week(:e4)],
+  array[pg_temp.counts(:e3, 1, 1, 0, 0, 0, 0, 1), pg_temp.counts(:e4, 1, 1, 0, 0, 0, 0, 1)],
+  '0477/87: a change recorded after the acceptance is counted even when it ends at the role the invitation gave: promoted and made staff again on the joining day is one promotion and one demotion, and so is an invited admin made staff and then admin again');
+select is(pg_temp.week(:e5), pg_temp.counts(:e5, 2, 0, 0, 0, 0, 0, 2),
+  '0477/88: an invitation for another role explains nothing, and neither does an "already a member" press: a promotion recorded just before the member accepts an invitation for staff is counted, and so is one recorded just before such a press, whatever its row carries');
+select is(
+  array[pg_temp.week(:e6), pg_temp.week(:e7)],
+  array[pg_temp.counts(:e6, 0, 0, 0, 0, 0, 0, 0), pg_temp.counts(:e7, 1, 0, 0, 0, 0, 0, 1)],
+  '0477/89: the day is the UTC day: 07:00 and 09:00 UTC are one acceptance; 23:00 and 01:00 UTC the next day are not');
+set local time zone 'Etc/GMT+8';
+select is(
+  array[pg_temp.week(:e6), pg_temp.week(:e7)],
+  array[pg_temp.counts(:e6, 0, 0, 0, 0, 0, 0, 0), pg_temp.counts(:e7, 1, 0, 0, 0, 0, 0, 1)],
+  '0477/90: and the same in a session whose zone is eight hours behind UTC, where those are two days and one day');
+reset time zone;
+select is(pg_temp.week(:e8), pg_temp.counts(:e8, 1, 0, 0, 0, 0, 0, 1),
+  '0477/91: a member named only by a membership id is looked up in the row''s own organization and never in another: the row naming another organization''s membership names nobody, so that member''s invitation does not set it aside; the row naming this organization''s membership is the acceptance seen twice');
+select is(
+  (select array_agg(pg_temp.week(o.id) order by o.id)
+     from public.organizations o where o.name like 'Example Annex %'),
+  (select array_agg(coalesce(pg_temp.org_of(c.j, o.id), pg_temp.counts(o.id, 0, 0, 0, 0, 0, 0, 0)) order by o.id)
+     from public.organizations o, (select public.platform_security_briefing_changes() as j) c
+    where o.name like 'Example Annex %'),
+  '0477/92: for all eight the detail and the read of all organizations give the same object (zeros where the list leaves the organization out)');
+rollback to savepoint invitation_rules;
+
+-- ── 13. Admins added: people, not rows ──────────────────────────────────────
+\set g1 '\'a0477000-0000-0000-0006-000000000001\''
+\set g2 '\'a0477000-0000-0000-0006-000000000002\''
+\set g3 '\'a0477000-0000-0000-0006-000000000003\''
+\set g4 '\'a0477000-0000-0000-0006-000000000004\''
+\set g5 '\'a0477000-0000-0000-0006-000000000005\''
+\set g6 '\'a0477000-0000-0000-0006-000000000006\''
+\set g7 '\'a0477000-0000-0000-0006-000000000007\''
+\set y1 '\'a0477000-0000-0000-0007-000000000001\''
+\set y2 '\'a0477000-0000-0000-0007-000000000002\''
+\set y4 '\'a0477000-0000-0000-0007-000000000004\''
+\set y5 '\'a0477000-0000-0000-0007-000000000005\''
+\set y6 '\'a0477000-0000-0000-0007-000000000006\''
+\set y7 '\'a0477000-0000-0000-0007-000000000007\''
+\set y8 '\'a0477000-0000-0000-0007-000000000008\''
+\set y9 '\'a0477000-0000-0000-0007-000000000009\''
+savepoint admins_added;
+insert into public.organizations (id, name, slug, mfa_policy)
+select ('a0477000-0000-0000-0006-' || lpad(g::text, 12, '0'))::uuid, 'Example Branch ' || g,
+       'a0477000-example-branch-' || g, 'optional'
+  from generate_series(1, 7) g;
+insert into auth.users (id, email, raw_user_meta_data)
+select ('a0477000-0000-0000-0007-' || lpad(g::text, 12, '0'))::uuid, 'branch-' || g || '@example.com',
+       jsonb_build_object('full_name', 'Briefing Branch ' || g)
+  from generate_series(1, 9) g;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  -- Branch 1: joined as staff this week and was promoted (an admin now).
+  (:g1, :y1, 'admin', pg_temp.d(9)),
+  -- Branch 2: joined as an admin this week.
+  (:g2, :y2, 'admin', pg_temp.d(9)),
+  -- Branch 3: the same person, a member here for 60 days, promoted this
+  -- week, made staff and promoted again.
+  (:g3, :y2, 'admin', now() - interval '60 days'),
+  -- Branch 4: one of each.
+  (:g4, :y4, 'admin', pg_temp.d(9)),
+  (:g4, :y5, 'admin', pg_temp.d(10)),
+  (:g4, :y6, 'admin', now() - interval '60 days'),
+  -- Branch 5: joined as an admin this week and was made staff; and a staff
+  -- member of 60 days who became an admin of Branch 1 this week.
+  (:g5, :y7, 'staff', pg_temp.d(9)),
+  (:g5, :y1, 'staff', now() - interval '60 days'),
+  -- Branch 6: joined as staff this week and was given the ownership; the
+  -- previous owner, a member for 60 days, is an admin now.
+  (:g6, :y8, 'owner', pg_temp.d(9)),
+  (:g6, :y9, 'admin', now() - interval '60 days'),
+  -- Branch 7: the ownership moved between two members of 60 days.
+  (:g7, :y5, 'owner', now() - interval '60 days'),
+  (:g7, :y6, 'admin', now() - interval '60 days');
+select pg_temp.invite(:g1, :y1, 'staff', pg_temp.d(9));
+select pg_temp.role_row(:g1, gen_random_uuid(), :y1, 'staff', 'admin', pg_temp.d(15), :ownerA, 'authenticated');
+select pg_temp.invite(:g2, :y2, 'admin', pg_temp.d(9));
+select pg_temp.role_row(:g3, gen_random_uuid(), :y2, 'staff', 'admin', pg_temp.d(15), :ownerA, 'authenticated');
+select pg_temp.role_row(:g3, gen_random_uuid(), :y2, 'admin', 'staff', pg_temp.d(16), :ownerA, 'authenticated');
+select pg_temp.role_row(:g3, gen_random_uuid(), :y2, 'staff', 'admin', pg_temp.d(17), :ownerA, 'authenticated');
+select pg_temp.invite(:g4, :y4, 'staff', pg_temp.d(9));
+select pg_temp.role_row(:g4, gen_random_uuid(), :y4, 'staff', 'admin', pg_temp.d(15), :ownerA, 'authenticated');
+select pg_temp.invite(:g4, :y5, 'admin', pg_temp.d(10));
+select pg_temp.role_row(:g4, gen_random_uuid(), :y6, 'staff', 'admin', pg_temp.d(16), :ownerA, 'authenticated');
+select pg_temp.invite(:g5, :y7, 'admin', pg_temp.d(9));
+select pg_temp.role_row(:g5, gen_random_uuid(), :y7, 'admin', 'staff', pg_temp.d(15), :ownerA, 'authenticated');
+select pg_temp.invite(:g6, :y8, 'staff', pg_temp.d(9));
+select pg_temp.role_row(:g6, gen_random_uuid(), :y8, 'staff', 'owner', pg_temp.d(13), null, 'service_role');
+select pg_temp.role_row(:g6, gen_random_uuid(), :y9, 'owner', 'admin', pg_temp.d(13), null, 'service_role');
+select pg_temp.role_row(:g7, gen_random_uuid(), :y5, 'admin', 'owner', pg_temp.d(13), null, 'service_role');
+select pg_temp.role_row(:g7, gen_random_uuid(), :y6, 'owner', 'admin', pg_temp.d(13), null, 'service_role');
+
+select is(
+  array[pg_temp.week(:g1), pg_temp.week(:g2), pg_temp.week(:g3)],
+  array[pg_temp.counts(:g1, 1, 0, 0, 0, 0, 0, 1), pg_temp.counts(:g2, 0, 0, 0, 0, 0, 0, 1),
+        pg_temp.counts(:g3, 2, 1, 0, 0, 0, 0, 1)],
+  '0477/93: admins added counts people: joined as staff and promoted the same week is 1 (not a joiner and a promotion); joined as an admin is 1; a member of long standing promoted twice in the week is 1; and the person who joined one organization as an admin and was promoted in another is counted in each on its own facts');
+select is(pg_temp.week(:g4), pg_temp.counts(:g4, 2, 0, 0, 0, 0, 0, 3),
+  '0477/94: one of each in one organization is 3 admins added, with 2 promotions');
+select is(pg_temp.week(:g5), pg_temp.counts(:g5, 0, 1, 0, 0, 0, 0, 0),
+  '0477/95: joined as an admin and made staff the same week is no admin added and one demoted; a staff member here who became an admin of another organization adds nothing here');
+select is(
+  array[pg_temp.week(:g6), pg_temp.week(:g7)],
+  array[pg_temp.counts(:g6, 0, 0, 1, 0, 0, 0, 1), pg_temp.counts(:g7, 0, 0, 1, 0, 0, 0, 0)],
+  '0477/96: an ownership move is counted in its own number and adds nobody by itself: the new owner who also joined this week is one admin added (as a new member), the previous owner is none, and a move between members of long standing adds none');
+select is(
+  (select array_agg((public.platform_security_briefing_for_organization(o.id) ->> 'admins_joined_this_week')::int order by o.id)
+     from public.organizations o where o.name like 'Example Branch %'),
+  array[1, 1, 0, 2, 0, 1, 0],
+  '0477/97: admins_joined_this_week is unchanged beside it: the members who joined this week and are an admin or owner now');
+select is(
+  (select array_agg(pg_temp.week(o.id) order by o.id)
+     from public.organizations o where o.name like 'Example Branch %'),
+  (select array_agg(pg_temp.org_of(c.j, o.id) order by o.id)
+     from public.organizations o, (select public.platform_security_briefing_changes() as j) c
+    where o.name like 'Example Branch %'),
+  '0477/98: all seven are listed by the read of all organizations with the object their detail carries (an organization whose only number is an admin added is listed too)');
+rollback to savepoint admins_added;
+
+-- ── 14. A busy week ─────────────────────────────────────────────────────────
+-- Example Institute loosens its sign-in policy six days ago, and then 250
+-- members accept invitations. The list holds the newest 200 rows, so the
+-- policy change is not in it; the week's counts still hold it.
+savepoint busy_week;
+select pg_temp.policy_row(:orgC, 'all_required', 'optional', now() - interval '144 hours');
+insert into public.audit_logs (organization_id, user_id, event, metadata, created_at)
+select :orgC, null, 'user.invite.accepted', jsonb_build_object('role', 'viewer'),
+       now() - interval '120 hours' + make_interval(secs => g)
+  from generate_series(1, 250) g;
+select is(
+  (select array[jsonb_array_length(d -> 'changes')::text, d ->> 'changes_truncated',
+                (select count(*) from jsonb_array_elements(d -> 'changes') c
+                  where c ->> 'event' = 'organization.mfa_policy.changed')::text,
+                (d -> 'changes_this_week' = pg_temp.counts(:orgC, 0, 0, 0, 1, 0, 0, 0))::text,
+                (d -> 'changes_this_week' = pg_temp.org_of(public.platform_security_briefing_changes(), :orgC))::text]
+     from public.platform_security_briefing_for_organization(:orgC) d),
+  array['200', 'true', '0', 'true', 'true'],
+  '0477/99: with more than 200 rows in the list (changes_truncated true, the policy change no longer among them) changes_this_week still counts the loosened policy, as the read of all organizations does: the counts are never cut short');
+rollback to savepoint busy_week;
+
+-- ── 15. Free text ───────────────────────────────────────────────────────────
+-- A member's name is their own free text; an audit row's values are whatever
+-- was stored.
+savepoint free_text;
+update public.user_profiles set full_name = repeat('Example ', 700) where id = :adminNone;
+select pg_temp.audit(:orgA, :ownerA, 'user.deactivated', now() - interval '1 hour', jsonb_build_object(
+  'entity_type', jsonb_build_array('organization_member'), 'entity_id', jsonb_build_object('id', 'x'),
+  'before', jsonb_build_object('role', 'staff')));
+select is(
+  array[(select length(b.full_name)::text from public._security_briefing_members(:orgA) b where b.user_id = :adminNone),
+        (select (p ->> 'full_name' = left(repeat('Example ', 700), 200))::text
+           from jsonb_array_elements(public.platform_security_briefing_for_organization(:orgA) -> 'people') p
+          where p ->> 'user_id' = :adminNone)],
+  array['200', 'true'],
+  '0477/100: a member''s name of 5,600 characters comes back as its first 200, from the private member read and in people');
+select is(
+  (select c - 'created_at'
+     from jsonb_array_elements(public.platform_security_briefing_for_organization(:orgA) -> 'changes') c
+    where (c ->> 'created_at')::timestamptz = now() - interval '1 hour'),
+  jsonb_build_object('event', 'user.deactivated', 'actor_user_id', :ownerA, 'target_user_id', null,
+    'entity_id', null, 'entity_type', null, 'before', jsonb_build_object('role', 'staff'), 'after', null,
+    'role', null, 'already_member', false, 'made_as', null),
+  '0477/101: an entity_id or entity_type that is not text (an object, a list) is null, as every other value of a row that is not text');
+rollback to savepoint free_text;
+
+-- ── 16. A clock change inside the window ────────────────────────────────────
+-- A made-up zone whose clocks went forward three days ago: there, "7 days
+-- ago" is 167 hours ago and "30 days ago" 719. Example Institute gets one of
+-- everything half an hour inside each window as the functions measure it
+-- (168, 336 and 720 hours), which a window measured in days of that zone
+-- would leave out (or, for the sign-in, take as idle).
+\set clock '\'a0477000-0000-0000-0008-000000000001\''
+savepoint clock_change;
+insert into auth.users (id, email, raw_user_meta_data)
+values (:clock, 'clock@example.com', '{"full_name": "Briefing Clock"}'::jsonb);
+insert into public.organization_members (organization_id, user_id, role, accepted_at)
+values (:orgC, :clock, 'admin', now() - interval '167 hours 30 minutes');
+insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at)
+values (gen_random_uuid(), :clock, 'Briefing authenticator', 'totp', 'verified', now(), now());
+insert into auth.sessions (id, user_id, created_at, updated_at, refreshed_at, not_after)
+values (gen_random_uuid(), :clock, now() - interval '960 hours', now(),
+        (now() - interval '719 hours 30 minutes') at time zone 'utc', null);
+select pg_temp.alert(:clock, 'not_me', now() - interval '167 hours 30 minutes');
+select pg_temp.ev(:orgC, now() - interval '167 hours 30 minutes', 'malware', 'allowed', 'upload_allowed', 7);
+select pg_temp.ev(:orgC, now() - interval '335 hours 30 minutes', 'malware', 'flagged', 'upload_flagged', 9);
+select pg_temp.policy_row(:orgC, 'optional', 'all_required', now() - interval '167 hours 30 minutes');
+select pg_temp.invite(:orgC, :clock, 'admin', now() - interval '719 hours 30 minutes');
+select set_config('TimeZone',
+  'EXS8EXD,' || (extract(doy from (now() at time zone 'utc') - interval '72 hours')::int - 1) || '/2,'
+             || ((extract(doy from (now() at time zone 'utc') - interval '72 hours')::int - 1 + 180) % 365) || '/2',
+  true) is not null as zone_set \gset
+select is(
+  (select array[((now() - interval '7 days') - (now() - interval '168 hours'))::text,
+                ((now() - interval '30 days') - (now() - interval '720 hours'))::text]),
+  array['01:00:00', '01:00:00'],
+  '0477/102: in the made-up zone 7 days ago and 30 days ago are an hour later than 168 and 720 hours ago (so the next test can fail)');
+select is(
+  (select array[d ->> 'admins_joined_this_week', d ->> 'sign_ins_reported_this_week', d ->> 'idle_sign_ins',
+                jsonb_array_length(d -> 'changes')::text,
+                (d -> 'changes_this_week' = pg_temp.counts(:orgC, 0, 0, 0, 0, 1, 0, 1))::text,
+                m ->> 'admins_joined_this_week', m ->> 'sign_ins_reported_this_week', m ->> 'idle_sign_ins',
+                e -> 'this_week' -> 'malware' ->> 'allowed', e -> 'last_week' -> 'malware' ->> 'flagged',
+                (c = pg_temp.counts(:orgC, 0, 0, 0, 0, 1, 0, 1))::text]
+     from public.platform_security_briefing_for_organization(:orgC) d,
+          pg_temp.org_of(public.platform_security_briefing_members(), :orgC) m,
+          pg_temp.org_of(public.platform_security_briefing_events(), :orgC) e,
+          pg_temp.org_of(public.platform_security_briefing_changes(), :orgC) c),
+  array['1', '1', '0', '2', 'true', '1', '1', '0', '7', '9', 'true'],
+  '0477/103: there, every function still measures 168, 336 and 720 hours: the admin who joined, the sign-in reported, the event and the policy change of 167 and a half hours ago are this week; the event of 335 and a half hours ago is last week; the sign-in last used 719 and a half hours ago is not idle and the row of that age is in the 30-day list');
+rollback to savepoint clock_change;
 
 -- After the savepoints the database is as the fixtures left it.
 select is(
   array[public.platform_security_briefing_members(), public.platform_security_briefing_events(),
         public.platform_security_briefing_changes(), public.platform_security_briefing_for_organization(:orgA)],
   (select array[ans.members, ans.events, ans.changes, ans.da] from ans),
-  '0477/80: with the savepoints undone the four answers are what they were (the functions keep nothing between calls)');
+  '0477/104: with the savepoints undone the four answers are what they were (the functions keep nothing between calls)');
 
 select * from finish();
 rollback;

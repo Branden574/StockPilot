@@ -5,12 +5,12 @@
 -- sign-in step, which sign-ins have not been used for 30 days, what was
 -- blocked or flagged this week against last week, which sign-ins a member
 -- reported as not theirs, and which admin and sign-in policy changes the
--- audit log holds. Read-only: five functions and nothing else. Nothing calls
+-- audit log holds. Read-only: six functions and nothing else. Nothing calls
 -- them until the console code that follows this migration. This file's
 -- number is in its name, its test's name and labels, and the manifest entry
 -- in scripts/security-test.sh.
 --
--- WHAT IT ADDS (tier A: five functions and their grants. No table, no index,
+-- WHAT IT ADDS (tier A: six functions and their grants. No table, no index,
 -- no column, no trigger, no stored row; no existing function, policy or grant
 -- changes.)
 --   Words used below.
@@ -23,16 +23,36 @@
 --       Auth, of any type and any name: the rule every sign-in gate reads.
 --     A sign-in not used for 30 days: an Auth session that has not ended
 --       whose last renewal (or its start, when it was never renewed) is more
---       than 30 days old. One row is one sign-in, not one device. Nothing
---       ends such a session today, so the number only grows: information,
---       not an alarm.
+--       than 30 days old. One row is one sign-in, not one device.
+--       Information, not an alarm.
 --     This week: the 7 days up to now. Last week: the 7 days before that.
+--     A day here is 24 hours: the bodies write 7, 14 and 30 days as 168,
+--     336 and 720 hours, so the session's time zone never moves a line.
 --   1. public._security_briefing_members(uuid). Private. One organization's
---      members: account, role, name, email, whether the account has a second
---      step, how many sign-ins it has, how many of them have not been used
---      for 30 days and the last use of the oldest of those. One factor probe
---      and one session index scan per member.
---   2. public.platform_security_briefing_members(). Every organization (at
+--      members: account, role, name (its first 200 characters), email,
+--      whether the account has a second step, how many sign-ins it has, how
+--      many of them have not been used for 30 days and the last use of the
+--      oldest of those.
+--   2. public._security_briefing_change_counts(uuid). Private. This week's
+--      admin and sign-in policy counts, one row for the organization asked
+--      for, or for every organization when none is named. The one place the
+--      counting rules are written: 5 and 6 both read it, so the list of all
+--      organizations and one organization's detail cannot disagree. From
+--      audit_logs: admins promoted, admins demoted or removed, ownership
+--      moved, and the sign-in policy loosened, tightened or changed in a way
+--      whose direction cannot be told. A role change that is an invitation
+--      acceptance seen twice is not counted: the same member, the same UTC
+--      day, the role the invitation gave, and recorded no later than the
+--      acceptance (the acceptance writes the role first and its own row
+--      after). Any other change on the day a member joins is counted. A
+--      change with owner on either side is always an ownership move: never
+--      an admin added or removed, and never set aside for an invitation;
+--      the two rows of one transfer are one move. And admins added: the
+--      number of people, not of rows, who became an admin or owner this
+--      week by either path, each counted once: a member who joined this
+--      week and is an admin or owner (from the membership rows), or the
+--      member a counted promotion is about.
+--   3. public.platform_security_briefing_members(). Every organization (at
 --      most 500, those with a count to show first), in one pass: factors,
 --      sessions and reported sign-in alerts are each grouped by account
 --      once and then joined to the memberships, so a person in three
@@ -43,37 +63,31 @@
 --      membership rows themselves) and sign-ins reported this week as "not
 --      me" (from sign_in_alerts, never from security_events). The totals
 --      count accounts, so a person in two organizations is one.
---   3. public.platform_security_briefing_events(). For every organization
+--   4. public.platform_security_briefing_events(). For every organization
 --      with an event in the 14 days (at most 500) and for the events about
 --      no organization: this week's and last week's counts by category and
 --      outcome (blocked, flagged, allowed), this week's count of each of the
 --      two passkey reasons the platform has to chase, and the time of the
 --      oldest event on record, so a comparison with a week that was not
 --      fully recorded can be told apart.
---   4. public.platform_security_briefing_changes(). For every organization
---      with one (at most 500), this week's counts from audit_logs: admins
---      promoted, admins demoted or removed, ownership moved, and the sign-in
---      policy loosened, tightened or changed in a way whose direction cannot
---      be told. A promotion or demotion that an invitation acceptance
---      explains (the same member, the same UTC day) is not counted. A change
---      with owner on either side is always an ownership move: never an admin
---      added or removed, and never set aside for an invitation; the two rows
---      of one transfer are one move.
---   5. public.platform_security_briefing_for_organization(uuid). One
---      organization: the numbers of 2 for it; the members who have no second
---      step or have a sign-in not used for 30 days (owners and admins first,
---      at most 200), with name, email and role; and the audit rows of 30
---      days for role changes, invitations accepted, members removed,
---      ownership transfers and sign-in policy changes (newest first, at most
---      200), each cut down to a fixed set of keys. No organization, or an id
---      that names none: null.
+--   5. public.platform_security_briefing_changes(). The counts of 2 for
+--      every organization that has one (at most 500, the most first).
+--   6. public.platform_security_briefing_for_organization(uuid). One
+--      organization: the numbers of 3 for it; the counts of 2 for it (all
+--      zeros when it has none; never cut short); the members who have no
+--      second step or have a sign-in not used for 30 days (owners and admins
+--      first, at most 200), with name (its first 200 characters), email and
+--      role; and the audit rows of 30 days for role changes, invitations
+--      accepted, members removed, ownership transfers and sign-in policy
+--      changes (newest first, at most 200), each cut down to a fixed set of
+--      keys. No organization, or an id that names none: null.
 --   No function returns a session id, a network address, a user agent, a
 --   device label, a factor id or a factor name.
 --
 -- WHO CAN READ AND WRITE
 --   - Nobody writes anything through these functions: each is STABLE, which
 --     Postgres holds to (a write inside one is refused).
---   - service_role only may call 2 to 5. They are SECURITY DEFINER because
+--   - service_role only may call 3 to 6. They are SECURITY DEFINER because
 --     the auth schema is not reachable through the Data API: a definer
 --     function is what lets one call read auth.mfa_factors and
 --     auth.sessions (0351's shape). The
@@ -89,15 +103,16 @@
 --     here holds any of the four names INV-25 accepts as a gate, and none of
 --     these functions is ever to be added to its allowlist: they return
 --     facts about people.
---   - A second lock that names no gate: each of 2 to 5 first reads the role
+--   - A second lock that names no gate: each of 3 to 6 first reads the role
 --     setting (0413's form), which names the caller's role inside a SECURITY
 --     DEFINER body too, and refuses with 42501
 --     (platform_security_briefing_not_allowed) when it is authenticated or
 --     anon. With the grant in place that line is never reached.
---   - 1 is SECURITY INVOKER and no role holds EXECUTE on it. It is called
---     only by 5, which runs as its owner. Were it ever granted by mistake, a
---     member's call would end at the auth tables' own privileges, not in
---     data.
+--   - 1 and 2 are SECURITY INVOKER and no role holds EXECUTE on either. 1
+--     is called only by 6, and 2 only by 5 and 6, which run as their owner.
+--     Were 1 ever granted by mistake, a member's call would end at the auth
+--     tables' own privileges, not in data. 2 reads no auth table, so it
+--     carries the second lock itself.
 --
 -- ROLLBACK
 --   Nothing depends on these functions but the console code that follows
@@ -107,6 +122,7 @@
 --     drop function if exists public.platform_security_briefing_changes();
 --     drop function if exists public.platform_security_briefing_events();
 --     drop function if exists public.platform_security_briefing_members();
+--     drop function if exists public._security_briefing_change_counts(uuid);
 --     drop function if exists public._security_briefing_members(uuid);
 -- ─────────────────────────────────────────────────────────────────────────────
 
@@ -115,7 +131,7 @@
 -- reads and locks no table the bodies name. Measured on a local stack (the
 -- whole file run inside BEGIN ... ROLLBACK, then the session's locks
 -- listed): the system catalogs the preflight and the statements read or
--- write, the five new functions themselves and the four roles the REVOKEs
+-- write, the six new functions themselves and the four roles the REVOKEs
 -- and GRANTs name; nothing in public, nothing in auth. The preflight reads
 -- the catalogs only. lock_timeout 900ms bounds anything unforeseen; it is
 -- not reset at the end of the file, so the push's own last write, made in
@@ -133,8 +149,8 @@ set lock_timeout = '900ms';
 -- (refreshed_at is a timestamp without time zone that holds UTC, 0351's note;
 -- read as anything else the 30 days would shift by the session's zone); when
 -- either auth table has no valid index that starts with user_id (the
--- per-member probes would read the whole table); and when a table, column or
--- index the bodies read is missing.
+-- member reads are written for one); and when a table, column or index the
+-- bodies read is missing.
 do $preflight$
 declare
   v_bad text := '';
@@ -212,6 +228,7 @@ begin
   if exists (select 1 from pg_catalog.pg_proc p
               where p.pronamespace = 'public'::regnamespace
                 and p.proname in ('_security_briefing_members',
+                                  '_security_briefing_change_counts',
                                   'platform_security_briefing_members',
                                   'platform_security_briefing_events',
                                   'platform_security_briefing_changes',
@@ -247,9 +264,10 @@ set search_path = ''
 as $$
 declare
   v_now   timestamptz := pg_catalog.now();
-  v_idle  timestamptz := v_now - interval '30 days';
+  v_idle  timestamptz := v_now - interval '720 hours';
 begin
-  -- Members: accepted, not an act-as seat, account not disabled.
+  -- Members: accepted, not an act-as seat, account not disabled. The name
+  -- is the member's own free text: its first 200 characters.
   -- Last use of a sign-in: its last renewal, or its start when it was never
   -- renewed. refreshed_at is a timestamp without time zone that holds UTC
   -- (0351 measured it; the preflight pins the type). A sign-in used exactly
@@ -257,7 +275,7 @@ begin
   return query
     select m.user_id,
            m.role,
-           p.full_name,
+           pg_catalog.left(p.full_name, 200),
            p.email::text,
            exists (select 1 from auth.mfa_factors f
                     where f.user_id = m.user_id and f.status = 'verified'),
@@ -287,12 +305,223 @@ $$;
 -- Supabase's default privileges grant EXECUTE on a new public function to
 -- anon, authenticated and service_role, and Postgres grants it to PUBLIC.
 -- No grant follows: only the detail read below calls it, as its owner.
+-- The same REVOKE follows every function of this file.
 revoke all on function public._security_briefing_members(uuid) from public, anon, authenticated, service_role;
 
 comment on function public._security_briefing_members(uuid) is
-  'Private. One row per member of the organization (accepted, not an act-as seat, account not disabled): account, role, name, email, whether the account has a verified factor at Supabase Auth, its sign-ins that have not ended, how many of them were last used more than 30 days ago and the last use of the oldest of those. SECURITY INVOKER; called only by platform_security_briefing_for_organization, as its owner. No API role may call it.';
+  'Private. One row per member of the organization (accepted, not an act-as seat, account not disabled): account, role, name (its first 200 characters), email, whether the account has a verified factor at Supabase Auth, its sign-ins that have not ended, how many of them were last used more than 30 days ago and the last use of the oldest of those. SECURITY INVOKER; called only by platform_security_briefing_for_organization, as its owner. No API role may call it.';
 
--- ── 2. Every organization's member state ─────────────────────────────────────
+-- ── 2. This week's admin and sign-in policy counts (private) ─────────────────
+-- The one place the counting rules are written. One row for the
+-- organization asked for (all zeros when it has none), or one for every
+-- organization when p_organization_id is null; none for an id that names no
+-- organization. counts is the object both public reads return as it is;
+-- total is the sum of its seven numbers.
+create function public._security_briefing_change_counts(p_organization_id uuid)
+returns table (
+  organization_id  uuid,
+  total            bigint,
+  counts           jsonb
+)
+language plpgsql
+stable
+security invoker
+set search_path = ''
+as $$
+declare
+  v_now   timestamptz := pg_catalog.now();
+  v_week  timestamptz := v_now - interval '168 hours';
+begin
+  -- No role holds EXECUTE on this function. It carries the lock of the
+  -- public reads as well, which names no gate (0413).
+  if coalesce(pg_catalog.current_setting('role', true), 'none') in ('authenticated', 'anon') then
+    raise exception 'platform_security_briefing_not_allowed' using errcode = '42501';
+  end if;
+
+  return query
+  -- The week's audit rows of the four events, read once: each
+  -- organization's through the index by organization and time.
+  with ev as (
+    select o.id as organization_id, a.event, a.created_at,
+           a.metadata ->> 'entity_type' as entity_type,
+           a.metadata -> 'before' ->> 'role' as before_role,
+           a.metadata -> 'after' ->> 'role' as after_role,
+           a.metadata -> 'before' ->> 'mfa_policy' as before_policy,
+           a.metadata -> 'after' ->> 'mfa_policy' as after_policy,
+           -- The member a row is about. An invitation: the account that
+           -- accepted it. A role change: target_user_id on the rows the
+           -- database writes (0467); on the older rows the app wrote, the
+           -- account of the membership named by entity_id, while that
+           -- membership exists in this organization (never another's).
+           case
+             when a.event = 'user.invite.accepted' then a.user_id
+             when a.event = 'user.role.changed' then
+               coalesce(
+                 case when (a.metadata ->> 'target_user_id')
+                             ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                      then (a.metadata ->> 'target_user_id')::uuid end,
+                 (select om.user_id
+                    from public.organization_members om
+                   where om.organization_id = o.id
+                     and om.id = case when (a.metadata ->> 'entity_id')
+                                             ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                                      then (a.metadata ->> 'entity_id')::uuid end))
+           end as member_id,
+           -- The role an invitation gave. An "already a member" press
+           -- changed nothing and gave none.
+           case when a.event = 'user.invite.accepted'
+                 and (a.metadata -> 'already_member') is distinct from pg_catalog.to_jsonb(true)
+                then a.metadata ->> 'role' end as invited_role
+      from public.organizations o
+      cross join lateral (
+        select al.event, al.created_at, al.user_id, al.metadata
+          from public.audit_logs al
+         where al.organization_id = o.id
+           and al.created_at >= v_week
+           and al.event in ('user.role.changed', 'user.deactivated', 'organization.mfa_policy.changed',
+                            'user.invite.accepted')
+      ) a
+     where p_organization_id is null or o.id = p_organization_id
+  ),
+  keyed as (
+    select ev.*,
+           (coalesce(ev.before_role, '') = 'owner' or coalesce(ev.after_role, '') = 'owner') as owner_side,
+           -- What an invitation and the role change it explains have in
+           -- common: the role the invitation gave is the role the change
+           -- ends at. A change with owner on either side has none: it is
+           -- always an ownership move, never set aside.
+           case when ev.event = 'user.invite.accepted' then ev.invited_role
+                when ev.event = 'user.role.changed'
+                 and coalesce(ev.before_role, '') <> 'owner'
+                 and coalesce(ev.after_role, '') <> 'owner' then ev.after_role
+           end as fold_role
+      from ev
+  ),
+  judged as (
+    select k.organization_id, k.event, k.created_at, k.entity_type,
+           k.before_role, k.after_role, k.owner_side, k.member_id,
+           case k.before_policy when 'optional' then 0 when 'admins_required' then 1 when 'all_required' then 2 end as before_rank,
+           case k.after_policy when 'optional' then 0 when 'admins_required' then 1 when 'all_required' then 2 end as after_rank,
+           -- An invitation acceptance seen twice (0467) is not a promotion
+           -- or a demotion: a role change of a member who accepted an
+           -- invitation to this organization on the same UTC day, to the
+           -- role that invitation gave, recorded no later than the
+           -- acceptance (the acceptance writes the role first and its own
+           -- row after). A change after the acceptance, or to another role,
+           -- is a real one and is counted. Taken in one ordered pass over
+           -- the week's rows: the latest such invitation of each member,
+           -- role and UTC day stands beside every row of that group.
+           (k.event = 'user.role.changed'
+            and k.member_id is not null
+            and k.fold_role is not null
+            and coalesce(
+                  k.created_at <= pg_catalog.max(k.created_at) filter (where k.event = 'user.invite.accepted')
+                                    over (partition by k.organization_id, k.member_id, k.fold_role,
+                                                       pg_catalog.date_trunc('day', k.created_at, 'UTC')),
+                  false)) as folded
+      from keyed k
+  ),
+  marked as materialized (
+    -- Read twice below (the counts, and the people who became admins), so
+    -- computed once.
+    select j.organization_id, j.event, j.created_at, j.entity_type, j.before_role, j.after_role,
+           j.owner_side, j.folded, j.member_id, j.before_rank, j.after_rank,
+           (j.event = 'user.role.changed' and not j.folded and not j.owner_side
+            and j.after_role = 'admin' and coalesce(j.before_role, '') <> 'admin') as promoted
+      from judged j
+     where j.event <> 'user.invite.accepted'
+  ),
+  cnt as (
+    select m.organization_id,
+           pg_catalog.count(*) filter (where m.promoted) as admins_promoted,
+           pg_catalog.count(*) filter (
+             where (m.event = 'user.role.changed' and not m.folded and not m.owner_side
+                    and m.before_role = 'admin' and coalesce(m.after_role, '') <> 'admin')
+                or (m.event = 'user.deactivated' and m.entity_type = 'organization_member'
+                    and m.before_role in ('admin', 'owner'))) as admins_demoted_or_removed,
+           -- Every change with owner on either side, whatever invitation the
+           -- member accepted that day. The two rows of one transfer are
+           -- written in one transaction and carry its time: one move.
+           pg_catalog.count(distinct m.created_at) filter (
+             where m.event = 'user.role.changed' and m.owner_side) as ownership_moved,
+           pg_catalog.count(*) filter (
+             where m.event = 'organization.mfa_policy.changed' and m.after_rank < m.before_rank) as sign_in_policy_loosened,
+           pg_catalog.count(*) filter (
+             where m.event = 'organization.mfa_policy.changed' and m.after_rank > m.before_rank) as sign_in_policy_tightened,
+           -- A value outside the three, a missing one, or the same twice:
+           -- the direction cannot be told.
+           pg_catalog.count(*) filter (
+             where m.event = 'organization.mfa_policy.changed'
+               and (m.before_rank is null or m.after_rank is null or m.after_rank = m.before_rank)) as sign_in_policy_changed_other,
+           -- A counted promotion whose member cannot be told (an older row
+           -- whose membership is gone) is one person of its own.
+           pg_catalog.count(*) filter (where m.promoted and m.member_id is null) as promoted_unknown
+      from marked m
+     group by m.organization_id
+  ),
+  became as (
+    -- The people who became an admin or owner this week, each once for an
+    -- organization. A member who joined this week and is an admin or owner
+    -- now (accepted, not an act-as seat, account not disabled), from the
+    -- membership rows: a role change is recorded when a role changes, not
+    -- when a member joins with one (0467). And the member a counted
+    -- promotion is about. An ownership move is counted in its own number
+    -- and adds nobody here.
+    select mb.organization_id, mb.user_id
+      from public.organization_members mb
+      join public.user_profiles p on p.id = mb.user_id
+     where (p_organization_id is null or mb.organization_id = p_organization_id)
+       and mb.accepted_at >= v_week
+       and mb.impersonation_expires_at is null
+       and p.disabled_at is null
+       and mb.role in ('owner', 'admin')
+    union
+    select m.organization_id, m.member_id
+      from marked m
+     where m.promoted and m.member_id is not null
+  ),
+  added as (
+    select b.organization_id, pg_catalog.count(*) as people
+      from became b
+     group by b.organization_id
+  ),
+  shown as (
+    select o.id,
+           coalesce(c.admins_promoted, 0) as admins_promoted,
+           coalesce(c.admins_demoted_or_removed, 0) as admins_demoted_or_removed,
+           coalesce(c.ownership_moved, 0) as ownership_moved,
+           coalesce(c.sign_in_policy_loosened, 0) as sign_in_policy_loosened,
+           coalesce(c.sign_in_policy_tightened, 0) as sign_in_policy_tightened,
+           coalesce(c.sign_in_policy_changed_other, 0) as sign_in_policy_changed_other,
+           coalesce(d.people, 0) + coalesce(c.promoted_unknown, 0) as admins_added_this_week
+      from public.organizations o
+      left join cnt c on c.organization_id = o.id
+      left join added d on d.organization_id = o.id
+     where p_organization_id is null or o.id = p_organization_id
+  )
+  select w.id,
+         (w.admins_promoted + w.admins_demoted_or_removed + w.ownership_moved
+          + w.sign_in_policy_loosened + w.sign_in_policy_tightened
+          + w.sign_in_policy_changed_other + w.admins_added_this_week)::bigint,
+         pg_catalog.jsonb_build_object(
+           'organization_id', w.id,
+           'admins_promoted', w.admins_promoted,
+           'admins_demoted_or_removed', w.admins_demoted_or_removed,
+           'ownership_moved', w.ownership_moved,
+           'sign_in_policy_loosened', w.sign_in_policy_loosened,
+           'sign_in_policy_tightened', w.sign_in_policy_tightened,
+           'sign_in_policy_changed_other', w.sign_in_policy_changed_other,
+           'admins_added_this_week', w.admins_added_this_week)
+    from shown w;
+end;
+$$;
+
+revoke all on function public._security_briefing_change_counts(uuid) from public, anon, authenticated, service_role;
+
+comment on function public._security_briefing_change_counts(uuid) is
+  'Private. The counting rules of the security briefing, written once. One row for the organization asked for (all zeros when it has none), or for every organization when the id is null: total and counts, an object with organization_id and, from audit_logs of the last 7 days, admins_promoted, admins_demoted_or_removed (a removed member who was admin or owner included), ownership_moved (every change with owner on either side; the rows of one transfer are one move; never an admin added or removed), sign_in_policy_loosened, sign_in_policy_tightened, sign_in_policy_changed_other, and admins_added_this_week: the people who became an admin or owner this week, each once (a member who joined in the last 7 days and is an admin or owner, or the member a counted promotion is about). A role change that is an invitation acceptance seen twice is not counted: the same member, the same UTC day, the role the invitation gave, recorded no later than the acceptance; an ownership move always is counted. SECURITY INVOKER; called only by platform_security_briefing_changes and platform_security_briefing_for_organization, as their owner. No API role may call it; called as authenticated or anon it raises 42501.';
+
+-- ── 3. Every organization's member state ─────────────────────────────────────
 create function public.platform_security_briefing_members()
 returns jsonb
 language plpgsql
@@ -302,8 +531,8 @@ set search_path = ''
 as $$
 declare
   v_now     timestamptz := pg_catalog.now();
-  v_idle    timestamptz := v_now - interval '30 days';
-  v_week    timestamptz := v_now - interval '7 days';
+  v_idle    timestamptz := v_now - interval '720 hours';
+  v_week    timestamptz := v_now - interval '168 hours';
   v_result  jsonb;
 begin
   -- The grant is the gate: service_role only. This second lock names no
@@ -425,7 +654,7 @@ grant execute on function public.platform_security_briefing_members() to service
 comment on function public.platform_security_briefing_members() is
   'For the platform console. Every organization (at most 500, those with a count to show first; organizations_truncated says when more exist): name, sign-in policy, members (accepted, not act-as seats, not disabled), admins, members and admins with no verified factor, members with a sign-in not used for 30 days and how many such sign-ins, admins who joined in the last 7 days, and sign-in alerts answered "not me" in the last 7 days (from sign_in_alerts). Totals count distinct accounts. One pass: factors, sessions and alerts are grouped by account once. Returns no session id, address, device or factor detail. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
--- ── 3. Every organization's events, this week and last ───────────────────────
+-- ── 4. Every organization's events, this week and last ───────────────────────
 create function public.platform_security_briefing_events()
 returns jsonb
 language plpgsql
@@ -435,8 +664,8 @@ set search_path = ''
 as $$
 declare
   v_now         timestamptz := pg_catalog.now();
-  v_week        timestamptz := v_now - interval '7 days';
-  v_fortnight   timestamptz := v_now - interval '14 days';
+  v_week        timestamptz := v_now - interval '168 hours';
+  v_fortnight   timestamptz := v_now - interval '336 hours';
   -- Every outcome and every category is always present, zeros included.
   v_no_outcome  jsonb := pg_catalog.jsonb_build_object('blocked', 0, 'flagged', 0, 'allowed', 0);
   v_no_category jsonb := pg_catalog.jsonb_build_object(
@@ -454,8 +683,8 @@ begin
   end if;
 
   -- This week: from 7 days ago up to now. Last week: the 7 days before.
-  -- Each organization's rows are read through its own index range (by
-  -- organization and minute), so one organization's volume is its own cost.
+  -- Each organization's rows are read through the index by organization
+  -- and minute.
   with cell as (
     select o.id as organization_id, e.category, e.outcome,
            e.this_week, e.last_week, e.unexplained, e.went_back
@@ -565,9 +794,9 @@ revoke all on function public.platform_security_briefing_events() from public, a
 grant execute on function public.platform_security_briefing_events() to service_role;
 
 comment on function public.platform_security_briefing_events() is
-  'For the platform console. For each organization with a security_events row in the last 14 days (at most 500, the most events this week first; organizations_truncated says when more exist) and for the rows about no organization: event counts of this week (the 7 days up to now) and last week (the 7 days before) by category and outcome (blocked, flagged, allowed; every category and outcome always present), and this week''s counts of the reasons passkey_unexplained_sign_in and passkey_counter_went_back; plus oldest_event_at, the earliest minute on record. Returns no source hash, place or row key. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501. Its work grows with the rows of 14 days.';
+  'For the platform console. For each organization with a security_events row in the last 14 days (at most 500, the most events this week first; organizations_truncated says when more exist) and for the rows about no organization: event counts of this week (the 7 days up to now) and last week (the 7 days before) by category and outcome (blocked, flagged, allowed; every category and outcome always present), and this week''s counts of the reasons passkey_unexplained_sign_in and passkey_counter_went_back; plus oldest_event_at, the earliest minute on record. Returns no source hash, place or row key. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
--- ── 4. Every organization's admin and sign-in policy changes, this week ──────
+-- ── 5. Every organization's admin and sign-in policy changes, this week ──────
 create function public.platform_security_briefing_changes()
 returns jsonb
 language plpgsql
@@ -576,8 +805,6 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_now        timestamptz := pg_catalog.now();
-  v_week       timestamptz := v_now - interval '7 days';
   v_orgs       jsonb;
   v_truncated  boolean;
 begin
@@ -587,118 +814,16 @@ begin
     raise exception 'platform_security_briefing_not_allowed' using errcode = '42501';
   end if;
 
-  -- Each organization's audit rows of the week, through the index by
-  -- organization and time. No index holds the event, so every row of the
-  -- week is read to test it.
-  with ev as (
-    select o.id as organization_id, a.event, a.created_at,
-           a.metadata ->> 'entity_type' as entity_type,
-           a.metadata -> 'before' ->> 'role' as before_role,
-           a.metadata -> 'after' ->> 'role' as after_role,
-           a.metadata -> 'before' ->> 'mfa_policy' as before_policy,
-           a.metadata -> 'after' ->> 'mfa_policy' as after_policy,
-           -- The member a role change is about: target_user_id on the rows
-           -- the database writes (0467); on the older rows the app wrote,
-           -- the account of the membership named by entity_id, while that
-           -- membership exists.
-           case when a.event = 'user.role.changed' then
-             coalesce(
-               case when (a.metadata ->> 'target_user_id')
-                           ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-                    then (a.metadata ->> 'target_user_id')::uuid end,
-               (select om.user_id
-                  from public.organization_members om
-                 where om.organization_id = o.id
-                   and om.id = case when (a.metadata ->> 'entity_id')
-                                           ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-                                    then (a.metadata ->> 'entity_id')::uuid end))
-           end as member_id
-      from public.organizations o
-      cross join lateral (
-        select al.event, al.created_at, al.metadata
-          from public.audit_logs al
-         where al.organization_id = o.id
-           and al.created_at >= v_week
-           and al.event in ('user.role.changed', 'user.deactivated', 'organization.mfa_policy.changed')
-      ) a
-  ),
-  judged as materialized (
-    -- Materialized so the invitation lookup runs once for each row, not
-    -- once for each count below that reads it.
-    select ev.organization_id, ev.event, ev.created_at, ev.entity_type,
-           ev.before_role, ev.after_role,
-           case ev.before_policy when 'optional' then 0 when 'admins_required' then 1 when 'all_required' then 2 end as before_rank,
-           case ev.after_policy when 'optional' then 0 when 'admins_required' then 1 when 'all_required' then 2 end as after_rank,
-           (coalesce(ev.before_role, '') = 'owner' or coalesce(ev.after_role, '') = 'owner') as owner_side,
-           -- The invitation wins over a promotion or a demotion: a role
-           -- change of a member who accepted an invitation to this
-           -- organization on the same UTC day is that acceptance seen twice
-           -- (0467), and is not counted. An "already a member" press changed
-           -- nothing and folds nothing. A change with owner on either side
-           -- is never folded: it is always an ownership move.
-           (ev.event = 'user.role.changed'
-            and coalesce(ev.before_role, '') <> 'owner'
-            and coalesce(ev.after_role, '') <> 'owner'
-            and exists (
-              select 1
-                from public.audit_logs i
-               where i.organization_id = ev.organization_id
-                 and i.event = 'user.invite.accepted'
-                 and i.user_id = ev.member_id
-                 and (i.metadata -> 'already_member') is distinct from pg_catalog.to_jsonb(true)
-                 and i.created_at >= pg_catalog.date_trunc('day', ev.created_at, 'UTC')
-                 and i.created_at < pg_catalog.date_trunc('day', ev.created_at, 'UTC') + interval '1 day')) as folded
-      from ev
-  ),
-  org as (
-    select j.organization_id,
-           pg_catalog.count(*) filter (
-             where j.event = 'user.role.changed' and not j.folded and not j.owner_side
-               and j.after_role = 'admin' and coalesce(j.before_role, '') <> 'admin') as admins_promoted,
-           pg_catalog.count(*) filter (
-             where (j.event = 'user.role.changed' and not j.folded and not j.owner_side
-                    and j.before_role = 'admin' and coalesce(j.after_role, '') <> 'admin')
-                or (j.event = 'user.deactivated' and j.entity_type = 'organization_member'
-                    and j.before_role in ('admin', 'owner'))) as admins_demoted_or_removed,
-           -- Every change with owner on either side, whatever invitation the
-           -- member accepted that day. The two rows of one transfer are
-           -- written in one transaction and carry its time: one move.
-           pg_catalog.count(distinct j.created_at) filter (
-             where j.event = 'user.role.changed' and j.owner_side) as ownership_moved,
-           pg_catalog.count(*) filter (
-             where j.event = 'organization.mfa_policy.changed' and j.after_rank < j.before_rank) as sign_in_policy_loosened,
-           pg_catalog.count(*) filter (
-             where j.event = 'organization.mfa_policy.changed' and j.after_rank > j.before_rank) as sign_in_policy_tightened,
-           -- A value outside the three, a missing one, or the same twice:
-           -- the direction cannot be told.
-           pg_catalog.count(*) filter (
-             where j.event = 'organization.mfa_policy.changed'
-               and (j.before_rank is null or j.after_rank is null or j.after_rank = j.before_rank)) as sign_in_policy_changed_other
-      from judged j
-     group by j.organization_id
-  ),
-  ranked as (
-    select org.*,
-           pg_catalog.row_number() over (
-             order by (org.admins_promoted + org.admins_demoted_or_removed + org.ownership_moved
-                       + org.sign_in_policy_loosened + org.sign_in_policy_tightened
-                       + org.sign_in_policy_changed_other) desc,
-                      org.organization_id) as rn
-      from org
-     where org.admins_promoted + org.admins_demoted_or_removed + org.ownership_moved
-           + org.sign_in_policy_loosened + org.sign_in_policy_tightened
-           + org.sign_in_policy_changed_other > 0
+  -- The counts are the private function's, as they are: the organizations
+  -- that have one, the most first.
+  with ranked as (
+    select h.counts,
+           pg_catalog.row_number() over (order by h.total desc, h.organization_id) as rn
+      from public._security_briefing_change_counts(null::uuid) h
+     where h.total > 0
   )
-  select coalesce(pg_catalog.jsonb_agg(
-                    pg_catalog.jsonb_build_object(
-                      'organization_id', r.organization_id,
-                      'admins_promoted', r.admins_promoted,
-                      'admins_demoted_or_removed', r.admins_demoted_or_removed,
-                      'ownership_moved', r.ownership_moved,
-                      'sign_in_policy_loosened', r.sign_in_policy_loosened,
-                      'sign_in_policy_tightened', r.sign_in_policy_tightened,
-                      'sign_in_policy_changed_other', r.sign_in_policy_changed_other)
-                    order by r.rn) filter (where r.rn <= 500), pg_catalog.jsonb_build_array()),
+  select coalesce(pg_catalog.jsonb_agg(r.counts order by r.rn) filter (where r.rn <= 500),
+                  pg_catalog.jsonb_build_array()),
          pg_catalog.count(*) > 500
     into v_orgs, v_truncated
     from ranked r;
@@ -713,9 +838,9 @@ revoke all on function public.platform_security_briefing_changes() from public, 
 grant execute on function public.platform_security_briefing_changes() to service_role;
 
 comment on function public.platform_security_briefing_changes() is
-  'For the platform console. For each organization with one (at most 500; organizations_truncated says when more exist), counts from audit_logs of the last 7 days: admins promoted, admins demoted or removed (a removed member who was admin or owner included), ownership moved (every change with owner on either side; the rows of one transfer are one move; never an admin added or removed), and the sign-in policy loosened, tightened, or changed with a direction that cannot be told. A promotion or demotion of a member who accepted an invitation to the organization on the same UTC day is not counted; an ownership move always is. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501. It reads every audit row of the week: no index holds the event.';
+  'For the platform console. For each organization with one (at most 500, the most first; organizations_truncated says when more exist), this week''s counts as _security_briefing_change_counts gives them: admins promoted, admins demoted or removed, ownership moved, the sign-in policy loosened, tightened, or changed with a direction that cannot be told, and admins_added_this_week, the people who became an admin or owner this week, each once. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
--- ── 5. One organization in detail ────────────────────────────────────────────
+-- ── 6. One organization in detail ────────────────────────────────────────────
 create function public.platform_security_briefing_for_organization(p_organization_id uuid)
 returns jsonb
 language plpgsql
@@ -725,8 +850,8 @@ set search_path = ''
 as $$
 declare
   v_now       timestamptz := pg_catalog.now();
-  v_week      timestamptz := v_now - interval '7 days';
-  v_month     timestamptz := v_now - interval '30 days';
+  v_week      timestamptz := v_now - interval '168 hours';
+  v_month     timestamptz := v_now - interval '720 hours';
   v_name      text;
   v_policy    text;
   v_counts    jsonb;
@@ -734,6 +859,7 @@ declare
   v_more      boolean;
   v_joined    bigint;
   v_reported  bigint;
+  v_week_counts jsonb;
   v_changes   jsonb;
   v_cut       boolean;
 begin
@@ -794,7 +920,8 @@ begin
     into v_counts, v_people, v_more;
 
   -- Admins who joined this week, from the membership rows themselves: a
-  -- member inserted as admin or owner leaves no role-change row (0467).
+  -- role change is recorded when a role changes, not when a member joins
+  -- with one (0467).
   select pg_catalog.count(*) into v_joined
     from public.organization_members m
     join public.user_profiles p on p.id = m.user_id
@@ -818,10 +945,18 @@ begin
      and a.status = 'not_me'
      and a.resolved_at >= v_week;
 
+  -- This week's admin and sign-in policy counts: the private function's
+  -- object as it is, so it is what the read of all organizations gives for
+  -- this one, and all zeros when that read does not list it. Never cut
+  -- short, unlike the list below.
+  select h.counts into v_week_counts
+    from public._security_briefing_change_counts(p_organization_id) h;
+
   -- The audit rows of 30 days for the five events, newest first, each cut
-  -- down to fixed keys. before and after keep only role, mfa_policy,
-  -- user_id and owner_user_id, as text of at most 64 characters. Never the
-  -- row's address or user agent.
+  -- down to fixed keys. Every value taken from the row's metadata is kept
+  -- only when it is text, cut at 64 characters; before and after keep only
+  -- role, mfa_policy, user_id and owner_user_id. Never the row's address or
+  -- user agent.
   with picked as (
     select a.id, a.created_at, a.event, a.user_id, a.metadata,
            pg_catalog.row_number() over (order by a.created_at desc, a.id desc) as rn
@@ -854,8 +989,10 @@ begin
                                                         ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
                                                  then (k.metadata ->> 'entity_id')::uuid end))
                         end,
-                      'entity_id', pg_catalog.left(k.metadata ->> 'entity_id', 64),
-                      'entity_type', pg_catalog.left(k.metadata ->> 'entity_type', 64),
+                      'entity_id', case when pg_catalog.jsonb_typeof(k.metadata -> 'entity_id') = 'string'
+                                        then pg_catalog.left(k.metadata ->> 'entity_id', 64) end,
+                      'entity_type', case when pg_catalog.jsonb_typeof(k.metadata -> 'entity_type') = 'string'
+                                          then pg_catalog.left(k.metadata ->> 'entity_type', 64) end,
                       'before',
                         case when pg_catalog.jsonb_typeof(k.metadata -> 'before') = 'object' then
                           pg_catalog.jsonb_strip_nulls(pg_catalog.jsonb_build_object(
@@ -901,6 +1038,7 @@ begin
            'idle_after_days', 30,
            'people', v_people,
            'people_truncated', v_more,
+           'changes_this_week', v_week_counts,
            'changes', v_changes,
            'changes_truncated', v_cut);
 end;
@@ -910,4 +1048,4 @@ revoke all on function public.platform_security_briefing_for_organization(uuid) 
 grant execute on function public.platform_security_briefing_for_organization(uuid) to service_role;
 
 comment on function public.platform_security_briefing_for_organization(uuid) is
-  'For the platform console: one organization in detail, or null when the id is null or names no organization. Its numbers as platform_security_briefing_members() gives them; people: the members (accepted, not act-as seats, not disabled) with no verified factor or with a sign-in not used for 30 days, owners and admins first, at most 200 (people_truncated), with name, email, role and the last use of the oldest such sign-in; changes: its audit_logs rows of the last 30 days for role changes, invitations accepted, members removed, ownership transfers and sign-in policy changes, newest first, at most 200 (changes_truncated), each cut down to created_at, event, actor_user_id, target_user_id, entity_id, entity_type, before, after, role, already_member and made_as. Returns no session id, address, user agent, device or factor detail. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501. The caller records the view in the platform audit before it calls.';
+  'For the platform console: one organization in detail, or null when the id is null or names no organization. Its numbers as platform_security_briefing_members() gives them; people: the members (accepted, not act-as seats, not disabled) with no verified factor or with a sign-in not used for 30 days, owners and admins first, at most 200 (people_truncated), with name (its first 200 characters), email, role and the last use of the oldest such sign-in; changes_this_week: this week''s admin and sign-in policy counts, the object platform_security_briefing_changes() gives for this organization (all zeros when it has none), never cut short; changes: its audit_logs rows of the last 30 days for role changes, invitations accepted, members removed, ownership transfers and sign-in policy changes, newest first, at most 200 (changes_truncated), each cut down to created_at, event, actor_user_id, target_user_id, entity_id, entity_type, before, after, role, already_member and made_as. Returns no session id, address, user agent, device or factor detail. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501. The caller records the view in the platform audit before it calls.';
