@@ -333,11 +333,31 @@ describe('one organization: each rule at its boundary', () => {
       '2 admins added, 3 admins removed or moved to another role, ownership moved once this week',
     );
     expect(item(all, 'admin_changes').whatWeSee).toBe(
-      '2 members became an admin or the owner. 3 admins were removed or moved to another role. Ownership moved once.',
+      '2 members became an admin or the owner. 3 admins were removed or moved to another role. Ownership moved once. One person can be in both numbers.',
     );
     expect(JSON.stringify(item(all, 'admin_changes'))).not.toMatch(/\b6\b/);
     expect(all.goodShape).not.toContain('No admin or sign-in policy change this week.');
     expect(all.status).toBe('worth_a_look');
+
+    // A member made an admin and moved back in the same week: one admin
+    // added AND one moved to another role. Both are true of the week, and
+    // the words say the two can be the same person.
+    const both = item(
+      briefing({ changes: changes({ adminsAdded: 1, adminsDemotedOrRemoved: 1 }) }),
+      'admin_changes',
+    );
+    expect(both.headline).toBe('1 admin added, 1 admin removed or moved to another role this week');
+    expect(both.whatWeSee).toBe(
+      '1 member became an admin or the owner. 1 admin was removed or moved to another role. One person can be in both numbers.',
+    );
+    // With only one of the two there is nothing to overlap.
+    expect(item(added, 'admin_changes').whatWeSee).not.toContain('both numbers');
+    expect(
+      item(
+        briefing({ changes: changes({ adminsDemotedOrRemoved: 1, ownershipMoved: 1 }) }),
+        'admin_changes',
+      ).whatWeSee,
+    ).toBe('1 admin was removed or moved to another role. Ownership moved once.');
 
     expect(
       item(briefing({ changes: changes({ ownershipMoved: 2 }) }), 'admin_changes').headline,
@@ -1062,6 +1082,8 @@ describe('admin changes from audit rows', () => {
       ).toEqual(['admin_promoted']);
     });
 
+    // The database builder's first case (CONTRACT.md item 10): the demotion
+    // ends at the invitation's role, and is recorded AFTER the acceptance.
     it('invited as staff, made an admin and moved back the same day: both are listed', () => {
       expect(
         kinds([
@@ -1090,6 +1112,8 @@ describe('admin changes from audit rows', () => {
       ).toEqual(['admin_demoted', 'admin_joined']);
     });
 
+    // The database builder's second case: the promotion ends at the
+    // invitation's role, and is recorded AFTER the acceptance.
     it('a change to the invited role AFTER the acceptance is a real one: listed', () => {
       // Invited as an admin, moved to staff, made an admin again that day.
       expect(

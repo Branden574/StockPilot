@@ -387,8 +387,9 @@ function memberItems(m: BriefingMembersInput): BriefingItem[] {
 /**
  * One item for the week's admin changes. Each number stands alone in the
  * headline: admins added (distinct people), admins removed or moved to
- * another role, and ownership moves are never added into one total. Null
- * when all three are zero.
+ * another role, and ownership moves are never added into one total. The
+ * numbers say what happened during the week, not how many admins there are
+ * now. Null when all three are zero.
  */
 function adminChangesItem(changes: BriefingChangeCounts): BriefingItem | null {
   const added = changes.adminsAdded;
@@ -409,6 +410,11 @@ function adminChangesItem(changes: BriefingChangeCounts): BriefingItem | null {
     headline.push(`ownership moved ${times(moved)}`);
     seen.push(`Ownership moved ${times(moved)}.`);
   }
+  // Each number counts what happened in the week, so they can overlap: a
+  // member made an admin on Monday and moved back on Wednesday is one admin
+  // added and one moved to another role. Said, so neither number is read
+  // as "how many admins there are now".
+  if (added > 0 && left > 0) seen.push('One person can be in both numbers.');
   return {
     id: 'admin_changes',
     severity: 'low',
