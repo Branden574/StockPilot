@@ -641,7 +641,7 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((v) => !v)}
-        className={`hover:bg-muted/50 flex min-w-0 flex-[1_1_20rem] items-center gap-2 px-3 py-2 text-left text-[13px] ${FOCUS_INSIDE}`}
+        className={`hover:bg-muted/50 flex min-w-0 basis-full items-center gap-2 px-3 py-2 text-left text-[13px] ${FOCUS_INSIDE}`}
       >
         <CategoryMark shape={look.shape} colour={look.hex} hollow={w.outcome === 'flagged'} />
         <span className="text-muted-foreground shrink-0 font-mono text-[12px] tabular-nums">
@@ -653,7 +653,7 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
         <span className="text-muted-foreground ml-auto shrink-0 text-[12px]">{w.outcomeLabel}</span>
       </button>
       {cardId !== null ? (
-        <div className="flex shrink-0 justify-end px-3 pb-2 pl-9 pt-0.5 sm:pb-1.5 sm:pl-3">
+        <div className="flex shrink-0 px-3 pb-2 pl-9 pt-0.5 sm:pb-1.5">
           <SecurityResponseButton
             request={{
               cardId,
