@@ -66,13 +66,14 @@ const ALL_TEXT = [
 const RECORD_REASONS = Object.keys(SECURITY_EVENT_REASON_LABELS).sort();
 
 describe('every reason code of the record has exactly one card', () => {
-  it('the record holds the 46 reasons the content draft was written for, and the four upload refusals of part 6', () => {
-    expect(RECORD_REASONS).toHaveLength(50);
+  it('the record holds the 46 reasons the content draft was written for, and the five upload reasons of part 6', () => {
+    expect(RECORD_REASONS).toHaveLength(51);
     for (const reason of [
       'upload_wrong_type',
       'upload_active_content',
       'upload_hidden_file',
       'upload_could_not_check',
+      'upload_refused_in_use',
     ]) {
       expect(securityResponseCardIdFor(reason), reason).toBeTruthy();
     }
@@ -164,6 +165,7 @@ describe('the urgency levels', () => {
         'counts-past-limit',
         'upload-checks',
         'upload-not-checked',
+        'upload-refused-in-use',
         'passkey-wrong-site',
         'repeated-wrong-guesses',
         'second-step-paused',
@@ -277,9 +279,9 @@ describe('the upload cards (part 6)', () => {
   });
 
   it('the outcome sentences claim only what holds on every path that records one (part 6 review)', () => {
-    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked'] as const) {
+    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked', 'upload-refused-in-use'] as const) {
       const did = securityResponseCard(id).alreadyDid.join(' ');
-      // A refused cover keeps the link the book was found with, so no card says the file was not shown or passed on.
+      // No card says a refused file was not shown or passed on: a path may keep it (an earlier record still uses it).
       expect(did, id).not.toMatch(/\bshown\b|passed on/);
       // The record also keeps where the request came from.
       expect(did, id).toMatch(/The record keeps the kind of refusal, the organization when there is one, the place it came from and the time/);
@@ -290,8 +292,21 @@ describe('the upload cards (part 6)', () => {
     );
   });
 
+  it('a refused file an earlier record still uses has its own card, which never says it was not attached (review round 2, F1)', () => {
+    expect(securityResponseCardIdFor('upload_refused_in_use')).toBe('upload-refused-in-use');
+    expect(securityResponseLevelFor('upload_refused_in_use')).toBe('look_today');
+    const card = securityResponseCard('upload-refused-in-use');
+    const did = card.alreadyDid.join(' ');
+    expect(did).not.toMatch(/not attached|deleted|Blocked/);
+    expect(did).toMatch(/^Flagged, not stopped: this upload was refused/);
+    expect(did).toMatch(/the file itself was kept, because the earlier record still uses it/);
+    expect(card.whatThisIs).toMatch(/still points at that same file/);
+    expect(card.doNow.map(securityResponseStepShown).map((s) => s.id)).toContain('tell-the-owner');
+    expect(card.ifGotThrough.map(securityResponseStepShown).map((s) => s.id)).toContain('look-at-audit');
+  });
+
   it('no upload card claims every file is checked', () => {
-    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked'] as const) {
+    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked', 'upload-refused-in-use'] as const) {
       expect(ownText(securityResponseCard(id)), id).not.toMatch(/\bevery file\b|\ball files\b/i);
     }
   });
@@ -315,7 +330,7 @@ describe('the card text keeps the rules', () => {
   it('the upload cards claim no virus scan: our own checks read how a file is built (part 6)', () => {
     // "Malware" only where the general card says what the word means here.
     const MEANING = securityResponseCard('upload-checks').whatThisIs;
-    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked'] as const) {
+    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked', 'upload-refused-in-use'] as const) {
       for (const text of cardTexts(securityResponseCard(id))) {
         expect(text, `${id}: ${text}`).not.toMatch(/antivirus|virus scan|infected|quarantin|\bheld\b/i);
         if (text !== MEANING) expect(text, `${id}: ${text}`).not.toMatch(/malware/i);

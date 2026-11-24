@@ -77,6 +77,7 @@ describe('security events: the lists the database checks', () => {
       'upload_active_content',
       'upload_hidden_file',
       'upload_could_not_check',
+      'upload_refused_in_use',
       ...SECURITY_PROBE_KINDS,
       ...SECURITY_BOT_FAMILIES.map(securityBotReason),
     ];
@@ -87,6 +88,12 @@ describe('security events: the lists the database checks', () => {
       expect(label, reason).not.toBe(SECURITY_EVENT_UNKNOWN_REASON_LABEL);
       expect(label.length, reason).toBeGreaterThan(5);
     }
+  });
+
+  it('names the words of a refused file an earlier record still uses (review round 2, F1)', () => {
+    expect(securityEventReasonLabel('upload_refused_in_use')).toBe(
+      'A refused file that an earlier record still uses',
+    );
   });
 
   it('names the plain words of the four upload refusals (part 6), each under malware', () => {

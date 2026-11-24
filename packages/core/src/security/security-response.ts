@@ -44,6 +44,7 @@ export const SECURITY_RESPONSE_CARD_IDS = [
   'upload-checks',
   'upload-refused',
   'upload-not-checked',
+  'upload-refused-in-use',
 ] as const;
 export type SecurityResponseCardId = (typeof SECURITY_RESPONSE_CARD_IDS)[number];
 
@@ -97,6 +98,8 @@ export const SECURITY_RESPONSE_CARD_LEVELS: Readonly<
   'upload-checks': 'look_today',
   'upload-refused': 'stopped',
   'upload-not-checked': 'look_today',
+  // Review round 2: refused, but an earlier record still points at the file.
+  'upload-refused-in-use': 'look_today',
 };
 
 /** Every reason code of the record, with the card that answers it. */
@@ -151,6 +154,7 @@ export const SECURITY_RESPONSE_CARD_OF_REASON: Readonly<Record<string, SecurityR
   upload_active_content: 'upload-refused',
   upload_hidden_file: 'upload-refused',
   upload_could_not_check: 'upload-not-checked',
+  upload_refused_in_use: 'upload-refused-in-use',
 };
 
 /**

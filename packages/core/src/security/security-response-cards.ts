@@ -148,13 +148,13 @@ const NOTHING_STOPPED = { text: 'Nothing: this was stopped.' } as const;
  * every upload path that records one: a copy in storage is deleted unless
  * another record uses the same file or that could not be confirmed (every
  * path that removes one looks first), and a failed delete leaves it unused;
- * the person is told, except for a cover picture the server fetched during
- * an import, which is not stored.
+ * the person is told. (A cover picture the server fetched itself records
+ * nothing: nobody sent it.)
  */
 const UPLOAD_COPY_DELETED =
   'A copy that had already reached storage was deleted, unless another record still uses the same file or that could not be confirmed. A delete that storage refuses leaves the copy where it was, unused.';
 const UPLOAD_TOLD_AND_RECORDED =
-  'The person who sent it was told in a plain sentence that it was refused; a cover picture fetched during an import is just not stored. The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.';
+  'The person who sent it was told in a plain sentence that it was refused. The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.';
 
 /** The cards, in the order the record lists its reasons. */
 export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
@@ -882,6 +882,40 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
     ],
     cannotTell:
       'It does not say whether the file was harmful, who sent it, what it was called or what was in it. The checks read what kind of file it is and how it is built; they hold no list of known viruses.',
+  },
+  {
+    id: 'upload-refused-in-use',
+    title: 'A refused file is still used by an earlier record',
+    reasons: ['upload_refused_in_use'],
+    whatThisIs:
+      "A file sent to StockPilot was refused by the app's own file checks, and a record the organization already had, such as an item photo, an attachment, a profile picture or the logo, still points at that same file. The file was kept so that the record does not break, and a record that points at a refused file is not expected, so it needs a look.",
+    alreadyDid: [
+      'Flagged, not stopped: this upload was refused and nothing new was saved with it, but the file itself was kept, because the earlier record still uses it.',
+      'The person who sent it was told in a plain sentence that it was refused.',
+      "The organization's audit record has a line saying the file was kept and why, with the kind of refusal and no file name.",
+      'The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.',
+    ],
+    doNow: [
+      {
+        text: 'On the Security page, look in the events list for more of these from the same organization.',
+        place: SECURITY_PAGE,
+      },
+      {
+        step: 'tell-the-owner',
+        lead: 'Ask the organization which record was being saved again, such as an item photo, an attachment, a profile picture or the logo, and to replace its file with a fresh copy, or remove it if they do not know where it came from:',
+      },
+    ],
+    ifGotThrough: [
+      { text: 'The file is still where the earlier record points, so anyone who opens that record can still open the file.' },
+      { step: 'look-at-audit' },
+      {
+        step: 'tell-the-owner',
+        lead: 'If someone may have opened it, ask them not to open it again, and ask the organization to replace or remove it:',
+      },
+      { step: 'ask-member-not-me' },
+    ],
+    cannotTell:
+      'It does not say which record points at the file, who sent it, what it was called or what was in it. The checks read what kind of file it is and how it is built; they hold no list of known viruses, so a file they pass is not proven safe.',
   },
 ];
 

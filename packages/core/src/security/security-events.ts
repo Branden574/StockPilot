@@ -124,7 +124,9 @@ export const PASSKEY_SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, strin
 /**
  * The upload refusals the web records (part 6 of the security tools, apps/web
  * server/security/upload-checks.ts): category malware, outcome blocked, one
- * reason for each kind of verdict of the app's own file checks. Never a file
+ * reason for each kind of verdict of the app's own file checks; and, outcome
+ * flagged, a refused file kept because a record the organization already had
+ * still points at it (review round 2). Never a file
  * name, a path or any of the file's bytes: a row has no column for one. These
  * words are read on the platform console and by an organization's owners and
  * admins on its Blocked activity page, so they say what happened in plain
@@ -135,6 +137,7 @@ export const UPLOAD_SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string
   upload_active_content: 'A file that could run something when opened was refused',
   upload_hidden_file: 'A file with another file hidden inside it was refused',
   upload_could_not_check: 'A file that could not be checked was refused',
+  upload_refused_in_use: 'A refused file that an earlier record still uses',
 };
 
 /** The reason codes this build writes, with the words admins read. */
