@@ -6,12 +6,12 @@
 -- This is the database half; the pages, the phone screen, the API route and
 -- the reminder job follow it. Nothing reads or writes these objects until
 -- then. This file's number is in its name, its test's name and labels, the
--- advisory lock key below (4820001) and the manifest entry in
+-- advisory lock keys below (4820001, 4820002) and the manifest entry in
 -- scripts/security-test.sh.
 --
 -- WHAT IT ADDS (tier A: four new tables with their keys, checks and indexes,
 -- four trigger functions and their triggers on the new tables, three
--- private helpers, thirteen functions and their grants. No stored row. No
+-- private helpers, fourteen functions and their grants. No stored row. No
 -- existing table, column, function, policy, trigger or grant changes. Two
 -- existing tables gain the internal triggers of the foreign keys that point
 -- at them, as 0472, 0474 and 0475 did: public.organizations (deleting an
@@ -29,7 +29,9 @@
 --      version number (at most one per policy), changed by saving the draft.
 --      Publishing gives it the next number, says whether it asks members
 --      again ("a new version") or not ("a correction"), and the round it
---      belongs to, who published it (and their name as it was) and when.
+--      belongs to, who published it (and their name as it was) and when,
+--      and the policy's kind (a correction keeps the title and the kind: a
+--      change of either is a new version).
 --      From then on the row never changes and is never deleted (a trigger
 --      on this table; no API role has any write privilege): a correction is
 --      another row. text_hash is SHA-256 of the title, two line feeds and
@@ -38,7 +40,7 @@
 --      src/policies/policy-text.ts (NFC; LF line ends; no tab; no space at a
 --      line's end; at most one empty line in a row; none at either end; a
 --      title on one line with single spaces), 1 to 120 and 1 to 30,000
---      characters, without the refused characters (controls other than the
+--      characters (a body at most 600 lines), without the refused characters (controls other than the
 --      line feed, invisible and direction-changing characters, the byte
 --      order mark, U+FFF9 to U+FFFF, tags, supplementary variation
 --      selectors).
@@ -46,18 +48,22 @@
 --      and version: the version (and its number, round and text hash, as
 --      they were), the account (and its name as it was: the profile's full
 --      name, never an email; none when the name is empty or holds an '@'),
---      when, and web or phone. Written only by org_policy_acknowledge, for
+--      when the membership began (member_since), when, and web or phone. Written only by org_policy_acknowledge, for
 --      the caller's own account. Never changed and never deleted: no API
 --      role has any write privilege, and a trigger refuses every UPDATE and
 --      DELETE from anyone (the table's owner too) but two: deleting an
 --      account empties user_id (the only way it is ever empty, so the page
---      shows "Deleted user" with the kept name), and deleting the
+--      shows "Deleted user" with the kept name; an account that had no name
+--      keeps 'Former member, no name on the account' and
+--      member_since, a row that proves less), and deleting the
 --      organization removes its records with it. TRUNCATE is refused by a
 --      trigger as well. No job purges a row.
 --   4. public.org_policy_reminders. One row per asking version (the round)
 --      and member: how many automatic reminders were sent (at most 6) and
 --      when, how many "Remind now" reached them, and the last reminder of
---      either kind. Written by the claim and by Remind now, stamp first.
+--      either kind; and the last correction a member who acknowledged was
+--      told of (correction_notice_number). Written by the claims and by
+--      Remind now, stamp first.
 --   5. The reads and writes, all SECURITY DEFINER, all through functions:
 --      members: org_policies_for_member, org_policy_text,
 --      org_policy_acknowledge; owners and admins: org_policies_for_admin,
@@ -65,7 +71,7 @@
 --      org_policy_acknowledgement_record, org_policy_save_draft,
 --      org_policy_discard_draft, org_policy_publish, org_policy_retire,
 --      org_policy_remind_now; the reminder job (service_role):
---      org_policy_reminders_claim.
+--      org_policy_reminders_claim and org_policy_correction_notices_claim.
 --
 -- WHO CAN READ AND WRITE
 --   - RLS is on with NO policy on the four tables, anon and authenticated
@@ -92,9 +98,12 @@
 --   - Owners and admins (public.has_org_role(org, 'admin'), 0310) read every
 --     policy, draft and acknowledgement of their organization and the list
 --     of who has not acknowledged, and write drafts, publish, retire and
---     remind. The database checks the role; the website adds its step-up
---     check before publishing (the authenticator rule is not applied here:
---     QUESTIONS.md).
+--     remind. Every admin function checks the role, then the app's
+--     authenticator rule through public.security_events_reader_check (0472,
+--     as 0474 calls it): where the organization's policy asks owners and
+--     admins for an authenticator, or the caller has one, the session must
+--     hold the second step (42501 mfa_required, aal2_required). A member's
+--     own reads and acknowledgement are not admin functions.
 --   - An acknowledgement is for the caller's own account only (auth.uid();
 --     the function has no account argument), of a version that is the
 --     current version of a published policy of an organization the caller is
@@ -102,9 +111,13 @@
 --     A repeat answers with the first row and writes nothing. An account
 --     with a verified authenticator acknowledges only from a session that
 --     holds the second step (0474's account rule).
---   - The reminder claim is service_role only: the grant is the gate, and
---     its body refuses authenticated and anon as a second lock (0479's
+--   - The two claims are service_role only: the grant is the gate, and
+--     each body refuses authenticated and anon as a second lock (0479's
 --     form).
+--   - The limit of all of it: the tables' owner (the role migrations run
+--     as) can switch a trigger off or set session_replication_role, and then
+--     no guard here holds. The evidence is as strong as access to the
+--     database is controlled.
 --   Explicit for anon, authenticated, service_role and PUBLIC on every
 --   object (apps/web/src/test/migration-grants.ts), the same with and
 --   without Supabase's default grants.
@@ -113,13 +126,17 @@
 --   42501 policy_not_allowed (a member function: nobody signed in, not a
 --         member, no such policy or version, or a version the caller may not
 --         read or acknowledge: one answer, so another organization's ids
---         reveal nothing), policy_admins_only (an admin function), and
---         aal2_required (acknowledge).
+--         reveal nothing), policy_admins_only (an admin function),
+--         aal2_required (acknowledge, and every admin function) and
+--         mfa_required (an admin function, where an authenticator is asked
+--         for and the caller has none).
 --   22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid
---         (detail: empty, too_long, forbidden_character or not_normal_form),
+--         (detail: empty, too_long, too_many_lines, forbidden_character or
+--         not_normal_form),
 --         policy_change_invalid, policy_hash_invalid, policy_method_invalid.
 --   P0001 policy_no_draft, policy_draft_changed, policy_draft_unchanged,
---         policy_correction_needs_a_version, policy_retired,
+--         policy_correction_needs_a_version, policy_correction_changes_title,
+--         policy_correction_changes_kind, policy_retired,
 --         policy_not_published, policy_version_not_found,
 --         policy_version_not_current, policy_text_changed.
 --   55P03 a lock waited 2 s (the writers' own lock_timeout).
@@ -130,7 +147,8 @@
 --   No function here raises 40001 or 40P01 (PostgREST retries those forever;
 --   0367).
 --
--- LOCKS: see the prelude below. ROLLBACK: the block at the end of the file.
+-- LOCKS: see the prelude below. ROLLBACK: the block at the end of the file;
+-- it refuses while any acknowledgement exists.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- The foreign keys take SHARE ROW EXCLUSIVE on public.organizations and on
@@ -156,7 +174,8 @@ set lock_timeout = '900ms';
 -- ran, or was half applied by hand), when another function already names the
 -- advisory lock key, or when a rule this file relies on is not the body it was
 -- written against (head 0480, read 2026-11-24): the membership predicates
--- (0310) and the current-member rule (0422).
+-- (0310), the current-member rule (0422) and the admins' authenticator check
+-- (0472).
 do $preflight$
 declare
   v_bad text := '';
@@ -182,6 +201,9 @@ begin
   if exists (select 1 from pg_catalog.pg_proc p where p.prosrc like '%4820001%') then
     v_bad := v_bad || ' another function already names the advisory lock key 4820001;';
   end if;
+  if exists (select 1 from pg_catalog.pg_proc p where p.prosrc like '%4820002%') then
+    v_bad := v_bad || ' another function already names the advisory lock key 4820002;';
+  end if;
 
   for r in
     select v.sig, v.want_src, v.want_secdef, p.oid as poid, pg_catalog.md5(p.prosrc) as got_src,
@@ -189,7 +211,8 @@ begin
       from (values
         ('public.has_org_role(uuid,text)',              '10422b29a6e15acd003d4f11ed28e90c', true),
         ('public.is_org_member(uuid)',                  '76492a6556e9f6a7c33d942aa9726f9f', true),
-        ('public._notify_is_current_member(uuid,uuid)', '9b13426ef2beeb9511c8c0fe6f325741', true)
+        ('public._notify_is_current_member(uuid,uuid)', '9b13426ef2beeb9511c8c0fe6f325741', true),
+        ('public.security_events_reader_check(uuid)',   'c19c9c68f5e04751b75d14836f69801b', true)
       ) v(sig, want_src, want_secdef)
       left join pg_catalog.pg_proc p on p.oid = pg_catalog.to_regprocedure(v.sig)
   loop
@@ -208,6 +231,7 @@ begin
         ('public.organization_members', 'organization_id'), ('public.organization_members', 'user_id'),
         ('public.organization_members', 'role'), ('public.organization_members', 'accepted_at'),
         ('public.organization_members', 'impersonation_expires_at'),
+        ('public.organizations', 'mfa_policy'),
         ('public.user_profiles', 'full_name'), ('public.user_profiles', 'email'),
         ('public.user_profiles', 'disabled_at'),
         ('public.organization_invites', 'organization_id'), ('public.organization_invites', 'email'),
@@ -290,6 +314,8 @@ as $$
   select case
     when p_body is null or p_body = '' then 'empty'
     when pg_catalog.char_length(p_body) > 30000 then 'too_long'
+    when pg_catalog.char_length(p_body) - pg_catalog.char_length(pg_catalog.replace(p_body, E'\n', '')) + 1 > 600
+      then 'too_many_lines'
     when p_body ~ '[\u0001-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFF\U000E0000-\U000E007F\U000E0100-\U000E01EF]'
       then 'forbidden_character'
     when not (p_body is nfc normalized)
@@ -326,7 +352,7 @@ revoke all on function public._org_policy_person_name(uuid) from public, anon, a
 comment on function public._org_policy_title_problem(text) is
   'Why a policy title would be refused (0482): empty, too_long (over 120 characters), forbidden_character, not_normal_form (not NFC, a line feed, two spaces in a row, a space at either end), or null. The rule of packages/core policyTitleProblem. Used by the checks of org_policies and org_policy_versions. No API role may execute it.';
 comment on function public._org_policy_body_problem(text) is
-  'Why a policy body would be refused (0482): empty, too_long (over 30,000 characters), forbidden_character, not_normal_form (not NFC, a space at a line''s end, three line feeds in a row, a line feed at either end), or null. The rule of packages/core policyBodyProblem. Used by the check of org_policy_versions. No API role may execute it.';
+  'Why a policy body would be refused (0482): empty, too_long (over 30,000 characters), too_many_lines (over 600 lines), forbidden_character, not_normal_form (not NFC, a space at a line''s end, three line feeds in a row, a line feed at either end), or null. The rule of packages/core policyBodyProblem. Used by the check of org_policy_versions. No API role may execute it.';
 comment on function public._org_policy_person_name(uuid) is
   'The name a policy record keeps for an account (0482): its full name, trimmed, at most 200 characters, or null when the name is empty or holds an ''@'' (never an email). No API role may execute it.';
 
@@ -373,6 +399,9 @@ create table public.org_policy_versions (
   id                     uuid        primary key default gen_random_uuid(),
   organization_id        uuid        not null,
   policy_id              uuid        not null,
+  -- The policy's kind with these words: the draft's until it is published
+  -- (publishing makes it the policy's), frozen with the version after.
+  kind                   text        not null,
   title                  text        not null,
   body                   text        not null,
   text_hash              text        not null,
@@ -390,6 +419,8 @@ create table public.org_policy_versions (
   -- For the acknowledgements' and reminders' key.
   constraint org_policy_versions_key unique (id, policy_id, organization_id),
   constraint org_policy_versions_number_key unique (policy_id, version_number),
+  constraint org_policy_versions_kind
+    check (kind in ('acceptable_use', 'data_handling', 'other')),
   constraint org_policy_versions_title
     check (public._org_policy_title_problem(title) is null),
   constraint org_policy_versions_body
@@ -411,7 +442,8 @@ create table public.org_policy_versions (
            or (not needs_acknowledgement and acknowledgement_round between 1 and version_number - 1)),
   -- A draft names no publisher. A version is published with its publisher
   -- (org_policy_versions_guard), whose column is empty only after that
-  -- account's deletion.
+  -- account's deletion (and then the name is kept, or the label for an
+  -- account that had none).
   constraint org_policy_versions_publisher
     check (published_at is not null or (published_by is null and published_by_name is null)),
   constraint org_policy_versions_publisher_name
@@ -431,7 +463,7 @@ create index org_policy_versions_published_by_idx
   where published_by is not null;
 
 comment on table public.org_policy_versions is
-  'The words of a policy (0482). A row with no version number is the policy''s draft (at most one), changed by saving the draft. Publishing gives it the next number, needs_acknowledgement (true: a new version that asks every member again; false: a correction that asks nobody again), acknowledgement_round (the number of the version that asked), published_at, published_by and published_by_name (never an email); from then on the row is never changed and never deleted (trigger org_policy_versions_guard), except that deleting the publisher''s account empties published_by (the only way it is ever empty; published_by_name keeps who it was). A version is inserted only as a draft. text_hash is SHA-256 (hex) of title, two line feeds and body, held to the words by a check. Title and body are in the normal form of packages/core src/policies/policy-text.ts.';
+  'The words of a policy (0482). A row with no version number is the policy''s draft (at most one), changed by saving the draft. Publishing gives it the next number, needs_acknowledgement (true: a new version that asks every member again; false: a correction that asks nobody again), acknowledgement_round (the number of the version that asked), published_at, published_by and published_by_name (never an email); from then on the row is never changed and never deleted (trigger org_policy_versions_guard), except that deleting the publisher''s account empties published_by (the only way it is ever empty; published_by_name keeps who it was, or ''Former member, no name on the account'' when the account had no name). kind is the policy''s kind with these words; a correction keeps the corrected version''s title and kind. A version is inserted only as a draft. text_hash is SHA-256 (hex) of title, two line feeds and body, held to the words by a check. Title and body are in the normal form of packages/core src/policies/policy-text.ts.';
 comment on column public.org_policy_versions.text_hash is
   'SHA-256, 64 lower-case hex digits, of the UTF-8 bytes of title || E''\n\n'' || body (both in normal form): packages/core policyTextHash. Held to the stored words by org_policy_versions_text_hash.';
 
@@ -448,6 +480,8 @@ create table public.org_policy_acknowledgements (
   text_hash              text        not null,
   user_id                uuid        references public.user_profiles(id) on delete set null,
   user_name              text,
+  -- When the membership began (organization_members.accepted_at), as it was.
+  member_since           timestamptz not null,
   method                 text        not null,
   acknowledged_at        timestamptz not null default now(),
   constraint org_policy_acknowledgements_version_fkey foreign key (version_id, policy_id, organization_id)
@@ -476,7 +510,7 @@ create index org_policy_acknowledgements_user_idx
   where user_id is not null;
 
 comment on table public.org_policy_acknowledgements is
-  'Evidence that a member pressed "I have read and agree" for a policy version while signed in as themselves (0482): the version, its number, round and text hash as they were, the account and its name as it was (never an email), when, and web or phone. APPEND ONLY: written by org_policy_acknowledge only, for the caller''s own account; never changed or deleted (trigger org_policy_acknowledgements_guard; no API role has a write privilege), except that deleting the account empties user_id (the only way it is ever empty; user_name keeps who it was), and deleting the organization removes its records. TRUNCATE is refused. Never purged by a job.';
+  'Evidence that a member pressed "I have read and agree" for a policy version while signed in as themselves (0482): the version, its number, round and text hash as they were, the account and its name as it was (never an email), when, and web or phone. APPEND ONLY: written by org_policy_acknowledge only, for the caller''s own account; never changed or deleted (trigger org_policy_acknowledgements_guard; no API role has a write privilege), except that deleting the account empties user_id (the only way it is ever empty; user_name keeps who it was, or ''Former member, no name on the account'' when the account had no name, a row that proves less: it says only when that member joined, member_since), and deleting the organization removes its records. TRUNCATE is refused. Never purged by a job.';
 
 -- ── 4. The reminders ─────────────────────────────────────────────────────────
 create table public.org_policy_reminders (
@@ -491,6 +525,11 @@ create table public.org_policy_reminders (
   last_sent_at      timestamptz,
   manual_count      integer     not null default 0,
   last_reminded_at  timestamptz,
+  -- The last correction (its version number) this member, who acknowledged
+  -- an earlier text of the round, was told of; stamped first by
+  -- org_policy_correction_notices_claim.
+  correction_notice_number  integer,
+  correction_noticed_at     timestamptz,
   constraint org_policy_reminders_version_fkey foreign key (round_version_id, policy_id, organization_id)
     references public.org_policy_versions (id, policy_id, organization_id) on delete cascade,
   constraint org_policy_reminders_once unique (round_version_id, user_id),
@@ -498,6 +537,9 @@ create table public.org_policy_reminders (
     check (sent_count between 0 and 6 and (sent_count = 0) = (last_sent_at is null)),
   constraint org_policy_reminders_manual
     check (manual_count >= 0),
+  constraint org_policy_reminders_correction_notice
+    check ((correction_notice_number is null) = (correction_noticed_at is null)
+           and (correction_notice_number is null or correction_notice_number >= 2)),
   constraint org_policy_reminders_last
     check ((last_reminded_at is null) = (sent_count = 0 and manual_count = 0)
            and (last_sent_at is null or last_reminded_at >= last_sent_at))
@@ -507,7 +549,7 @@ create table public.org_policy_reminders (
 create index org_policy_reminders_user_idx on public.org_policy_reminders (user_id);
 
 comment on table public.org_policy_reminders is
-  'Reminders of a policy (0482), one row per asking version (round) and member: sent_count automatic reminders (at most 6) and the last one, manual_count "Remind now" reminders, and last_reminded_at (either kind). Stamped before anything is sent (org_policy_reminders_claim, org_policy_remind_now): a failed send loses a reminder, it never repeats one. Goes with the account.';
+  'Reminders of a policy (0482), one row per asking version (round) and member: sent_count automatic reminders (at most 6) and the last one, manual_count "Remind now" reminders, and last_reminded_at (either kind); correction_notice_number and correction_noticed_at, the last correction a member who acknowledged an earlier text of the round was told of. Stamped before anything is sent (org_policy_reminders_claim, org_policy_remind_now, org_policy_correction_notices_claim): a failed send loses a reminder or a notice, it never repeats one. Goes with the account.';
 
 -- ── Row security and privileges ──────────────────────────────────────────────
 -- RLS on and no policy: no API role but service_role (which bypasses row
@@ -574,7 +616,7 @@ $$;
 -- A version: it is inserted as a draft; a draft may change its words and be
 -- published, with its publisher; a published version never changes, but for
 -- one thing: deleting the publisher's account empties published_by (the
--- key's SET NULL). A draft may be deleted; a published version goes only
+-- key's SET NULL; the name is kept, or the label when there was none). A draft may be deleted; a published version goes only
 -- with its policy, which goes only with its organization.
 create function public._org_policy_versions_guard()
 returns trigger
@@ -605,6 +647,9 @@ begin
     if old.published_by is not null and new.published_by is null
        and (pg_catalog.to_jsonb(new) - 'published_by') = (pg_catalog.to_jsonb(old) - 'published_by')
        and not exists (select 1 from public.user_profiles up where up.id = old.published_by) then
+      -- The kept name, or the label for an account that had none, so the
+      -- version never names nobody.
+      new.published_by_name := coalesce(old.published_by_name, 'Former member, no name on the account');
       return new;
     end if;
     raise exception 'org_policy_version_frozen'
@@ -626,8 +671,9 @@ $$;
 
 -- An acknowledgement: inserted only for a published version, with that
 -- version's number, round and hash, naming an account;
--- never changed but for an account deletion's SET NULL of user_id; deleted
--- only with its version (so only with its organization).
+-- never changed but for an account deletion's SET NULL of user_id (the name
+-- is kept, or the label when there was none); deleted only with its version
+-- (so only with its organization).
 create function public._org_policy_acknowledgements_guard()
 returns trigger
 language plpgsql
@@ -661,6 +707,9 @@ begin
   if old.user_id is not null and new.user_id is null
      and (pg_catalog.to_jsonb(new) - 'user_id') = (pg_catalog.to_jsonb(old) - 'user_id')
      and not exists (select 1 from public.user_profiles up where up.id = old.user_id) then
+    -- The kept name, or the label for an account that had none (with
+    -- member_since, the row then says only when that member joined).
+    new.user_name := coalesce(old.user_name, 'Former member, no name on the account');
     return new;
   end if;
   raise exception 'org_policy_acknowledgement_append_only'
@@ -710,9 +759,9 @@ create trigger org_policy_acknowledgements_no_truncate
 comment on function public._org_policies_guard() is
   'org_policies_guard (0482): a draft policy may be deleted, a published or retired one only with its organization; id, organization and creation time never change; the state only moves forward, the version number never goes back, a retired policy never changes. 55000 org_policy_kept or org_policy_changed_wrongly.';
 comment on function public._org_policy_versions_guard() is
-  'org_policy_versions_guard (0482): a version is inserted as a draft (55000 org_policy_changed_wrongly otherwise); a draft may change and be published with its publisher, or deleted; a published version never changes (55000 org_policy_version_frozen) except that an account deletion empties published_by, and is deleted only with its policy (55000 org_policy_version_kept).';
+  'org_policy_versions_guard (0482): a version is inserted as a draft (55000 org_policy_changed_wrongly otherwise); a draft may change and be published with its publisher, or deleted; a published version never changes (55000 org_policy_version_frozen) except that an account deletion empties published_by (keeping the name, or the label for an account with none), and is deleted only with its policy (55000 org_policy_version_kept).';
 comment on function public._org_policy_acknowledgements_guard() is
-  'org_policy_acknowledgements_guard (0482): an acknowledgement is inserted only for a published version with its number, round and hash and an account; it is never changed except that an account deletion empties user_id, and deleted only with its version. 55000 org_policy_acknowledgement_append_only.';
+  'org_policy_acknowledgements_guard (0482): an acknowledgement is inserted only for a published version with its number, round and hash and an account; it is never changed except that an account deletion empties user_id (keeping the name, or the label for an account with none), and deleted only with its version. 55000 org_policy_acknowledgement_append_only.';
 comment on function public._org_policy_refuse_truncate() is
   'Refuses TRUNCATE of org_policies, org_policy_versions and org_policy_acknowledgements (0482): 55000 org_policy_truncate_refused.';
 
@@ -739,6 +788,8 @@ returns table (
   acknowledged_at              timestamptz,
   acknowledged_version_number  integer,
   acknowledged_method          text,
+  corrected_since_acknowledged boolean,
+  last_corrected_at            timestamptz,
   my_acknowledgements          jsonb
 )
 language plpgsql
@@ -768,6 +819,7 @@ begin
              cv.version_number as r_number, cv.needs_acknowledgement as r_needs, cv.published_at as r_published,
              rv.published_at as r_round_published, cv.text_hash as r_hash,
              last_ack.m_at as r_ack_at, last_ack.m_number as r_ack_number, last_ack.m_method as r_ack_method,
+             case when not cv.needs_acknowledgement then cv.published_at end as r_corrected_at,
              coalesce((select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
                                 'version_number', x.m_number, 'acknowledged_at', x.m_at, 'method', x.m_method)
                               order by x.m_at, x.m_number)
@@ -789,7 +841,8 @@ begin
            r.r_round_published, r.r_hash,
            r.r_ack_at is not null,
            (r.r_status = 'published' and v_current and r.r_ack_at is null),
-           r.r_ack_at, r.r_ack_number, r.r_ack_method, r.r_mine
+           r.r_ack_at, r.r_ack_number, r.r_ack_method,
+           coalesce(r.r_ack_number < r.r_number, false), r.r_corrected_at, r.r_mine
       from listed r
      order by (r.r_status = 'published' and v_current and r.r_ack_at is null) desc,
               r.r_status, r.r_title, r.r_policy;
@@ -800,11 +853,14 @@ revoke all on function public.org_policies_for_member(uuid) from public, anon, a
 grant execute on function public.org_policies_for_member(uuid) to authenticated;
 
 comment on function public.org_policies_for_member(uuid) is
-  'For a member of the organization (is_org_member): its published policies, and the retired ones the caller acknowledged, each with its current version (id, number, title, text_hash, needs_acknowledgement, published_at, round_published_at), acknowledged (the caller has an acknowledgement in the current version''s round), owed (published, the caller is a current member by _notify_is_current_member and has not acknowledged), the caller''s latest acknowledgement in the round and my_acknowledgements (every one of the policy: version_number, acknowledged_at, method). Owed first, then by title. 42501 policy_not_allowed for anyone else. Never returns a draft.';
+  'For a member of the organization (is_org_member): its published policies, and the retired ones the caller acknowledged, each with its current version (id, number, title, text_hash, needs_acknowledgement, published_at, round_published_at), acknowledged (the caller has an acknowledgement in the current version''s round), owed (published, the caller is a current member by _notify_is_current_member and has not acknowledged), the caller''s latest acknowledgement in the round, corrected_since_acknowledged (that acknowledgement is of an earlier text of the round: the current version is a correction of it, which asks nothing), last_corrected_at (the current version''s publish time when it is a correction, else null) and my_acknowledgements (every one of the policy: version_number, acknowledged_at, method). Owed first, then by title. 42501 policy_not_allowed for anyone else. Never returns a draft.';
 
 -- One version's words. A member reads the current version of a published
--- policy, and any version they acknowledged; an owner or admin reads every
--- published version. p_version_number null: the current version.
+-- policy, any version they acknowledged, and the last version of a retired
+-- policy they acknowledged; an owner or admin reads every published version
+-- (a read only an admin may make asks for the authenticator rule).
+-- p_version_number null: the current version; for a member and a retired
+-- policy, the latest version they acknowledged (what they agreed to).
 create function public.org_policy_text(p_policy_id uuid, p_version_number integer default null)
 returns jsonb
 language plpgsql
@@ -813,13 +869,16 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_uid    uuid := auth.uid();
-  v_p      public.org_policies%rowtype;
-  v_v      public.org_policy_versions%rowtype;
-  v_cur    public.org_policy_versions%rowtype;
-  v_admin  boolean;
-  v_mine   jsonb;
-  v_in_round boolean;
+  v_uid      uuid := auth.uid();
+  v_p        public.org_policies%rowtype;
+  v_v        public.org_policy_versions%rowtype;
+  v_cur      public.org_policy_versions%rowtype;
+  v_admin    boolean;
+  v_mine     jsonb;
+  v_number   integer := p_version_number;
+  v_acked    integer;
+  v_round_ack integer;
+  v_member_may boolean;
 begin
   if v_uid is null or p_policy_id is null then
     raise exception 'policy_not_allowed' using errcode = '42501', hint = 'policy_not_allowed';
@@ -837,9 +896,18 @@ begin
     raise exception 'policy_not_allowed' using errcode = '42501', hint = 'policy_not_allowed';
   end if;
 
+  -- The latest version the caller acknowledged, of any round.
+  select max(a.version_number) into v_acked
+    from public.org_policy_acknowledgements a
+   where a.policy_id = v_p.id and a.user_id = v_uid;
+  if v_number is null then
+    v_number := case when v_p.status = 'retired' and v_acked is not null then v_acked
+                     else v_p.current_version end;
+  end if;
+
   select * into v_v from public.org_policy_versions v
    where v.policy_id = v_p.id
-     and v.version_number = coalesce(p_version_number, v_p.current_version)
+     and v.version_number = v_number
      and v.published_at is not null;
   if not found then
     if v_admin then
@@ -853,17 +921,26 @@ begin
     from public.org_policy_acknowledgements a
    where a.version_id = v_v.id and a.user_id = v_uid;
 
-  if not v_admin
-     and not (v_p.status = 'published' and v_v.version_number = v_p.current_version)
-     and v_mine is null then
-    raise exception 'policy_not_allowed' using errcode = '42501', hint = 'policy_not_allowed';
+  -- What a member may read: the current version of a published policy, a
+  -- version they acknowledged, the last version of a retired policy they
+  -- acknowledged. Anything else only an admin reads, with the authenticator
+  -- rule.
+  v_member_may := (v_v.version_number = v_p.current_version
+                   and (v_p.status = 'published' or v_acked is not null))
+                  or v_mine is not null;
+  if not v_member_may then
+    if not v_admin then
+      raise exception 'policy_not_allowed' using errcode = '42501', hint = 'policy_not_allowed';
+    end if;
+    perform public.security_events_reader_check(v_p.organization_id);
   end if;
 
   select * into v_cur from public.org_policy_versions v
    where v.policy_id = v_p.id and v.version_number = v_p.current_version;
-  v_in_round := exists (select 1 from public.org_policy_acknowledgements a
-                         where a.policy_id = v_p.id and a.acknowledgement_round = v_cur.acknowledgement_round
-                           and a.user_id = v_uid);
+  select max(a.version_number) into v_round_ack
+    from public.org_policy_acknowledgements a
+   where a.policy_id = v_p.id and a.acknowledgement_round = v_cur.acknowledgement_round
+     and a.user_id = v_uid;
 
   return pg_catalog.jsonb_build_object(
     'policy_id', v_p.id,
@@ -881,8 +958,11 @@ begin
     'text_hash', v_v.text_hash,
     'published_at', v_v.published_at,
     'my_acknowledgement', v_mine,
-    'acknowledged_in_current_round', v_in_round,
-    'owed', v_p.status = 'published' and not v_in_round
+    'acknowledged_in_current_round', v_round_ack is not null,
+    'acknowledged_version_number', v_round_ack,
+    'corrected_since_acknowledged', coalesce(v_round_ack < v_cur.version_number, false),
+    'last_corrected_at', case when not v_cur.needs_acknowledgement then v_cur.published_at end,
+    'owed', v_p.status = 'published' and v_round_ack is null
             and coalesce(public._notify_is_current_member(v_p.organization_id, v_uid), false));
 end;
 $$;
@@ -891,7 +971,7 @@ revoke all on function public.org_policy_text(uuid, integer) from public, anon, 
 grant execute on function public.org_policy_text(uuid, integer) to authenticated;
 
 comment on function public.org_policy_text(uuid, integer) is
-  'One published version of a policy (p_version_number null: the current one): title, body, text_hash, version_number, is_current, needs_acknowledgement, acknowledgement_round, published_at, the policy''s kind, status and current_version_number, my_acknowledgement (acknowledged_at, method of the caller''s acknowledgement of this version, or null), acknowledged_in_current_round and owed. A member reads the current version of a published policy and any version they acknowledged; an owner or admin reads every published version (P0001 policy_not_published for a draft policy, policy_version_not_found for a number that is not published). 42501 policy_not_allowed otherwise, also for a policy that does not exist. Never returns a draft or the publisher.';
+  'One published version of a policy (p_version_number null: the current one; for a member and a retired policy, the latest version the caller acknowledged): title, body, text_hash, version_number, is_current, needs_acknowledgement, acknowledgement_round, published_at, the policy''s kind, status and current_version_number, my_acknowledgement (acknowledged_at, method of the caller''s acknowledgement of this version, or null), acknowledged_in_current_round, acknowledged_version_number (the caller''s latest in the current round), corrected_since_acknowledged (the current version is a later correction of it), last_corrected_at and owed. A member reads the current version of a published policy, any version they acknowledged and the last version of a retired policy they acknowledged; an owner or admin reads every published version, a read no member may make under the authenticator rule (security_events_reader_check: 42501 mfa_required, aal2_required). P0001 policy_not_published for a draft policy and policy_version_not_found for a number that is not published (an admin). 42501 policy_not_allowed otherwise, also for a policy that does not exist. Never returns a draft or the publisher.';
 
 -- ── The acknowledgement ──────────────────────────────────────────────────────
 create function public.org_policy_acknowledge(p_version_id uuid, p_text_hash text, p_method text)
@@ -909,6 +989,7 @@ declare
   v_id    uuid;
   v_at    timestamptz;
   v_meth  text;
+  v_since timestamptz;
   v_already boolean := false;
 begin
   -- The gate, in this body (security_invariants INV-25 reads it here): the
@@ -948,13 +1029,17 @@ begin
   if v_v.text_hash <> p_text_hash then
     raise exception 'policy_text_changed' using errcode = 'P0001', hint = 'policy_text_changed';
   end if;
+  -- When the membership began, kept with the record (a current member's is set).
+  select m.accepted_at into v_since
+    from public.organization_members m
+   where m.organization_id = v_v.organization_id and m.user_id = v_uid;
 
   insert into public.org_policy_acknowledgements
     (organization_id, policy_id, version_id, version_number, acknowledgement_round, text_hash,
-     user_id, user_name, method)
+     user_id, user_name, member_since, method)
   values
     (v_v.organization_id, v_v.policy_id, v_v.id, v_v.version_number, v_v.acknowledgement_round, v_v.text_hash,
-     v_uid, public._org_policy_person_name(v_uid), p_method)
+     v_uid, public._org_policy_person_name(v_uid), v_since, p_method)
   on conflict on constraint org_policy_acknowledgements_once do nothing
   returning id, acknowledged_at, method into v_id, v_at, v_meth;
 
@@ -993,6 +1078,7 @@ returns table (
   current_version_number         integer,
   current_needs_acknowledgement  boolean,
   current_published_at           timestamptz,
+  current_published_by_name      text,
   round_version_number           integer,
   round_published_at             timestamptz,
   first_published_at             timestamptz,
@@ -1004,6 +1090,7 @@ returns table (
   next_remind_now_at             timestamptz,
   members                        integer,
   acknowledged                   integer,
+  acknowledged_before_correction integer,
   not_acknowledged               integer,
   created_at                     timestamptz,
   updated_at                     timestamptz
@@ -1018,6 +1105,8 @@ begin
      or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(p_organization_id);
 
   return query
     with cm as (
@@ -1029,7 +1118,8 @@ begin
     listed as (
       select p.id as r_policy, p.kind as r_kind, p.status as r_status, p.title as r_title,
              cv.id as r_cv, cv.version_number as r_cv_number, cv.needs_acknowledgement as r_cv_needs,
-             cv.published_at as r_cv_published, cv.acknowledgement_round as r_round,
+             cv.published_at as r_cv_published, cv.published_by_name as r_cv_by_name,
+             cv.acknowledgement_round as r_round,
              rv.published_at as r_round_published, p.first_published_at as r_first, p.retired_at as r_retired,
              d.id is not null as r_has_draft, d.title as r_draft_title, d.updated_at as r_draft_updated,
              p.last_remind_now_at as r_remind, p.created_at as r_created, p.updated_at as r_updated,
@@ -1037,7 +1127,14 @@ begin
                   else (select pg_catalog.count(*)::integer from cm
                          where exists (select 1 from public.org_policy_acknowledgements a
                                         where a.policy_id = p.id and a.acknowledgement_round = cv.acknowledgement_round
-                                          and a.user_id = cm.c_user)) end as r_acked
+                                          and a.user_id = cm.c_user)) end as r_acked,
+             -- Of those, the ones whose latest acknowledgement in the round is of an earlier text: the
+             -- current version is a correction of what they agreed to.
+             case when cv.id is null then 0
+                  else (select pg_catalog.count(*)::integer from cm
+                         where (select max(a.version_number) from public.org_policy_acknowledgements a
+                                 where a.policy_id = p.id and a.acknowledgement_round = cv.acknowledgement_round
+                                   and a.user_id = cm.c_user) < cv.version_number) end as r_acked_before
         from public.org_policies p
         left join public.org_policy_versions cv on cv.policy_id = p.id and cv.version_number = p.current_version
         left join public.org_policy_versions rv on rv.policy_id = p.id and rv.version_number = cv.acknowledgement_round
@@ -1045,11 +1142,11 @@ begin
        where p.organization_id = p_organization_id
     )
     select r.r_policy, r.r_kind, r.r_status, r.r_title, r.r_cv, r.r_cv_number, r.r_cv_needs, r.r_cv_published,
-           r.r_round, r.r_round_published, r.r_first, r.r_retired, r.r_has_draft, r.r_draft_title,
+           r.r_cv_by_name, r.r_round, r.r_round_published, r.r_first, r.r_retired, r.r_has_draft, r.r_draft_title,
            r.r_draft_updated, r.r_remind,
            case when r.r_remind > pg_catalog.now() - interval '24 hours' then r.r_remind + interval '24 hours' end,
            (select pg_catalog.count(*)::integer from cm),
-           r.r_acked,
+           r.r_acked, r.r_acked_before,
            case when r.r_cv is null then 0 else (select pg_catalog.count(*)::integer from cm) - r.r_acked end,
            r.r_created, r.r_updated
       from listed r
@@ -1061,7 +1158,7 @@ revoke all on function public.org_policies_for_admin(uuid) from public, anon, au
 grant execute on function public.org_policies_for_admin(uuid) to authenticated;
 
 comment on function public.org_policies_for_admin(uuid) is
-  'For the organization''s owners and admins (has_org_role admin): every policy, drafts included, with its current version, the round (the version that asked) and when it was published, the draft''s title and time if one is saved, Remind now''s last time and the next time it is allowed (null: now), and the counts of the current round: members (current members by _notify_is_current_member), acknowledged and not_acknowledged (0 for a policy never published). Published first, then drafts, then retired; by title. 42501 policy_admins_only for anyone else.';
+  'For the organization''s owners and admins (has_org_role admin): every policy, drafts included, with its current version, the round (the version that asked) and when it was published, the draft''s title and time if one is saved, Remind now''s last time and the next time it is allowed (null: now), current_published_by_name (who published the current version, as kept), and the counts of the current round: members (current members by _notify_is_current_member), acknowledged, acknowledged_before_correction (of those, the ones whose acknowledgement is of an earlier text the current version corrects) and not_acknowledged (0 for a policy never published). Published first, then drafts, then retired; by title. 42501 policy_admins_only for anyone else; mfa_required and aal2_required by the authenticator rule (security_events_reader_check).';
 
 create function public.org_policy_draft(p_policy_id uuid)
 returns jsonb
@@ -1079,6 +1176,8 @@ begin
   if not found or not coalesce(public.has_org_role(v_p.organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(v_p.organization_id);
   select * into v_d from public.org_policy_versions v where v.policy_id = v_p.id and v.published_at is null;
   select * into v_c from public.org_policy_versions v
    where v.policy_id = v_p.id and v.version_number = v_p.current_version;
@@ -1090,12 +1189,23 @@ begin
     'status', v_p.status,
     'title', v_p.title,
     'draft', case when v_d.id is null then null else pg_catalog.jsonb_build_object(
-               'version_id', v_d.id, 'title', v_d.title, 'body', v_d.body, 'text_hash', v_d.text_hash,
-               'created_at', v_d.created_at, 'updated_at', v_d.updated_at) end,
+               'version_id', v_d.id, 'kind', v_d.kind, 'title', v_d.title, 'body', v_d.body,
+               'text_hash', v_d.text_hash, 'created_at', v_d.created_at, 'updated_at', v_d.updated_at) end,
     'current', case when v_c.id is null then null else pg_catalog.jsonb_build_object(
-                 'version_id', v_c.id, 'version_number', v_c.version_number, 'title', v_c.title,
-                 'text_hash', v_c.text_hash, 'needs_acknowledgement', v_c.needs_acknowledgement,
-                 'published_at', v_c.published_at) end);
+                 'version_id', v_c.id, 'version_number', v_c.version_number, 'kind', v_c.kind,
+                 'title', v_c.title, 'text_hash', v_c.text_hash,
+                 'needs_acknowledgement', v_c.needs_acknowledgement,
+                 'acknowledgement_round', v_c.acknowledgement_round, 'published_at', v_c.published_at,
+                 'published_by', v_c.published_by, 'published_by_name', v_c.published_by_name) end,
+    -- Every published version, oldest first: what changed, when, by whom (as kept).
+    'versions', coalesce((select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+                   'version_id', v.id, 'version_number', v.version_number, 'kind', v.kind, 'title', v.title,
+                   'text_hash', v.text_hash, 'needs_acknowledgement', v.needs_acknowledgement,
+                   'acknowledgement_round', v.acknowledgement_round, 'published_at', v.published_at,
+                   'published_by', v.published_by, 'published_by_name', v.published_by_name)
+                   order by v.version_number)
+                 from public.org_policy_versions v
+                where v.policy_id = v_p.id and v.published_at is not null), '[]'::jsonb));
 end;
 $$;
 
@@ -1103,7 +1213,7 @@ revoke all on function public.org_policy_draft(uuid) from public, anon, authenti
 grant execute on function public.org_policy_draft(uuid) to authenticated;
 
 comment on function public.org_policy_draft(uuid) is
-  'For the organization''s owners and admins: a policy''s kind, status, title, its draft (version_id, title, body, text_hash, created_at, updated_at; null when none is saved) and its current version (version_id, version_number, title, text_hash, needs_acknowledgement, published_at; null when never published). 42501 policy_admins_only for anyone else and for a policy that does not exist.';
+  'For the organization''s owners and admins: a policy''s kind, status, title, its draft (version_id, kind, title, body, text_hash, created_at, updated_at; null when none is saved), its current version (version_id, version_number, kind, title, text_hash, needs_acknowledgement, acknowledgement_round, published_at, published_by, published_by_name; null when never published) and versions (every published version, oldest first, with the same fields: a correction is needs_acknowledgement false). 42501 policy_admins_only for anyone else and for a policy that does not exist; mfa_required and aal2_required by the authenticator rule.';
 
 -- Who has and has not acknowledged the current round, by the current-member
 -- rule (0422), and the invitations not yet accepted, apart.
@@ -1126,6 +1236,8 @@ begin
   if not found or not coalesce(public.has_org_role(v_p.organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(v_p.organization_id);
   select * into v_cv from public.org_policy_versions v
    where v.policy_id = v_p.id and v.version_number = v_p.current_version;
   select * into v_rv from public.org_policy_versions v
@@ -1151,7 +1263,8 @@ begin
     select
       coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
                  'user_id', cm.c_user, 'name', cm.c_name, 'email', cm.c_email, 'role', cm.c_role,
-                 'version_number', l.l_number, 'method', l.l_method, 'acknowledged_at', l.l_at)
+                 'version_number', l.l_number, 'corrected_since', l.l_number < v_cv.version_number,
+                 'method', l.l_method, 'acknowledged_at', l.l_at)
                order by pg_catalog.lower(coalesce(cm.c_name, cm.c_email)), cm.c_user)
                filter (where l.l_user is not null), '[]'::jsonb),
       coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
@@ -1193,6 +1306,8 @@ begin
     'policy', pg_catalog.jsonb_build_object(
       'policy_id', v_p.id, 'organization_id', v_p.organization_id, 'kind', v_p.kind, 'status', v_p.status,
       'title', v_p.title, 'current_version_id', v_cv.id, 'current_version_number', v_cv.version_number,
+      'current_needs_acknowledgement', v_cv.needs_acknowledgement, 'current_published_at', v_cv.published_at,
+      'current_published_by', v_cv.published_by, 'current_published_by_name', v_cv.published_by_name,
       'round_version_number', v_cv.acknowledgement_round, 'round_published_at', v_rv.published_at,
       'last_remind_now_at', v_p.last_remind_now_at,
       'next_remind_now_at', case when v_p.last_remind_now_at > pg_catalog.now() - interval '24 hours'
@@ -1212,7 +1327,7 @@ revoke all on function public.org_policy_status(uuid) from public, anon, authent
 grant execute on function public.org_policy_status(uuid) to authenticated;
 
 comment on function public.org_policy_status(uuid) is
-  'For the organization''s owners and admins: a policy''s current round. policy (policy_id, kind, status, title, current and round version numbers, round_published_at, last and next Remind now); counts (members, acknowledged, not_acknowledged, invited); acknowledged (each current member with an acknowledgement in the round: user_id, name, email, role, version_number, method, acknowledged_at of the latest); not_acknowledged (each current member without one: user_id, name, email, role, member_since, owed_since, reminders_sent, remind_now_count, last_reminded_at); invited (open invitations and memberships not accepted: email, role, invited_at, expires_at). Current members by _notify_is_current_member: never an act-as seat, a disabled account or an invitation. For a retired policy the lists are of its last round; for a policy never published they are empty. By name, then email. 42501 policy_admins_only for anyone else.';
+  'For the organization''s owners and admins: a policy''s current round. policy (policy_id, kind, status, title, current and round version numbers, the current version''s needs_acknowledgement, published_at, published_by and published_by_name, round_published_at, last and next Remind now); counts (members, acknowledged, not_acknowledged, invited); acknowledged (each current member with an acknowledgement in the round: user_id, name, email, role, version_number of the latest and corrected_since, true when the current version is a later correction of it, method, acknowledged_at); not_acknowledged (each current member without one: user_id, name, email, role, member_since, owed_since, reminders_sent, remind_now_count, last_reminded_at); invited (open invitations and memberships not accepted: email, role, invited_at, expires_at). Current members by _notify_is_current_member: never an act-as seat, a disabled account or an invitation. For a retired policy the lists are of its last round; for a policy never published they are empty. By name, then email. 42501 policy_admins_only for anyone else; mfa_required and aal2_required by the authenticator rule.';
 
 -- The whole record of a policy: every acknowledgement of every version, also
 -- of former members and deleted accounts, oldest first. For the CSV.
@@ -1229,8 +1344,11 @@ returns table (
   account_deleted        boolean,
   current_member         boolean,
   email                  text,
+  member_since           timestamptz,
   method                 text,
-  acknowledged_at        timestamptz
+  acknowledged_at        timestamptz,
+  current_version_number integer,
+  since_acknowledged     text
 )
 language plpgsql
 stable
@@ -1239,11 +1357,16 @@ set search_path = ''
 as $$
 declare
   v_org uuid;
+  v_cur public.org_policy_versions%rowtype;
 begin
   select p.organization_id into v_org from public.org_policies p where p.id = p_policy_id;
   if v_org is null or not coalesce(public.has_org_role(v_org, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(v_org);
+  select v.* into v_cur from public.org_policy_versions v join public.org_policies p on p.id = v.policy_id
+   where p.id = p_policy_id and v.version_number = p.current_version;
 
   return query
     select a.id, a.version_id, a.version_number, a.acknowledgement_round, v.title, a.text_hash,
@@ -1251,7 +1374,12 @@ begin
            a.user_id is not null and coalesce(public._notify_is_current_member(v_org, a.user_id), false),
            case when a.user_id is not null and coalesce(public._notify_is_current_member(v_org, a.user_id), false)
                 then (select up.email::text from public.user_profiles up where up.id = a.user_id) end,
-           a.method, a.acknowledged_at
+           a.member_since, a.method, a.acknowledged_at, v_cur.version_number,
+           -- What the current text is to this acknowledgement: the same version, a later correction of
+           -- it (asks nothing), or a later version that asked everyone again.
+           case when a.version_number = v_cur.version_number then 'unchanged'
+                when a.acknowledgement_round = v_cur.acknowledgement_round then 'corrected'
+                else 'new_version' end
       from public.org_policy_acknowledgements a
       join public.org_policy_versions v on v.id = a.version_id
      where a.policy_id = p_policy_id
@@ -1263,12 +1391,13 @@ revoke all on function public.org_policy_acknowledgement_record(uuid) from publi
 grant execute on function public.org_policy_acknowledgement_record(uuid) to authenticated;
 
 comment on function public.org_policy_acknowledgement_record(uuid) is
-  'For the organization''s owners and admins: every acknowledgement of every version of a policy, oldest first (the record and its CSV): version id, number, round and title, text_hash, user_id (null once the account was deleted), name (as it was when acknowledged; never an email), account_deleted, current_member (now, by _notify_is_current_member), email (only for a current member), method, acknowledged_at. 42501 policy_admins_only for anyone else.';
+  'For the organization''s owners and admins: every acknowledgement of every version of a policy, oldest first (the record and its CSV): version id, number, round and title, text_hash, user_id (null once the account was deleted), name (as it was when acknowledged; never an email; for a deleted account that had none, ''Former member, no name on the account'', a row that proves less), account_deleted, current_member (now, by _notify_is_current_member), email (only for a current member), member_since (when that membership began), method, acknowledged_at, current_version_number and since_acknowledged (unchanged: the current version is the one acknowledged; corrected: the current version is a later correction of it, which asks nothing; new_version: a later version asked everyone again). 42501 policy_admins_only for anyone else; mfa_required and aal2_required by the authenticator rule.';
 
 -- ── What an owner or admin writes ────────────────────────────────────────────
 -- Saves the draft of a policy; with p_policy_id null, makes a new policy (in
--- p_organization_id) with this draft. kind changes at once; the title and
--- body are the draft's until it is published. The title and body must be in
+-- p_organization_id) with this draft. The kind, title and body are the
+-- draft's until it is published (a policy never published shows the draft's
+-- kind and title at once). The title and body must be in
 -- normal form (the core normalises before it sends).
 create function public.org_policy_save_draft(
   p_organization_id uuid,
@@ -1295,6 +1424,8 @@ begin
      or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(p_organization_id);
   if p_policy_id is not null then
     select * into v_p from public.org_policies p
      where p.id = p_policy_id and p.organization_id = p_organization_id;
@@ -1326,19 +1457,19 @@ begin
       raise exception 'policy_retired' using errcode = 'P0001', hint = 'policy_retired';
     end if;
     update public.org_policies p
-       set kind = p_kind,
+       set kind = case when p.status = 'draft' then p_kind else p.kind end,
            title = case when p.status = 'draft' then p_title else p.title end,
            updated_at = v_now
      where p.id = v_p.id;
   end if;
 
   update public.org_policy_versions v
-     set title = p_title, body = p_body, text_hash = v_hash, updated_at = v_now
+     set kind = p_kind, title = p_title, body = p_body, text_hash = v_hash, updated_at = v_now
    where v.policy_id = v_p.id and v.published_at is null
   returning v.id into v_draft;
   if v_draft is null then
-    insert into public.org_policy_versions (organization_id, policy_id, title, body, text_hash)
-    values (v_p.organization_id, v_p.id, p_title, p_body, v_hash)
+    insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash)
+    values (v_p.organization_id, v_p.id, p_kind, p_title, p_body, v_hash)
     returning id into v_draft;
   end if;
 
@@ -1352,7 +1483,7 @@ revoke all on function public.org_policy_save_draft(uuid, uuid, text, text, text
 grant execute on function public.org_policy_save_draft(uuid, uuid, text, text, text) to authenticated;
 
 comment on function public.org_policy_save_draft(uuid, uuid, text, text, text) is
-  'For the organization''s owners and admins: saves a policy''s draft (title, body; the last save wins) and its kind (at once); with p_policy_id null, makes a new draft policy in p_organization_id. Title and body must be in the normal form of packages/core policy-text.ts. Answers policy_id, draft_version_id, text_hash (pass it to org_policy_publish), updated_at, created. 42501 policy_admins_only (not an admin of p_organization_id, or the policy is not in it), 22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid (detail empty, too_long, forbidden_character or not_normal_form), P0001 policy_retired.';
+  'For the organization''s owners and admins: saves a policy''s draft (kind, title, body; the last save wins; a published policy keeps its kind and title until the draft is published); with p_policy_id null, makes a new draft policy in p_organization_id. Title and body must be in the normal form of packages/core policy-text.ts. Answers policy_id, draft_version_id, text_hash (pass it to org_policy_publish), updated_at, created. 42501 policy_admins_only (not an admin of p_organization_id, or the policy is not in it), 22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid (detail empty, too_long, too_many_lines, forbidden_character or not_normal_form), P0001 policy_retired; mfa_required and aal2_required by the authenticator rule.';
 
 create function public.org_policy_discard_draft(p_policy_id uuid)
 returns jsonb
@@ -1370,6 +1501,8 @@ begin
   if not found or not coalesce(public.has_org_role(v_p.organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(v_p.organization_id);
   select * into v_p from public.org_policies p where p.id = p_policy_id for update;
 
   if v_p.status = 'draft' then
@@ -1387,7 +1520,7 @@ revoke all on function public.org_policy_discard_draft(uuid) from public, anon, 
 grant execute on function public.org_policy_discard_draft(uuid) to authenticated;
 
 comment on function public.org_policy_discard_draft(uuid) is
-  'For the organization''s owners and admins: discards a policy''s draft. A policy never published is deleted with it (discarded: policy); a published or retired one keeps every published version (discarded: draft, or nothing when there was no draft). 42501 policy_admins_only for anyone else.';
+  'For the organization''s owners and admins: discards a policy''s draft. A policy never published is deleted with it (discarded: policy); a published or retired one keeps every published version (discarded: draft, or nothing when there was no draft). 42501 policy_admins_only for anyone else; mfa_required and aal2_required by the authenticator rule.';
 
 -- Publishes the draft. p_change: new_version (every member is asked again;
 -- the first publish is always one) or correction (nobody is asked again; the
@@ -1417,6 +1550,8 @@ begin
   if not found or v_uid is null or not coalesce(public.has_org_role(v_p.organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(v_p.organization_id);
   if p_change is null or p_change not in ('new_version', 'correction') then
     raise exception 'policy_change_invalid' using errcode = '22023', hint = 'policy_change_invalid';
   end if;
@@ -1447,6 +1582,17 @@ begin
   else
     select * into v_c from public.org_policy_versions v
      where v.policy_id = v_p.id and v.version_number = v_p.current_version;
+    -- A correction fixes the words of the version it corrects and keeps
+    -- its title and its kind: a change of either is a new version, which
+    -- asks everyone again.
+    if not v_needs and v_d.title <> v_c.title then
+      raise exception 'policy_correction_changes_title' using errcode = 'P0001',
+        hint = 'policy_correction_changes_title';
+    end if;
+    if not v_needs and v_d.kind <> v_c.kind then
+      raise exception 'policy_correction_changes_kind' using errcode = 'P0001',
+        hint = 'policy_correction_changes_kind';
+    end if;
     if not v_needs and v_d.text_hash = v_c.text_hash then
       raise exception 'policy_draft_unchanged' using errcode = 'P0001', hint = 'policy_draft_unchanged';
     end if;
@@ -1467,6 +1613,7 @@ begin
   update public.org_policies p
      set status = 'published',
          current_version = v_number,
+         kind = v_d.kind,
          title = v_d.title,
          first_published_at = coalesce(p.first_published_at, v_now),
          updated_at = v_now
@@ -1484,7 +1631,7 @@ begin
   return pg_catalog.jsonb_build_object(
     'policy_id', v_p.id, 'version_id', v_d.id, 'version_number', v_number,
     'needs_acknowledgement', v_needs, 'acknowledgement_round', v_round, 'published_at', v_now,
-    'title', v_d.title, 'asked_user_ids', v_asked);
+    'kind', v_d.kind, 'title', v_d.title, 'asked_user_ids', v_asked);
 end;
 $$;
 
@@ -1492,7 +1639,7 @@ revoke all on function public.org_policy_publish(uuid, text, text) from public, 
 grant execute on function public.org_policy_publish(uuid, text, text) to authenticated;
 
 comment on function public.org_policy_publish(uuid, text, text) is
-  'For the organization''s owners and admins: publishes the policy''s draft as its next version, and from then on the version never changes. p_change new_version (asks every current member again; the first publish must be one) or correction (asks nobody again; the round stays the corrected version''s). p_text_hash must be the draft''s (from org_policy_save_draft or org_policy_draft). Answers policy_id, version_id, version_number, needs_acknowledgement, acknowledgement_round, published_at, title, asked_user_ids (the current members, by _notify_is_current_member, for a new version; empty for a correction). 42501 policy_admins_only, 22023 policy_change_invalid and policy_hash_invalid, P0001 policy_retired, policy_no_draft, policy_draft_changed (another save meanwhile), policy_correction_needs_a_version, policy_draft_unchanged (a correction with the current words).';
+  'For the organization''s owners and admins: publishes the policy''s draft as its next version, and from then on the version never changes. p_change new_version (asks every current member again; the first publish must be one) or correction (asks nobody again; the round stays the corrected version''s; it keeps the current title and kind; the members who acknowledged an earlier text are told once by org_policy_correction_notices_claim). p_text_hash must be the draft''s (from org_policy_save_draft or org_policy_draft). Answers policy_id, version_id, version_number, needs_acknowledgement, acknowledgement_round, published_at, kind, title, asked_user_ids (the current members, by _notify_is_current_member, for a new version; empty for a correction). 42501 policy_admins_only, 22023 policy_change_invalid and policy_hash_invalid, P0001 policy_retired, policy_no_draft, policy_draft_changed (another save meanwhile), policy_correction_needs_a_version, policy_correction_changes_title, policy_correction_changes_kind, policy_draft_unchanged (a correction with the current words); mfa_required and aal2_required by the authenticator rule.';
 
 create function public.org_policy_retire(p_policy_id uuid)
 returns jsonb
@@ -1510,6 +1657,8 @@ begin
   if not found or not coalesce(public.has_org_role(v_p.organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(v_p.organization_id);
   select * into v_p from public.org_policies p where p.id = p_policy_id for update;
   if v_p.status = 'draft' then
     raise exception 'policy_not_published' using errcode = 'P0001', hint = 'policy_not_published';
@@ -1530,7 +1679,7 @@ revoke all on function public.org_policy_retire(uuid) from public, anon, authent
 grant execute on function public.org_policy_retire(uuid) to authenticated;
 
 comment on function public.org_policy_retire(uuid) is
-  'For the organization''s owners and admins: retires a published policy for good (members are no longer asked or reminded; every version and acknowledgement is kept; a saved draft is discarded). Again on a retired policy: answers its retired_at with already true. Answers policy_id, retired_at, already. 42501 policy_admins_only, P0001 policy_not_published (never published: discard it instead).';
+  'For the organization''s owners and admins: retires a published policy for good (members are no longer asked or reminded; every version and acknowledgement is kept; a saved draft is discarded). Again on a retired policy: answers its retired_at with already true. Answers policy_id, retired_at, already. 42501 policy_admins_only, P0001 policy_not_published (never published: discard it instead); mfa_required and aal2_required by the authenticator rule.';
 
 -- Remind now: once per 24 hours per policy, the current members who have not
 -- acknowledged the current round. Stamp first: the reminder rows and the
@@ -1556,6 +1705,8 @@ begin
   if not found or not coalesce(public.has_org_role(v_p.organization_id, 'admin'), false) then
     raise exception 'policy_admins_only' using errcode = '42501', hint = 'policy_admins_only';
   end if;
+  -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
+  perform public.security_events_reader_check(v_p.organization_id);
   -- FOR UPDATE: two admins pressing at once remind once.
   select * into v_p from public.org_policies p where p.id = p_policy_id for update;
   if v_p.status = 'draft' then
@@ -1608,7 +1759,7 @@ revoke all on function public.org_policy_remind_now(uuid) from public, anon, aut
 grant execute on function public.org_policy_remind_now(uuid) to authenticated;
 
 comment on function public.org_policy_remind_now(uuid) is
-  'For the organization''s owners and admins: "Remind now" for a published policy, at most once per 24 hours per policy. Stamps first (each recipient''s reminder row: manual_count + 1, last_reminded_at; the policy''s last_remind_now_at), then answers reminded true, reminded_at, next_allowed_at, version_id, version_number, title and recipients (user ids: the current members by _notify_is_current_member without an acknowledgement in the round), for the website to send. reminded false with reason too_soon (and next_allowed_at) or nobody_owed (nothing stamped). 42501 policy_admins_only, P0001 policy_not_published, policy_retired.';
+  'For the organization''s owners and admins: "Remind now" for a published policy, at most once per 24 hours per policy. Stamps first (each recipient''s reminder row: manual_count + 1, last_reminded_at; the policy''s last_remind_now_at), then answers reminded true, reminded_at, next_allowed_at, version_id, version_number, title and recipients (user ids: the current members by _notify_is_current_member without an acknowledgement in the round), for the website to send. reminded false with reason too_soon (and next_allowed_at) or nobody_owed (nothing stamped). 42501 policy_admins_only, P0001 policy_not_published, policy_retired; mfa_required and aal2_required by the authenticator rule.';
 
 -- ── The reminder job's claim (service_role) ──────────────────────────────────
 -- Stamp first, then send (D in the code map): each due reminder is written
@@ -1705,17 +1856,128 @@ grant execute on function public.org_policy_reminders_claim(integer) to service_
 comment on function public.org_policy_reminders_claim(integer) is
   'For the daily reminder job (service_role only; 42501 policy_not_allowed when called as authenticated or anon): claims the automatic reminders now due, stamping each first (sent_count + 1, last_sent_at, last_reminded_at), oldest owed first, at most p_limit (1 to 1000, default 200). Due: a published policy, a current member (_notify_is_current_member) with no acknowledgement in the round, reminder n at 3, 7, 14, 21, 28, 35 days after the later of the round''s publish time and the member''s joining, at most 6, never within 3 days of the last reminder of either kind. Answers busy (another claim holds the lock: nothing claimed, try later), claimed (organization_id, policy_id, title, version_id, version_number, round_version_id, user_id, reminder_number, owed_since), more (more were due: call again), claimed_at. A stamp is a compare-and-set on the count: a reminder is handed out once however many claims overlap.';
 
+-- ── The correction notices' claim (service_role) ─────────────────────────────
+-- A correction asks nobody again, but it is never silent: each current member
+-- whose latest acknowledgement in the round is of an earlier text is told
+-- once, by the job that sends the reminders (one notice per correction; it
+-- asks nothing: packages/core policyCorrectionNotice). Stamp first, as the
+-- reminders: the member's reminder row of the round takes the correction's
+-- number (correction_notice_number) before the notice is handed out, a
+-- compare-and-set (only a later number replaces an earlier one), under the
+-- transaction advisory lock 4820002 (try only: busy answers nothing). Two
+-- corrections before a run: one notice, of the later. Oldest correction
+-- first, at most p_limit (1 to 1000, default 200) a call; more: true when
+-- more were due.
+create function public.org_policy_correction_notices_claim(p_limit integer default 200)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = ''
+set lock_timeout = '2s'
+as $$
+declare
+  v_limit   integer := least(greatest(coalesce(p_limit, 200), 1), 1000);
+  v_now     timestamptz := pg_catalog.now();
+  v_claimed jsonb;
+  v_due     integer;
+begin
+  -- The grant is the gate: service_role only. This second lock names no
+  -- gate: the role setting names the caller inside this body too (0413).
+  if coalesce(pg_catalog.current_setting('role', true), 'none') in ('authenticated', 'anon') then
+    raise exception 'policy_not_allowed' using errcode = '42501', hint = 'policy_not_allowed';
+  end if;
+  if not pg_catalog.pg_try_advisory_xact_lock(4820002) then
+    return pg_catalog.jsonb_build_object('busy', true, 'claimed', '[]'::jsonb, 'more', false, 'claimed_at', v_now);
+  end if;
+
+  with due as (
+    select p.organization_id as d_org, p.id as d_policy, cv.title as d_title, cv.id as d_version,
+           cv.version_number as d_number, cv.published_at as d_corrected_at, rv.id as d_round,
+           m.user_id as d_user, la.l_number as d_acked
+      from public.org_policies p
+      join public.org_policy_versions cv on cv.policy_id = p.id and cv.version_number = p.current_version
+      join public.org_policy_versions rv on rv.policy_id = p.id and rv.version_number = cv.acknowledgement_round
+      join public.organization_members m on m.organization_id = p.organization_id
+      cross join lateral (
+        select max(a.version_number) as l_number
+          from public.org_policy_acknowledgements a
+         where a.policy_id = p.id and a.acknowledgement_round = cv.acknowledgement_round
+           and a.user_id = m.user_id) la
+      left join public.org_policy_reminders r on r.round_version_id = rv.id and r.user_id = m.user_id
+     where p.status = 'published'
+       and not cv.needs_acknowledgement
+       and la.l_number < cv.version_number
+       and (r.correction_notice_number is null or r.correction_notice_number < cv.version_number)
+       and public._notify_is_current_member(p.organization_id, m.user_id)
+  ),
+  picked as (
+    select * from due order by d_corrected_at, d_policy, d_user limit v_limit
+  ),
+  stamped as (
+    insert into public.org_policy_reminders as r
+      (organization_id, policy_id, round_version_id, user_id, correction_notice_number, correction_noticed_at)
+    select k.d_org, k.d_policy, k.d_round, k.d_user, k.d_number, v_now from picked k
+    on conflict on constraint org_policy_reminders_once do update
+      set correction_notice_number = excluded.correction_notice_number,
+          correction_noticed_at = excluded.correction_noticed_at
+      where r.correction_notice_number is null or r.correction_notice_number < excluded.correction_notice_number
+    returning r.round_version_id as s_round, r.user_id as s_user
+  )
+  select coalesce(pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+           'organization_id', k.d_org, 'policy_id', k.d_policy, 'title', k.d_title,
+           'version_id', k.d_version, 'version_number', k.d_number, 'corrected_at', k.d_corrected_at,
+           'acknowledged_version_number', k.d_acked, 'user_id', k.d_user)
+           order by k.d_corrected_at, k.d_policy, k.d_user), '[]'::jsonb),
+         (select pg_catalog.count(*)::integer from due)
+    into v_claimed, v_due
+    from picked k
+    join stamped s on s.s_round = k.d_round and s.s_user = k.d_user;
+
+  return pg_catalog.jsonb_build_object(
+    'busy', false, 'claimed', v_claimed, 'more', v_due > v_limit, 'claimed_at', v_now);
+end;
+$$;
+
+revoke all on function public.org_policy_correction_notices_claim(integer) from public, anon, authenticated, service_role;
+grant execute on function public.org_policy_correction_notices_claim(integer) to service_role;
+
+comment on function public.org_policy_correction_notices_claim(integer) is
+  'For the job that sends the reminders (service_role only; 42501 policy_not_allowed when called as authenticated or anon): claims the correction notices now due, stamping each first (the member''s reminder row of the round: correction_notice_number, correction_noticed_at). Due: a published policy whose current version is a correction, a current member (_notify_is_current_member) whose latest acknowledgement in the round is of an earlier version, not yet told of this correction. One notice per correction (two corrections before a run: one, of the later); it asks nothing. Oldest correction first, at most p_limit (1 to 1000, default 200). Answers busy (another claim holds lock 4820002: nothing claimed, try later), claimed (organization_id, policy_id, title, version_id, version_number, corrected_at, acknowledged_version_number, user_id), more, claimed_at. A stamp is a compare-and-set: a notice is handed out once however many claims overlap.';
+
 -- ── ROLLBACK ─────────────────────────────────────────────────────────────────
+-- THIS BLOCK DELETES EVERY ACKNOWLEDGEMENT AND EVERY PUBLISHED VERSION OF
+-- EVERY ORGANIZATION. THEY ARE EVIDENCE. IT REFUSES TO RUN WHILE ANY
+-- ACKNOWLEDGEMENT EXISTS (55000, hint org_policies_rollback_refused).
 -- Nothing depends on these objects but the app code that follows this
--- migration. Leave them in place: the acknowledgements are evidence. If they
--- ever have to go (only before any real record exists), know that each drop
--- table that names public.organizations or public.user_profiles also removes
--- its foreign key's triggers there, which takes ACCESS EXCLUSIVE on that
--- table until commit: every signed-in request waits behind it. Run it in a
--- quiet minute, as one transaction with a short lock_timeout; if it gives up
--- (55P03) nothing is dropped, and it can be run again as it is:
+-- migration. Leave them in place. If they ever have to go (only before any
+-- real record exists), know that each drop table that names
+-- public.organizations or public.user_profiles also removes its foreign
+-- key's triggers there, which takes ACCESS EXCLUSIVE on that table until
+-- commit: every signed-in request waits behind it. Run it in a quiet minute,
+-- as one transaction with a short lock_timeout; if it gives up (55P03)
+-- nothing is dropped, and it can be run again as it is. The only way past
+-- the refusal is a setting named for what it does, set by a person in the
+-- same transaction, right after begin (no kit, script or migration sets
+-- it): set local org_policies.rollback_destroys_evidence to the words
+-- 'yes, destroy every acknowledgement'.
 --   begin;
 --   set local lock_timeout = '900ms';
+--   do $refuse$
+--   declare
+--     v_rows boolean := false;
+--   begin
+--     if pg_catalog.to_regclass('public.org_policy_acknowledgements') is not null then
+--       execute 'select exists (select 1 from public.org_policy_acknowledgements)' into v_rows;
+--     end if;
+--     if v_rows and coalesce(pg_catalog.current_setting('org_policies.rollback_destroys_evidence', true), '')
+--                   <> 'yes, destroy every acknowledgement' then
+--       raise exception 'org_policies_rollback_refused: acknowledgements exist; they are evidence and this block would delete them'
+--         using errcode = '55000', hint = 'org_policies_rollback_refused';
+--     end if;
+--   end
+--   $refuse$;
+--   drop function if exists public.org_policy_correction_notices_claim(integer);
 --   drop function if exists public.org_policy_reminders_claim(integer);
 --   drop function if exists public.org_policy_remind_now(uuid);
 --   drop function if exists public.org_policy_retire(uuid);

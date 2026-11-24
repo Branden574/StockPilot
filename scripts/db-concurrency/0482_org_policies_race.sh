@@ -22,6 +22,9 @@
 #      and writes nothing.
 #   5. Ten admins press Remind now at once: one reminds, nine are told it is
 #      too soon.
+#   6. The correction notices' claim: two claims overlap (the second answers
+#      busy at once, a third after the commit finds nothing), and twenty at
+#      once over a fresh correction hand each notice out exactly once.
 #
 # LOCAL stack only (docker container supabase_db_stockpilot by default;
 # CONTAINER=<name> for another local stack, the migration scratch stack is
@@ -298,6 +301,78 @@ if [ "$r" = "1 9 0" ] && [ "$manual" = "1" ]; then
   ok "5. ten Remind now at once: one reminded, nine too soon; each row stamped once"
 else
   bad "5. ten Remind now at once: reminded/too soon/other '$r', largest manual count $manual (want '1 9 0', 1)"
+fi
+
+# ── 6. The correction notices' claim. ──
+NOTICES="set local role service_role; select public.org_policy_correction_notices_claim(1000);"
+P3="$(publish 'Race policy three')"
+# Every current member acknowledged version 1 (written as the tables' owner, as the function would).
+q "insert into public.org_policy_acknowledgements
+     (organization_id, policy_id, version_id, version_number, acknowledgement_round, text_hash, user_id, user_name, member_since, method)
+   select v.organization_id, v.policy_id, v.id, v.version_number, v.acknowledgement_round, v.text_hash, m.user_id, null, m.accepted_at, 'web'
+     from public.org_policy_versions v
+     join public.organization_members m on m.organization_id = v.organization_id
+    where v.policy_id = '$P3' and v.version_number = 1
+      and public._notify_is_current_member(v.organization_id, m.user_id);" >/dev/null
+correct() { # <policy id> <words>: a correction of the words, published by ADMIN
+  q "begin; $(as_member "$ADMIN") select public.org_policy_save_draft('$ORG', '$1', 'other', 'Race policy three', '$2'); commit;" >/dev/null
+  q "begin; $(as_member "$ADMIN")
+    select public.org_policy_publish('$1', 'correction', (select public.org_policy_draft('$1') -> 'draft' ->> 'text_hash'));
+    commit;" >/dev/null
+}
+correct "$P3" 'Race words, corrected once.'
+qa race_note_a "begin; $NOTICES select pg_sleep(3); commit;" > "$TMP/note.a" &
+A=$!
+if wait_for race_note_a PgSleep; then
+  t0="$(now_ms)"
+  qa race_note_b "begin; $NOTICES commit;" > "$TMP/note.b"
+  t1="$(now_ms)"
+  wait "$A"
+  qa race_note_c "begin; $NOTICES commit;" > "$TMP/note.c"
+  r="$(python3 - "$TMP" <<'PY'
+import json, sys
+d = sys.argv[1]
+a = json.loads(open(d + '/note.a').read().strip().split('\n')[0])
+b = json.loads(open(d + '/note.b').read().strip())
+c = json.loads(open(d + '/note.c').read().strip())
+print(len(a['claimed']), b['busy'], len(b['claimed']), c['busy'], len(c['claimed']))
+PY
+)"
+  if [ "$r" = "$DUE1 True 0 False 0" ] && [ $((t1 - t0)) -lt 1500 ]; then
+    ok "6a. overlapping notice claims: the first handed out $DUE1, the second answered busy in $((t1 - t0)) ms, a third after the commit nothing"
+  else
+    bad "6a. overlapping notice claims: got '$r' (want '$DUE1 True 0 False 0'), the second took $((t1 - t0)) ms"
+  fi
+else
+  bad "6a. the first notice claim never reached its sleep"
+  wait "$A"
+fi
+correct "$P3" 'Race words, corrected twice.'
+for i in $(seq 1 20); do
+  qa "race_notes_$i" "begin; $NOTICES commit;" > "$TMP/notes.$i" &
+done
+wait
+r="$(python3 - "$TMP" <<'PY'
+import glob, json, sys
+seen = []
+busy = other = 0
+for f in glob.glob(sys.argv[1] + '/notes.*'):
+    try:
+        a = json.loads(open(f).read().strip())
+    except Exception:
+        other += 1
+        continue
+    busy += 1 if a['busy'] else 0
+    seen += [(x['user_id'], x['version_number']) for x in a['claimed']]
+print(len(seen), len(set(seen)), busy, other)
+PY
+)"
+stamps="$(q "select count(*) filter (where correction_notice_number = 3) from public.org_policy_reminders where policy_id = '$P3'")"
+read -r n_out n_distinct n_busy n_other <<< "$r"
+if [ "$n_out" = "$DUE1" ] && [ "$n_distinct" = "$DUE1" ] && [ "$n_other" = "0" ] && [ "$stamps" = "$DUE1" ]; then
+  ok "6b. twenty notice claims at once handed out $n_out notices of the second correction, each once ($n_busy answered busy); every row stamped 3"
+else
+  bad "6b. twenty notice claims at once: handed out $n_out, distinct $n_distinct, busy $n_busy, errors $n_other, rows stamped $stamps (want $DUE1 each, no error)"
 fi
 
 cleanup

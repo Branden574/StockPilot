@@ -15,7 +15,9 @@ import {
   POLICY_STATUS_LABELS,
   policyAcknowledgedCount,
   policyAcknowledgedLine,
+  policyAcknowledgedVersionLine,
   policyBodyHasStarterNote,
+  policyCorrectionNotice,
   policyNotice,
   policyOwedBanner,
   policyPersonLabel,
@@ -61,6 +63,8 @@ function everyWord(): string[] {
     policyAcknowledgedCount(1, 2),
     policyRemindedLine(2, 'd'),
     policyRemindNowTooSoon('t'),
+    policyCorrectionNotice('T'),
+    policyAcknowledgedVersionLine(2, 3, true),
   ]);
   return out;
 }
@@ -130,6 +134,26 @@ describe('the words', () => {
     ).toBe('Please read and acknowledge: Acceptable use');
   });
 
+  it('say which version a person acknowledged and whether the current text corrects it', () => {
+    expect(policyAcknowledgedVersionLine(2, 2, false)).toBe('Acknowledged version 2.');
+    expect(policyAcknowledgedVersionLine(2, 3, true)).toBe(
+      'Acknowledged version 2. The current text is version 3, a correction of it.',
+    );
+    expect(policyAcknowledgedVersionLine(3, 3, true)).toBe('Acknowledged version 3.');
+    expect(policyCorrectionNotice('Data handling')).toEqual({
+      title: 'A policy you acknowledged was corrected: Data handling',
+      body: 'You do not need to acknowledge it again. You can read the corrected text and the text you agreed to.',
+    });
+    expect(POLICY_ADMIN_COPY.formerMemberNoName).toBe('Former member, no name on the account');
+    expect(policyRefusalWords('mfa_required')).toBe(POLICY_ADMIN_COPY.authenticatorNeeded);
+    expect(policyRefusalWords('aal2_required')).toBe(
+      'Finish signing in with your second step, then try again.',
+    );
+    expect(policyRefusalWords('policy_correction_changes_title')).toBe(
+      'A correction keeps the title. To change the title, publish a new version: everyone is asked again.',
+    );
+  });
+
   it('name a person as the record keeps them, with "Deleted user" for a deleted account', () => {
     expect(policyPersonLabel({ name: 'Jordan Example', accountDeleted: false })).toBe(
       'Jordan Example',
@@ -157,9 +181,12 @@ describe('the words', () => {
       'utf8',
     );
     const hints = new Set([...sql.matchAll(/hint = '([a-z0-9_]+)'/g)].map((m) => m[1]!));
-    // The guards' and the preflight's hints reach no API role (only a direct write by the tables' owner).
+    // The guards', the preflight's and the rollback block's hints reach no API role (only the tables' owner).
     const internal = [...hints].filter(
-      (h) => h.startsWith('org_policy') || h === 'org_policies_preflight',
+      (h) =>
+        h.startsWith('org_policy') ||
+        h === 'org_policies_preflight' ||
+        h === 'org_policies_rollback_refused',
     );
     const forCallers = [...hints].filter((h) => !internal.includes(h)).sort();
     expect(forCallers.length).toBeGreaterThan(10);

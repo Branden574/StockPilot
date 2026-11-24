@@ -122,12 +122,23 @@ export const POLICY_ADMIN_COPY = {
   draftChanged:
     'Someone else saved this draft after you opened it. Reload it to see their changes before you publish.',
   draftUnchanged: 'The draft is the same as the published version, so there is nothing to correct.',
+  correctionChangesTitle:
+    'A correction keeps the title. To change the title, publish a new version: everyone is asked again.',
+  correctionChangesKind:
+    'A correction keeps the kind of policy. To change it, publish a new version: everyone is asked again.',
+  secondStepNeeded: 'Finish signing in with your second step, then try again.',
+  authenticatorNeeded:
+    'Your organization asks owners and admins to set up an authenticator first. Set one up in your account settings, then try again.',
   correctionNeedsVersion:
     'A policy that has never been published is published as its first version.',
   noDraft: 'There is no draft to publish. Save a draft first.',
   retired: 'This policy has been retired. Start a new policy instead.',
   notPublished: 'This policy has not been published yet.',
   notAllowed: 'Only owners and admins of this organization can do this.',
+  /** The kept name of an account deleted with no name on it (the database stores it: 0482). */
+  formerMemberNoName: 'Former member, no name on the account',
+  formerMemberNoNameExplain:
+    'The account had no name and has been deleted, so this row shows only when the person joined. It proves less than a row with a name.',
   reload: 'The page is out of date. Reload it and try again.',
   starterStillThere:
     'The draft still holds the note that it is an example. Edit it to fit your organization and remove the note before you publish.',
@@ -147,6 +158,22 @@ export function policyVersionLabel(versionNumber: number, needsAcknowledgement: 
   return needsAcknowledgement
     ? `Version ${versionNumber}`
     : `Version ${versionNumber} (a correction)`;
+}
+
+/**
+ * Which version a person acknowledged, and whether the current text is a
+ * later correction of it: "Acknowledged version 2." or "Acknowledged version
+ * 2. The current text is version 3, a correction of it."
+ */
+export function policyAcknowledgedVersionLine(
+  acknowledgedVersion: number,
+  currentVersion: number,
+  correctedSince: boolean,
+): string {
+  const head = `Acknowledged version ${acknowledgedVersion}.`;
+  return correctedSince && currentVersion > acknowledgedVersion
+    ? `${head} The current text is version ${currentVersion}, a correction of it.`
+    : head;
 }
 
 /** "Reminded 2 times, last on <date>." The caller formats the date. */
@@ -194,6 +221,18 @@ export function policyNotice(
   };
 }
 
+/**
+ * The one notice a member gets when a policy they acknowledged is corrected
+ * (org_policy_correction_notices_claim hands each out once). It asks nothing.
+ * Link: /dashboard/policies/<policy id>.
+ */
+export function policyCorrectionNotice(title: string): { title: string; body: string } {
+  return {
+    title: `A policy you acknowledged was corrected: ${title}`,
+    body: 'You do not need to acknowledge it again. You can read the corrected text and the text you agreed to.',
+  };
+}
+
 /** The reminder email's subject and text (the email family renders it). */
 export function policyReminderEmail(input: { title: string; organizationName: string }): {
   subject: string;
@@ -220,20 +259,23 @@ export const POLICY_REFUSAL_COPY: Readonly<Record<string, string>> = {
   policy_title_invalid:
     'Give the policy a title of 1 to 120 characters, without hidden characters.',
   policy_body_invalid:
-    'The policy text must be 1 to 30,000 characters, without hidden or control characters.',
+    'The policy text must be 1 to 30,000 characters and at most 600 lines, without hidden or control characters.',
   policy_change_invalid: 'Choose whether this is a new version or a correction.',
   policy_hash_invalid: POLICY_ADMIN_COPY.reload,
   policy_method_invalid: POLICY_MEMBER_COPY.failed,
   policy_no_draft: POLICY_ADMIN_COPY.noDraft,
   policy_draft_changed: POLICY_ADMIN_COPY.draftChanged,
   policy_draft_unchanged: POLICY_ADMIN_COPY.draftUnchanged,
+  policy_correction_changes_title: POLICY_ADMIN_COPY.correctionChangesTitle,
+  policy_correction_changes_kind: POLICY_ADMIN_COPY.correctionChangesKind,
   policy_correction_needs_a_version: POLICY_ADMIN_COPY.correctionNeedsVersion,
   policy_retired: POLICY_ADMIN_COPY.retired,
   policy_not_published: POLICY_ADMIN_COPY.notPublished,
   policy_version_not_current: POLICY_MEMBER_COPY.notCurrent,
   policy_version_not_found: 'That version of the policy has not been published.',
   policy_text_changed: POLICY_MEMBER_COPY.textChanged,
-  aal2_required: POLICY_MEMBER_COPY.secondStepNeeded,
+  aal2_required: POLICY_ADMIN_COPY.secondStepNeeded,
+  mfa_required: POLICY_ADMIN_COPY.authenticatorNeeded,
   failed: POLICY_MEMBER_COPY.failed,
 };
 

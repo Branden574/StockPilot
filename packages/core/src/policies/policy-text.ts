@@ -37,7 +37,7 @@
  * Normalising is idempotent: the normal form of a normal form is itself.
  *
  * LIMITS. Counted in Unicode code points (Postgres char_length): a title 1 to
- * 120, a body 1 to 30,000. Characters that are refused, even in normal form
+ * 120, a body 1 to 30,000 and at most 600 lines (599 line feeds). Characters that are refused, even in normal form
  * (FORBIDDEN_POLICY_CODE_POINTS): control characters other than the line
  * feed (the tab is one; normalising turns it into a space), the soft hyphen,
  * the invisible and direction-changing format characters (zero-width
@@ -47,6 +47,10 @@
  * tag characters and the supplementary variation selectors (used to hide
  * text), and in JavaScript a lone surrogate (it has no UTF-8 form). So the
  * words a member sees cannot be reordered or hidden by an invisible character.
+ *
+ * TIME. Every function here runs in time linear in the text's length (no
+ * regular expression that can backtrack over a run: line ends and the ends of
+ * the text are trimmed with loops). policy-text.time.test.ts holds it.
  *
  * PURE: no I/O, no clock, no platform imports.
  */
@@ -75,6 +79,8 @@ export type PolicyAckMethod = (typeof POLICY_ACK_METHODS)[number];
 
 export const POLICY_TITLE_MAX = 120;
 export const POLICY_BODY_MAX = 30000;
+/** The most lines a body may have (the database's too_many_lines). */
+export const POLICY_BODY_MAX_LINES = 600;
 
 export function isPolicyKind(value: unknown): value is PolicyKind {
   return typeof value === 'string' && (POLICY_KINDS as readonly string[]).includes(value);
@@ -141,21 +147,46 @@ export function policyTextLength(text: string): number {
   return n;
 }
 
+/** Lines, as the database counts them: one more than the line feeds. */
+export function policyLineCount(text: string): number {
+  let n = 1;
+  for (let i = 0; i < text.length; i += 1) if (text.charCodeAt(i) === 0x0a) n += 1;
+  return n;
+}
+
+/** `line` without the spaces (U+0020) at its end. A loop: / +$/ is quadratic on a run of spaces. */
+function trimEndSpaces(line: string): string {
+  let e = line.length;
+  while (e > 0 && line.charCodeAt(e - 1) === 0x20) e -= 1;
+  return e === line.length ? line : line.slice(0, e);
+}
+
+/** `s` without line feeds at either end (loops, for the same reason). */
+function trimLineFeeds(s: string): string {
+  let b = 0;
+  let e = s.length;
+  while (b < e && s.charCodeAt(b) === 0x0a) b += 1;
+  while (e > b && s.charCodeAt(e - 1) === 0x0a) e -= 1;
+  return b === 0 && e === s.length ? s : s.slice(b, e);
+}
+
 /* ───────────────────────────── the normal form ───────────────────────────── */
 
-/** The normal form of a body (steps 1 to 7 in the header). */
+/**
+ * The normal form of a body (steps 1 to 7 in the header). The regular
+ * expressions left (/\r\n?/g, /\t/g, /\n{3,}/g) each match a fixed character
+ * or one run, so none backtracks.
+ */
 export function normalizePolicyBody(raw: string): string {
   const s = raw
     .normalize('NFC')
     .replace(/\r\n?/g, '\n')
     .replace(/\t/g, ' ')
     .split('\n')
-    .map((line) => line.replace(/ +$/, ''))
+    .map(trimEndSpaces)
     .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/^\n+/, '')
-    .replace(/\n+$/, '');
-  return s.normalize('NFC');
+    .replace(/\n{3,}/g, '\n\n');
+  return trimLineFeeds(s).normalize('NFC');
 }
 
 /** The normal form of a title: one line, single spaces, trimmed. */
@@ -169,7 +200,8 @@ export function normalizePolicyTitle(raw: string): string {
 }
 
 /** Why a stored text would be refused: the same words as the database's detail. */
-export type PolicyTextProblem = 'empty' | 'too_long' | 'forbidden_character' | 'not_normal_form';
+export type PolicyTextProblem =
+  'empty' | 'too_long' | 'too_many_lines' | 'forbidden_character' | 'not_normal_form';
 
 /**
  * Why the database would refuse this title (hint policy_title_invalid, the
@@ -187,6 +219,7 @@ export function policyTitleProblem(title: string): PolicyTextProblem | null {
 export function policyBodyProblem(body: string): PolicyTextProblem | null {
   if (body.length === 0) return 'empty';
   if (policyTextLength(body) > POLICY_BODY_MAX) return 'too_long';
+  if (policyLineCount(body) > POLICY_BODY_MAX_LINES) return 'too_many_lines';
   if (findForbiddenPolicyCharacter(body)) return 'forbidden_character';
   if (normalizePolicyBody(body) !== body) return 'not_normal_form';
   return null;

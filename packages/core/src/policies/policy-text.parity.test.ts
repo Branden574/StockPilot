@@ -8,10 +8,12 @@ import {
   POLICY_REMINDER_MIN_GAP_DAYS,
   POLICY_REMIND_NOW_EVERY_HOURS,
 } from './policy-reminders';
+import { POLICY_ADMIN_COPY } from './policy-copy';
 import {
   FORBIDDEN_POLICY_CODE_POINTS,
   POLICY_ACK_METHODS,
   POLICY_BODY_MAX,
+  POLICY_BODY_MAX_LINES,
   POLICY_CHANGES,
   POLICY_KINDS,
   POLICY_STATUSES,
@@ -68,6 +70,20 @@ describe('core and migration 0482 agree', () => {
     expect(fnBody('_org_policy_body_problem')).toContain(
       `char_length(p_body) > ${POLICY_BODY_MAX} then 'too_long'`,
     );
+    const body = fnBody('_org_policy_body_problem');
+    expect(body).toContain(
+      `pg_catalog.char_length(p_body) - pg_catalog.char_length(pg_catalog.replace(p_body, E'\\n', '')) + 1 > ${POLICY_BODY_MAX_LINES}\n      then 'too_many_lines'`,
+    );
+    // The same order as policyBodyProblem: empty, too_long, too_many_lines, forbidden_character, not_normal_form.
+    const at = (w: string) => body.indexOf(`'${w}'`);
+    expect(at('empty')).toBeLessThan(at('too_long'));
+    expect(at('too_long')).toBeLessThan(at('too_many_lines'));
+    expect(at('too_many_lines')).toBeLessThan(at('forbidden_character'));
+    expect(at('forbidden_character')).toBeLessThan(at('not_normal_form'));
+  });
+
+  it('on the name kept for a deleted account that had none', () => {
+    expect(SQL).toContain(`'${POLICY_ADMIN_COPY.formerMemberNoName}'`);
   });
 
   it('on the kinds, the states, the changes and the methods', () => {

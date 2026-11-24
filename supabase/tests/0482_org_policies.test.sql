@@ -38,7 +38,7 @@
 
 begin;
 
-select plan(113);
+select plan(133);
 
 set local timezone = 'UTC';
 
@@ -345,16 +345,16 @@ select columns_are('public', 'org_policies',
         'last_remind_now_at', 'created_at', 'updated_at'],
   '0482/5: org_policies has exactly its designed columns');
 select columns_are('public', 'org_policy_versions',
-  array['id', 'organization_id', 'policy_id', 'title', 'body', 'text_hash', 'version_number', 'needs_acknowledgement',
+  array['id', 'organization_id', 'policy_id', 'kind', 'title', 'body', 'text_hash', 'version_number', 'needs_acknowledgement',
         'acknowledgement_round', 'published_at', 'published_by', 'published_by_name', 'created_at', 'updated_at'],
   '0482/6: org_policy_versions has exactly its designed columns');
 select columns_are('public', 'org_policy_acknowledgements',
   array['id', 'organization_id', 'policy_id', 'version_id', 'version_number', 'acknowledgement_round', 'text_hash',
-        'user_id', 'user_name', 'method', 'acknowledged_at'],
+        'user_id', 'user_name', 'member_since', 'method', 'acknowledged_at'],
   '0482/7: org_policy_acknowledgements has exactly its designed columns (no email, no address, no device)');
 select columns_are('public', 'org_policy_reminders',
   array['id', 'organization_id', 'policy_id', 'round_version_id', 'user_id', 'sent_count', 'last_sent_at',
-        'manual_count', 'last_reminded_at'],
+        'manual_count', 'last_reminded_at', 'correction_notice_number', 'correction_noticed_at'],
   '0482/8: org_policy_reminders has exactly its designed columns');
 
 -- Every foreign key of the four tables: name, columns, referenced table and columns, ON DELETE.
@@ -392,10 +392,12 @@ select is(
   'org_policy_acknowledgements:c:org_policy_acknowledgements_numbers,'
   'org_policy_acknowledgements:c:org_policy_acknowledgements_text_hash,org_policy_acknowledgements:p:org_policy_acknowledgements_pkey,'
   'org_policy_acknowledgements:u:org_policy_acknowledgements_once,'
+  'org_policy_reminders:c:org_policy_reminders_correction_notice,'
   'org_policy_reminders:c:org_policy_reminders_last,org_policy_reminders:c:org_policy_reminders_manual,'
   'org_policy_reminders:c:org_policy_reminders_sent,org_policy_reminders:p:org_policy_reminders_pkey,'
   'org_policy_reminders:u:org_policy_reminders_once,'
-  'org_policy_versions:c:org_policy_versions_body,org_policy_versions:c:org_policy_versions_number,'
+  'org_policy_versions:c:org_policy_versions_body,org_policy_versions:c:org_policy_versions_kind,'
+  'org_policy_versions:c:org_policy_versions_number,'
   'org_policy_versions:c:org_policy_versions_published,org_policy_versions:c:org_policy_versions_publisher,'
   'org_policy_versions:c:org_policy_versions_publisher_name,org_policy_versions:c:org_policy_versions_round,'
   'org_policy_versions:c:org_policy_versions_text_hash,org_policy_versions:c:org_policy_versions_title,'
@@ -477,6 +479,7 @@ select is(
   'org_policies_for_member(uuid)=authenticated:EXECUTE' || E'\n' ||
   'org_policy_acknowledge(uuid,text,text)=authenticated:EXECUTE' || E'\n' ||
   'org_policy_acknowledgement_record(uuid)=authenticated:EXECUTE' || E'\n' ||
+  'org_policy_correction_notices_claim(integer)=service_role:EXECUTE' || E'\n' ||
   'org_policy_discard_draft(uuid)=authenticated:EXECUTE' || E'\n' ||
   'org_policy_draft(uuid)=authenticated:EXECUTE' || E'\n' ||
   'org_policy_publish(uuid,text,text)=authenticated:EXECUTE' || E'\n' ||
@@ -486,16 +489,17 @@ select is(
   'org_policy_save_draft(uuid,uuid,text,text,text)=authenticated:EXECUTE' || E'\n' ||
   'org_policy_status(uuid)=authenticated:EXECUTE' || E'\n' ||
   'org_policy_text(uuid,integer)=authenticated:EXECUTE',
-  '0482/17: every function''s grants: authenticated the twelve member and admin functions, service_role the claim only, nobody the helpers and the trigger functions, PUBLIC and anon nothing');
+  '0482/17: every function''s grants: authenticated the twelve member and admin functions, service_role the two claims only, nobody the helpers and the trigger functions, PUBLIC and anon nothing');
 
 select is(
   (select coalesce(string_agg(r || ':' || p.proname, ', ' order by r, p.proname), 'none')
      from pg_proc p, unnest(array['anon', 'public', 'authenticated', 'service_role']) r
     where pg_temp.is_ours(p.oid) and has_function_privilege(r, p.oid, 'execute')
-      and not (r = 'authenticated' and p.proname not like '\_%' and p.proname <> 'org_policy_reminders_claim')
-      and not (r = 'service_role' and p.proname = 'org_policy_reminders_claim')),
+      and not (r = 'authenticated' and p.proname not like '\_%'
+               and p.proname not in ('org_policy_reminders_claim', 'org_policy_correction_notices_claim'))
+      and not (r = 'service_role' and p.proname in ('org_policy_reminders_claim', 'org_policy_correction_notices_claim'))),
   'none',
-  '0482/18: by has_function_privilege: anon and PUBLIC execute none of them, service_role none but the claim, authenticated not the claim, a helper or a trigger function');
+  '0482/18: by has_function_privilege: anon and PUBLIC execute none of them, service_role none but the two claims, authenticated not a claim, a helper or a trigger function');
 
 select is(
   (select string_agg(p.proname || ':' || case when p.prosecdef then 'definer' else 'invoker' end || ':' ||
@@ -513,6 +517,7 @@ select is(
   'org_policies_for_member:definer:postgres:search_path=""' || E'\n' ||
   'org_policy_acknowledge:definer:postgres:lock_timeout=2s search_path=""' || E'\n' ||
   'org_policy_acknowledgement_record:definer:postgres:search_path=""' || E'\n' ||
+  'org_policy_correction_notices_claim:definer:postgres:lock_timeout=2s search_path=""' || E'\n' ||
   'org_policy_discard_draft:definer:postgres:lock_timeout=2s search_path=""' || E'\n' ||
   'org_policy_draft:definer:postgres:search_path=""' || E'\n' ||
   'org_policy_publish:definer:postgres:lock_timeout=2s search_path=""' || E'\n' ||
@@ -696,16 +701,16 @@ select is(
 
 select is(
   pg_temp.try_as('postgres', null, format(
-    'insert into public.org_policy_versions (organization_id, policy_id, title, body, text_hash) values (%L, %L, ''T'', ''B'', repeat(''0'', 64))',
+    'insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash) values (%L, %L, ''other'', ''T'', ''B'', repeat(''0'', 64))',
     'a0482000-0000-0000-0000-0000000000a1', pg_temp.id('p1'))) || ' ' ||
   pg_temp.try_as('postgres', null, format(
-    'insert into public.org_policy_versions (organization_id, policy_id, title, body, text_hash) values (%L, %L, ''T'', ''B'', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B'', ''UTF8'')), ''hex''))',
+    'insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash) values (%L, %L, ''other'', ''T'', ''B'', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B'', ''UTF8'')), ''hex''))',
     'a0482000-0000-0000-0000-0000000000a1', pg_temp.id('p1'))) || ' ' ||
   pg_temp.try_as('postgres', null, format(
-    'insert into public.org_policy_versions (organization_id, policy_id, title, body, text_hash) values (%L, %L, ''T'', ''B'', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B'', ''UTF8'')), ''hex''))',
+    'insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash) values (%L, %L, ''other'', ''T'', ''B'', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B'', ''UTF8'')), ''hex''))',
     'a0482000-0000-0000-0000-0000000000a1', 'a0482000-0000-0000-0000-000000000999')) || ' ' ||
   pg_temp.try_as('postgres', null, format(
-    'insert into public.org_policy_versions (organization_id, policy_id, title, body, text_hash) values (%L, %L, ''T'', ''B '', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B '', ''UTF8'')), ''hex''))',
+    'insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash) values (%L, %L, ''other'', ''T'', ''B '', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B '', ''UTF8'')), ''hex''))',
     'a0482000-0000-0000-0000-0000000000a1', pg_temp.id('p6'))),
   '23514:org_policy_versions_text_hash 23505:org_policy_versions_one_draft 23503:org_policy_versions_policy_fkey 23514:org_policy_versions_body',
   '0482/37: even the tables'' owner cannot store a hash that is not of the words, a second draft, a version of no policy, or words out of normal form');
@@ -766,7 +771,7 @@ select is(
   pg_temp.try_as('postgres', null, 'truncate public.org_policies cascade') || ' ' ||
   pg_temp.try_as('postgres', null, format('delete from public.org_policies where id = %L', pg_temp.id('p1'))) || ' ' ||
   pg_temp.try_as('postgres', null, format(
-    'insert into public.org_policy_versions (organization_id, policy_id, title, body, text_hash) values (%L, %L, ''T'', ''B'', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B'', ''UTF8'')), ''hex''))',
+    'insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash) values (%L, %L, ''other'', ''T'', ''B'', encode(sha256(convert_to(''T'' || E''\n\n'' || ''B'', ''UTF8'')), ''hex''))',
     'a0482000-0000-0000-0000-0000000000b1', pg_temp.id('p1'))),
   '55000|org_policy_version_kept 55000|org_policy_truncate_refused 55000|org_policy_truncate_refused 55000|org_policy_kept '
   '23503:org_policy_versions_policy_fkey',
@@ -913,8 +918,8 @@ select is(
   '0482/59: nor delete or truncate one');
 select is(
   (select string_agg(n || '=' || pg_temp.try_as('postgres', null, format(
-            'insert into public.org_policy_acknowledgements (organization_id, policy_id, version_id, version_number, acknowledgement_round, text_hash, user_id, method) '
-            'select organization_id, policy_id, id, %s, %s, %s, %s, ''web'' from public.org_policy_versions where id = %L',
+            'insert into public.org_policy_acknowledgements (organization_id, policy_id, version_id, version_number, acknowledgement_round, text_hash, user_id, member_since, method) '
+            'select organization_id, policy_id, id, %s, %s, %s, %s, now(), ''web'' from public.org_policy_versions where id = %L',
             vn, rd, th, uid, ver)), ', ' order by n)
      from (values
        ('1 right', 'version_number', 'acknowledgement_round', 'text_hash', '''a0482000-0000-0000-0000-0000000000ca''::uuid', pg_temp.id('p1v1')),
@@ -996,7 +1001,8 @@ select is(
   || ' mine=' || ((pg_temp.txt(:memberA, pg_temp.id('p1')) -> 'my_acknowledgement' ->> 'method')) ||
   ' keys=' || (select string_agg(x, ',' order by x) from jsonb_object_keys(pg_temp.txt(:memberA, pg_temp.id('p1'))) x),
   'acknowledged_in_current_round=true is_current=true kind=acceptable_use needs_acknowledgement=true owed=false status=published mine=web '
-  'keys=acknowledged_in_current_round,acknowledgement_round,body,current_version_number,is_current,kind,my_acknowledgement,'
+  'keys=acknowledged_in_current_round,acknowledged_version_number,acknowledgement_round,body,corrected_since_acknowledged,'
+  'current_version_number,is_current,kind,last_corrected_at,my_acknowledgement,'
   'needs_acknowledgement,organization_id,owed,policy_id,published_at,status,text_hash,title,version_id,version_number',
   '0482/68: the words a member reads, with their own acknowledgement; no publisher, no draft');
 
@@ -1048,15 +1054,15 @@ select is(pg_temp.err(pg_temp.pub(:adminA, pg_temp.id('p1'), 'correction')), 'P0
 -- Every acknowledgement as it is now: no function below may change or remove one.
 create temporary table acks_before as select * from public.org_policy_acknowledgements;
 
-select pg_temp.save(:adminA, :orgA, pg_temp.id('p1'), 'acceptable_use', 'Acceptable use policy', :b1 || chr(10) || chr(10) || 'Ask an admin if unsure.');
+select pg_temp.save(:adminA, :orgA, pg_temp.id('p1'), 'acceptable_use', :t1, :b1 || chr(10) || chr(10) || 'Ask an admin if unsure.');
 insert into answers values ('p1v2', pg_temp.pub(:adminA, pg_temp.id('p1'), 'correction'));
 select pg_temp.keep('p1v2', (select (v ->> 'version_id')::uuid from answers where k = 'p1v2'));
 select is(
   (select (v ->> 'version_number') || '|' || (v ->> 'needs_acknowledgement') || '|' || (v ->> 'acknowledgement_round') || '|' ||
           jsonb_array_length(v -> 'asked_user_ids') from answers where k = 'p1v2') || ' ' ||
   (select title || '|' || current_version from public.org_policies where id = pg_temp.id('p1')),
-  '2|false|1|0 Acceptable use policy|2',
-  '0482/75: a correction is version 2 in round 1 and asks nobody; the policy takes its title');
+  '2|false|1|0 Acceptable use|2',
+  '0482/75: a correction is version 2 in round 1 and asks nobody; it keeps the title');
 select is(
   (select (e ->> 'acknowledged') || '|' || (e ->> 'owed') || '|' || (e ->> 'version_number') || '|' || (e ->> 'acknowledged_version_number')
      from jsonb_array_elements(pg_temp.rows_of(:memberA, 'org_policies_for_member', :orgA)) e) || ' ' ||
@@ -1452,6 +1458,297 @@ select is(
   ((select last_remind_now_at from public.org_policies where id = pg_temp.id('p5')) = now())::text,
   'true e0:1/1 e1:1/1 e2:1/1 e3:1/1 e4:0/2 e5:1/1 e6:0/1 e7:1/1 true',
   '0482/113: 25 hours after, Remind now reaches every current member owed the round and counts it on each one''s row (automatic/Remind now)');
+
+-- ── 11. The review of 2026-11-24 (REVIEW-0482.md), each item where only it decides ──
+-- An organization of its own (D), so the counts above stay as they were.
+\set orgD '\'a0482000-0000-0000-0000-0000000000f1\''
+\set ownerD '\'a0482000-0000-0000-0000-0000000000f2\''
+\set memberD1 '\'a0482000-0000-0000-0000-0000000000f3\''
+\set memberD2 '\'a0482000-0000-0000-0000-0000000000f4\''
+\set noNameD '\'a0482000-0000-0000-0000-0000000000f5\''
+\set adminMfaD '\'a0482000-0000-0000-0000-0000000000f6\''
+\set adminNoNameD '\'a0482000-0000-0000-0000-0000000000f7\''
+\set memberD3 '\'a0482000-0000-0000-0000-0000000000f8\''
+\set memberD4 '\'a0482000-0000-0000-0000-0000000000f9\''
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:ownerD,       'policy-owner-d@test.local',     '{"full_name": "Policy Owner D"}'::jsonb),
+  (:memberD1,     'policy-member-d1@test.local',   '{"full_name": "Policy Member D1"}'::jsonb),
+  (:memberD2,     'policy-member-d2@test.local',   '{"full_name": "Policy Member D2"}'::jsonb),
+  (:noNameD,      'policy-no-name-d@test.local',   '{}'::jsonb),
+  (:adminMfaD,    'policy-admin-mfa-d@test.local', '{"full_name": "Policy Admin Second Step D"}'::jsonb),
+  (:adminNoNameD, 'policy-admin-no-name-d@test.local', '{}'::jsonb),
+  (:memberD3,     'policy-member-d3@test.local',   '{"full_name": "Policy Member D3"}'::jsonb),
+  (:memberD4,     'policy-member-d4@test.local',   '{"full_name": "Policy Member D4"}'::jsonb);
+insert into auth.mfa_factors (id, user_id, friendly_name, factor_type, status, created_at, updated_at) values
+  (gen_random_uuid(), :adminMfaD, '0482 admin authenticator', 'totp', 'verified', now(), now());
+insert into public.organizations (id, name, slug, mfa_policy) values (:orgD, 'Policy Org D', 'a0482000-org-d', 'optional');
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:orgD, :ownerD,       'owner', now() - interval '50 days', null),
+  (:orgD, :memberD1,     'staff', now() - interval '50 days', null),
+  (:orgD, :memberD2,     'staff', now() - interval '40 days', null),
+  (:orgD, :noNameD,      'staff', now() - interval '30 days', null),
+  (:orgD, :adminMfaD,    'admin', now() - interval '50 days', null),
+  (:orgD, :adminNoNameD, 'admin', now() - interval '50 days', null),
+  (:orgD, :memberD3,     'staff', now() - interval '50 days', null),
+  (:orgD, :memberD4,     'staff', now() - interval '50 days', null);
+\set tD '\'Rules D\''
+\set bD '\'# Rules\nKeep the shared room tidy.\''
+
+-- S6: at most 600 lines, in the database as in the core.
+insert into answers values ('d601', pg_temp.save(:ownerD, :orgD, null, 'other', 'Long D',
+  (select string_agg('a', E'\n') from generate_series(1, 601))));
+select is(
+  coalesce(public._org_policy_body_problem((select string_agg('a', E'\n') from generate_series(1, 600))), 'ok') || ' ' ||
+  public._org_policy_body_problem((select string_agg('a', E'\n') from generate_series(1, 601))) || ' ' ||
+  public._org_policy_body_problem((select string_agg('a', E'\n\n') from generate_series(1, 301))) || ' ' ||
+  coalesce(public._org_policy_body_problem((select string_agg('a', E'\n\n') from generate_series(1, 300))), 'ok') || ' ' ||
+  (select pg_temp.err(v) || '|' || (v ->> 'detail') from answers where k = 'd601') || ' ' ||
+  public._org_policy_body_problem(repeat('b', 30001) || repeat(E'\n', 700)),
+  'ok too_many_lines too_many_lines ok 22023|policy_body_invalid|too_many_lines too_long',
+  '0482/114: a body holds at most 600 lines (599 line feeds), checked after the length, refused at the save');
+
+-- S1: every admin function asks for the second step where the app's rule asks for it.
+insert into answers values ('pD', pg_temp.save(:ownerD, :orgD, null, 'acceptable_use', :tD, :bD));
+select pg_temp.keep('pD', (select (v ->> 'policy_id')::uuid from answers where k = 'pD'));
+create function pg_temp.admin_calls(p_org uuid, p_policy uuid) returns text[] language sql stable as $$
+  select array[
+    format('select coalesce(jsonb_agg(to_jsonb(x)), ''[]'') from public.org_policies_for_admin(%L::uuid) x', p_org),
+    format('select public.org_policy_draft(%L::uuid)', p_policy),
+    format('select public.org_policy_status(%L::uuid)', p_policy),
+    format('select coalesce(jsonb_agg(to_jsonb(x)), ''[]'') from public.org_policy_acknowledgement_record(%L::uuid) x', p_policy),
+    format('select public.org_policy_save_draft(%L::uuid, %L::uuid, ''acceptable_use'', ''Rules D'', %L)', p_org, p_policy,
+           E'# Rules\nKeep the shared room tidy.'),
+    format('select public.org_policy_publish(%L::uuid, ''new_version'', %L)', p_policy,
+           (select text_hash from public.org_policy_versions where policy_id = p_policy and published_at is null)),
+    format('select public.org_policy_retire(%L::uuid)', p_policy),
+    format('select public.org_policy_remind_now(%L::uuid)', p_policy),
+    format('select public.org_policy_discard_draft(%L::uuid)', p_policy)];
+$$;
+-- Each call in a savepoint of its own, so a call that is let through changes nothing.
+create function pg_temp.each_err(p_user uuid, p_aal text, p_calls text[]) returns text language plpgsql as $$
+declare
+  out text := ''; c text; r jsonb;
+begin
+  foreach c in array p_calls loop
+    begin
+      r := pg_temp.as_(p_user, c, p_aal);
+      out := out || pg_temp.err(r) || ' ';
+      raise exception 'pg_temp.each_err: undone';
+    exception when others then
+      if sqlerrm <> 'pg_temp.each_err: undone' then raise; end if;
+    end;
+  end loop;
+  return rtrim(out);
+end;
+$$;
+select is(
+  pg_temp.each_err(:adminMfaD, 'aal1', pg_temp.admin_calls(:orgD, pg_temp.id('pD'))),
+  '42501|aal2_required 42501|aal2_required 42501|aal2_required 42501|aal2_required 42501|aal2_required '
+  '42501|aal2_required 42501|aal2_required 42501|aal2_required 42501|aal2_required',
+  '0482/115: an admin who has an authenticator, on a password-only session, is refused every admin function (aal2_required)');
+select is(
+  pg_temp.each_err(:adminMfaD, 'aal2', pg_temp.admin_calls(:orgD, pg_temp.id('pD'))),
+  'ok ok ok ok ok ok P0001|policy_not_published P0001|policy_not_published ok',
+  '0482/116: with the second step, the same admin passes the rule (every call is the function''s own answer)');
+update public.organizations set mfa_policy = 'admins_required' where id = :orgD;
+select is(
+  pg_temp.each_err(:ownerD, 'aal1', pg_temp.admin_calls(:orgD, pg_temp.id('pD'))),
+  '42501|mfa_required 42501|mfa_required 42501|mfa_required 42501|mfa_required 42501|mfa_required '
+  '42501|mfa_required 42501|mfa_required 42501|mfa_required 42501|mfa_required',
+  '0482/117: where the organization asks owners and admins for an authenticator, an owner with none is refused every admin function (mfa_required)');
+update public.organizations set mfa_policy = 'optional' where id = :orgD;
+
+insert into answers values ('pDv1', pg_temp.pub(:ownerD, pg_temp.id('pD'), 'new_version'));
+select pg_temp.keep('pDv1', (select (v ->> 'version_id')::uuid from answers where k = 'pDv1'));
+-- A member's own reads and acknowledgement are not admin functions: the strictest policy asks nothing of them here.
+update public.organizations set mfa_policy = 'all_required' where id = :orgD;
+select is(
+  pg_temp.err(pg_temp.rows_of(:memberD1, 'org_policies_for_member', :orgD)) || ' ' ||
+  pg_temp.err(pg_temp.txt(:memberD1, pg_temp.id('pD'))) || ' ' ||
+  pg_temp.err(pg_temp.ack(:memberD1, pg_temp.id('pDv1'))),
+  'ok ok ok',
+  '0482/118: a member with no authenticator, where every member is asked for one, still reads and acknowledges (no admin rule)');
+update public.organizations set mfa_policy = 'optional' where id = :orgD;
+select pg_temp.ack(:noNameD, pg_temp.id('pDv1'), 'phone');
+-- A member who acknowledged and whose account was then disabled: no longer a current member (never told, counted or listed).
+select pg_temp.ack(:memberD4, pg_temp.id('pDv1'));
+update public.user_profiles set disabled_at = now() where id = :memberD4;
+
+-- S2 (e): a correction keeps the title and the kind; a draft's kind waits for the publish.
+select pg_temp.save(:ownerD, :orgD, pg_temp.id('pD'), 'acceptable_use', 'Rules D changed', :bD || E'\nNo food.');
+insert into answers values ('c_title', pg_temp.pub(:ownerD, pg_temp.id('pD'), 'correction'));
+select pg_temp.save(:ownerD, :orgD, pg_temp.id('pD'), 'data_handling', :tD, :bD || E'\nNo food.');
+insert into answers values ('kind_wait', jsonb_build_object(
+  'policy', (select kind from public.org_policies where id = pg_temp.id('pD')),
+  'draft', (select kind from public.org_policy_versions where policy_id = pg_temp.id('pD') and published_at is null)));
+insert into answers values ('c_kind', pg_temp.pub(:ownerD, pg_temp.id('pD'), 'correction'));
+select pg_temp.save(:ownerD, :orgD, pg_temp.id('pD'), 'acceptable_use', :tD, :bD);
+insert into answers values ('c_same', pg_temp.pub(:ownerD, pg_temp.id('pD'), 'correction'));
+select is(
+  (select pg_temp.err(v) from answers where k = 'c_title') || ' ' ||
+  (select (v ->> 'policy') || '|' || (v ->> 'draft') from answers where k = 'kind_wait') || ' ' ||
+  (select pg_temp.err(v) from answers where k = 'c_kind') || ' ' ||
+  (select pg_temp.err(v) from answers where k = 'c_same'),
+  'P0001|policy_correction_changes_title acceptable_use|data_handling P0001|policy_correction_changes_kind P0001|policy_draft_unchanged',
+  '0482/119: a correction that changes the title or the kind is refused; a published policy keeps its kind while a draft holds another');
+select pg_temp.save(:ownerD, :orgD, pg_temp.id('pD'), 'acceptable_use', :tD, :bD || E'\nNo food.');
+insert into answers values ('pDv2', pg_temp.pub(:ownerD, pg_temp.id('pD'), 'correction'));
+select pg_temp.keep('pDv2', (select (v ->> 'version_id')::uuid from answers where k = 'pDv2'));
+select is(
+  (select (v ->> 'version_number') || '|' || (v ->> 'needs_acknowledgement') || '|' || (v ->> 'acknowledgement_round') || '|' ||
+          (v ->> 'kind') || '|' || (v ->> 'title') from answers where k = 'pDv2'),
+  '2|false|1|acceptable_use|Rules D',
+  '0482/120: a correction of the words only is version 2 in round 1, with the same kind and title');
+select pg_temp.ack(:memberD2, pg_temp.id('pDv2'));
+
+-- S2 (b): the admin's lists say which version each person acknowledged and whether the current text corrects it.
+select is(
+  (select string_agg((e ->> 'user_id') || ':' || (e ->> 'version_number') || ':' || (e ->> 'corrected_since'), ' ' order by e ->> 'user_id')
+     from jsonb_array_elements(pg_temp.fn1(:ownerD, 'org_policy_status', pg_temp.id('pD')) -> 'acknowledged') e) || ' ' ||
+  (select (p ->> 'current_version_number') || '|' || (p ->> 'current_needs_acknowledgement') || '|' ||
+          (p ->> 'current_published_by_name') || '|' || ((p ->> 'current_published_by')::uuid = :ownerD)::text
+     from (select pg_temp.fn1(:ownerD, 'org_policy_status', pg_temp.id('pD')) -> 'policy' as p) x),
+  'a0482000-0000-0000-0000-0000000000f3:1:true a0482000-0000-0000-0000-0000000000f4:2:false '
+  'a0482000-0000-0000-0000-0000000000f5:1:true 2|false|Policy Owner D|true',
+  '0482/121: the status names each acknowledgement''s version, corrected_since when the current text is a later correction of it, and who published the current version');
+select is(
+  (select (e ->> 'members') || '|' || (e ->> 'acknowledged') || '|' || (e ->> 'acknowledged_before_correction') || '|' ||
+          (e ->> 'not_acknowledged') || '|' || (e ->> 'current_published_by_name')
+     from jsonb_array_elements(pg_temp.rows_of(:ownerD, 'org_policies_for_admin', :orgD)) e where e ->> 'policy_id' = pg_temp.id('pD')::text),
+  '7|3|2|4|Policy Owner D',
+  '0482/122: the admin list counts the acknowledgements of an earlier text apart, and names who published the current version');
+select is(
+  (select string_agg((e ->> 'user_id') || ':' || (e ->> 'version_number') || ':' || (e ->> 'since_acknowledged') || ':' ||
+                     (e ->> 'current_version_number') || ':' ||
+                     ((e ->> 'member_since')::timestamptz = (select accepted_at from public.organization_members m
+                                                              where m.organization_id = :orgD and m.user_id = (e ->> 'user_id')::uuid))::text,
+                     ' ' order by e ->> 'user_id')
+     from jsonb_array_elements(pg_temp.rows_of(:ownerD, 'org_policy_acknowledgement_record', pg_temp.id('pD'))) e),
+  'a0482000-0000-0000-0000-0000000000f3:1:corrected:2:true a0482000-0000-0000-0000-0000000000f4:2:unchanged:2:true '
+  'a0482000-0000-0000-0000-0000000000f5:1:corrected:2:true a0482000-0000-0000-0000-0000000000f9:1:corrected:2:true',
+  '0482/123: the record (and its CSV) says of each acknowledgement whether the current text corrects it, and keeps when the membership began');
+
+-- S2 (c): a member reads when the policy was last corrected, the text they agreed to and the current text.
+select is(
+  (select string_agg((e ->> 'acknowledged_version_number') || '|' || (e ->> 'corrected_since_acknowledged') || '|' ||
+                     ((e ->> 'last_corrected_at')::timestamptz = now())::text, ' ')
+     from jsonb_array_elements(pg_temp.rows_of(:memberD1, 'org_policies_for_member', :orgD)) e) || ' ' ||
+  (select string_agg((e ->> 'acknowledged_version_number') || '|' || (e ->> 'corrected_since_acknowledged'), ' ')
+     from jsonb_array_elements(pg_temp.rows_of(:memberD2, 'org_policies_for_member', :orgD)) e) || ' ' ||
+  (select (t ->> 'version_number') || '|' || (t ->> 'acknowledged_version_number') || '|' || (t ->> 'corrected_since_acknowledged') || '|' ||
+          ((t ->> 'last_corrected_at')::timestamptz = now())::text
+     from (select pg_temp.txt(:memberD1, pg_temp.id('pD')) as t) x) || ' ' ||
+  (select (t ->> 'version_number') || '|' || (t ->> 'is_current') || '|' || (t -> 'my_acknowledgement' ->> 'method')
+     from (select pg_temp.txt(:memberD1, pg_temp.id('pD'), 1) as t) x),
+  '1|true|true 2|false 2|1|true|true 1|false|web',
+  '0482/124: a member is told the policy was corrected after they agreed (and when), and reads both the corrected text and the text they agreed to');
+
+-- S2 (a): every version, with who published it and when.
+select is(
+  (select string_agg((e ->> 'version_number') || ':' || (e ->> 'needs_acknowledgement') || ':' || (e ->> 'kind') || ':' ||
+                     (e ->> 'published_by_name') || ':' || ((e ->> 'published_at')::timestamptz = now())::text, ' '
+                     order by (e ->> 'version_number')::int)
+     from jsonb_array_elements(pg_temp.fn1(:ownerD, 'org_policy_draft', pg_temp.id('pD')) -> 'versions') e) || ' ' ||
+  (select (c ->> 'published_by_name') || '|' || (c ->> 'acknowledgement_round')
+     from (select pg_temp.fn1(:ownerD, 'org_policy_draft', pg_temp.id('pD')) -> 'current' as c) x),
+  '1:true:acceptable_use:Policy Owner D:true 2:false:acceptable_use:Policy Owner D:true Policy Owner D|1',
+  '0482/125: the admin reads every published version with who published it (id and kept name) and when; a correction is needs_acknowledgement false');
+
+-- S2 (d): the correction notices, each handed out once.
+create function pg_temp.notices(p_limit integer default 200) returns jsonb language sql as $$
+  select pg_temp.as_(null, format('select public.org_policy_correction_notices_claim(%L::integer)', p_limit), 'aal1', 'service_role');
+$$;
+insert into answers values ('n1', pg_temp.notices());
+insert into answers values ('n1b', pg_temp.notices());
+select is(
+  (select string_agg((e ->> 'user_id') || ':' || (e ->> 'version_number') || ':' || (e ->> 'acknowledged_version_number'), ' '
+                     order by e ->> 'user_id')
+     from answers, jsonb_array_elements(v -> 'claimed') e where k = 'n1') || ' ' ||
+  (select (v ->> 'busy') || '|' || (v ->> 'more') || '|' || jsonb_array_length(v -> 'claimed') from answers where k = 'n1b') || ' ' ||
+  (select string_agg(r.user_id || ':' || r.correction_notice_number || ':' || r.sent_count || ':' || coalesce(r.last_reminded_at::text, 'never'),
+                     ' ' order by r.user_id)
+     from public.org_policy_reminders r where r.policy_id = pg_temp.id('pD')),
+  'a0482000-0000-0000-0000-0000000000f3:2:1 a0482000-0000-0000-0000-0000000000f5:2:1 false|false|0 '
+  'a0482000-0000-0000-0000-0000000000f3:2:0:never a0482000-0000-0000-0000-0000000000f5:2:0:never',
+  '0482/126: the members who agreed to an earlier text are told of the correction once (stamped first, no reminder counted); a second claim hands out nothing');
+-- A second correction, by an admin with no name on the account: everyone who agreed to an earlier text is told again, once.
+select pg_temp.save(:adminNoNameD, :orgD, pg_temp.id('pD'), 'acceptable_use', :tD, :bD || E'\nNo food. No drinks.');
+insert into answers values ('pDv3', pg_temp.pub(:adminNoNameD, pg_temp.id('pD'), 'correction'));
+select pg_temp.keep('pDv3', (select (v ->> 'version_id')::uuid from answers where k = 'pDv3'));
+insert into answers values ('n2', pg_temp.notices(2));
+insert into answers values ('n3', pg_temp.notices());
+insert into answers values ('n4', pg_temp.notices());
+select is(
+  (select string_agg((e ->> 'user_id') || ':' || (e ->> 'version_number') || ':' || (e ->> 'acknowledged_version_number'), ' '
+                     order by e ->> 'user_id')
+     from answers, jsonb_array_elements(v -> 'claimed') e where k in ('n2', 'n3')) || ' ' ||
+  (select (v ->> 'more') from answers where k = 'n2') || '|' || (select (v ->> 'more') from answers where k = 'n3') || ' ' ||
+  (select jsonb_array_length(v -> 'claimed') from answers where k = 'n4'),
+  'a0482000-0000-0000-0000-0000000000f3:3:1 a0482000-0000-0000-0000-0000000000f4:3:2 a0482000-0000-0000-0000-0000000000f5:3:1 true|false 0',
+  '0482/127: a later correction is told once more to each who agreed to an earlier text, the limit and more as the reminders'' claim');
+
+-- S1 for the words: a read only an admin may make asks for the second step; a member's read does not.
+select is(
+  pg_temp.err(pg_temp.as_(:adminMfaD, format('select public.org_policy_text(%L::uuid, 1)', pg_temp.id('pD')), 'aal1')) || ' ' ||
+  (pg_temp.as_(:adminMfaD, format('select public.org_policy_text(%L::uuid, null)', pg_temp.id('pD')), 'aal1') ->> 'version_number') || ' ' ||
+  (pg_temp.as_(:adminMfaD, format('select public.org_policy_text(%L::uuid, 1)', pg_temp.id('pD')), 'aal2') ->> 'version_number'),
+  '42501|aal2_required 3 1',
+  '0482/128: an admin with an authenticator reads an earlier version only with the second step; the current version is a member''s read');
+
+-- S2 (e) and the kind: a new version may change the kind and the title, and the policy takes them.
+select pg_temp.save(:ownerD, :orgD, pg_temp.id('pD'), 'data_handling', 'Rules D, data', :bD || E'\nNo food. No drinks.');
+insert into answers values ('pDv4', pg_temp.pub(:ownerD, pg_temp.id('pD'), 'new_version'));
+select is(
+  (select kind || '|' || title || '|' || current_version from public.org_policies where id = pg_temp.id('pD')) || ' ' ||
+  (select string_agg(kind, ',' order by version_number) from public.org_policy_versions
+    where policy_id = pg_temp.id('pD') and published_at is not null),
+  'data_handling|Rules D, data|4 acceptable_use,acceptable_use,acceptable_use,data_handling',
+  '0482/129: a new version changes the kind and the title; each version keeps the kind it was published with');
+
+-- S4: after corrections and a retirement, a member's default read is what they agreed to.
+select pg_temp.fn1(:ownerD, 'org_policy_retire', pg_temp.id('pD'));
+select is(
+  (select (t ->> 'version_number') || '|' || (t ->> 'is_current') || '|' || coalesce(t -> 'my_acknowledgement' ->> 'method', 'none')
+     from (select pg_temp.txt(:memberD1, pg_temp.id('pD')) as t) x) || ' ' ||
+  (select (t ->> 'version_number') || '|' || coalesce(t -> 'my_acknowledgement' ->> 'method', 'none')
+     from (select pg_temp.txt(:noNameD, pg_temp.id('pD')) as t) x) || ' ' ||
+  (select (t ->> 'version_number') from (select pg_temp.txt(:memberD2, pg_temp.id('pD')) as t) x) || ' ' ||
+  (select (t ->> 'version_number') || '|' || (t ->> 'is_current') from (select pg_temp.txt(:memberD1, pg_temp.id('pD'), 4) as t) x) || ' ' ||
+  pg_temp.err(pg_temp.txt(:memberD1, pg_temp.id('pD'), 3)) || ' ' ||
+  pg_temp.err(pg_temp.txt(:memberD3, pg_temp.id('pD'))) || ' ' ||
+  (select jsonb_array_length(v -> 'claimed') from (select pg_temp.notices() as v) x),
+  '1|false|web 1|phone 2 4|true 42501|policy_not_allowed 42501|policy_not_allowed 0',
+  '0482/130: a retired policy''s default read is the version the member agreed to; they read its last version too, nothing else; one who never agreed reads nothing; no notice for a retired policy');
+
+-- S3: a deleted account that had no name keeps a label and when the membership began; a name is kept as it was.
+delete from auth.users where id in (:noNameD, :memberD1, :adminNoNameD);
+select is(
+  (select string_agg(coalesce(e ->> 'user_id', 'gone') || ':' || (e ->> 'name') || ':' || (e ->> 'account_deleted') || ':' ||
+                     ((e ->> 'member_since')::timestamptz = now() - interval '30 days')::text,
+                     ' ' order by e ->> 'name')
+     from jsonb_array_elements(pg_temp.rows_of(:ownerD, 'org_policy_acknowledgement_record', pg_temp.id('pD'))) e
+    where e ->> 'user_id' is null) || ' ' ||
+  (select string_agg(version_number || ':' || coalesce(published_by::text, 'gone') || ':' || published_by_name, ' ' order by version_number)
+     from public.org_policy_versions where policy_id = pg_temp.id('pD') and version_number in (2, 3)),
+  'gone:Former member, no name on the account:true:true gone:Policy Member D1:true:false '
+  '2:a0482000-0000-0000-0000-0000000000f2:Policy Owner D 3:gone:Former member, no name on the account',
+  '0482/131: after an account deletion a record names the kept name, or for an account with none the label and when the membership began; a version''s publisher the same');
+
+-- The notices claim's lock key and grants.
+savepoint notices_grant;
+grant execute on function public.org_policy_correction_notices_claim(integer) to authenticated, anon;
+select is(
+  (select count(*)::integer from pg_proc p where p.prosrc like '%4820002%') || ' ' ||
+  pg_temp.err(pg_temp.as_(:ownerA, 'select public.org_policy_correction_notices_claim(1)')) || ' ' ||
+  pg_temp.err(pg_temp.as_(null, 'select public.org_policy_correction_notices_claim(1)', 'aal1', 'anon')),
+  '1 42501|policy_not_allowed 42501|policy_not_allowed',
+  '0482/132: one function names the lock key 4820002 (the notices claim); even with EXECUTE it refuses a member and a signed-out caller');
+rollback to savepoint notices_grant;
+select is(
+  pg_temp.err(pg_temp.as_(:ownerA, 'select public.org_policy_correction_notices_claim(1)')) || ' ' ||
+  pg_temp.err(pg_temp.as_(null, 'select public.org_policy_correction_notices_claim(1)', 'aal1', 'anon')),
+  '42501 42501',
+  '0482/133: without the grant, authenticated and anon are refused the notices claim by its grant');
 
 select * from finish();
 rollback;

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FORBIDDEN_POLICY_CODE_POINTS,
   POLICY_BODY_MAX,
+  POLICY_BODY_MAX_LINES,
   POLICY_TITLE_MAX,
   findForbiddenPolicyCharacter,
   isPolicyAckMethod,
@@ -14,6 +15,7 @@ import {
   parsePolicyText,
   policyBlocksToText,
   policyBodyProblem,
+  policyLineCount,
   policyTextLength,
   policyTitleProblem,
 } from './policy-text';
@@ -123,6 +125,23 @@ describe('the limits and the refused characters', () => {
     expect(policyBodyProblem('')).toBe('empty');
     expect(policyBodyProblem('b'.repeat(30000))).toBeNull();
     expect(policyBodyProblem('b'.repeat(30001))).toBe('too_long');
+  });
+
+  it('holds a body to 600 lines (599 line feeds), counted on the text as given', () => {
+    expect(POLICY_BODY_MAX_LINES).toBe(600);
+    expect(policyLineCount('a')).toBe(1);
+    expect(policyLineCount('a\n\nb')).toBe(3);
+    const lines = (n: number) => Array.from({ length: n }, () => 'a').join('\n');
+    expect(policyBodyProblem(lines(600))).toBeNull();
+    expect(policyBodyProblem(lines(601))).toBe('too_many_lines');
+    // Empty lines count: 300 paragraphs of one line each are 599 lines.
+    expect(policyBodyProblem(Array.from({ length: 300 }, () => 'a').join('\n\n'))).toBeNull();
+    expect(policyBodyProblem(Array.from({ length: 301 }, () => 'a').join('\n\n'))).toBe(
+      'too_many_lines',
+    );
+    // Checked after the length and before the characters, as the database orders them.
+    expect(policyBodyProblem('b'.repeat(30001) + '\n'.repeat(700))).toBe('too_long');
+    expect(policyBodyProblem(lines(601) + '\u200b')).toBe('too_many_lines');
   });
 
   it('refuses every listed range at both ends, and allows the code point on either side', () => {
