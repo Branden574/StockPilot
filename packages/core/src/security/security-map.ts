@@ -441,6 +441,13 @@ export function readSecurityMapAnswer(raw: unknown): SecurityMapAnswerRead {
   for (let i = 0; i < raw.floors.length; i += 1) {
     if (!isSecurityMapFloorName(raw.floors[i])) return no(`floors.${i}: not a number's name`);
   }
+  // A day count cut short by the ceiling is a floor, and the answer says so in both places.
+  if (
+    raw.blocked_since_day_start_partial === true &&
+    !(raw.floors as unknown[]).includes('blocked_since_day_start')
+  ) {
+    return no('blocked_since_day_start_partial: the count is not in floors');
+  }
   // A poll (a window asked for that is shorter than 30 minutes): the live
   // cells only, and no groups by country.
   if (raw.short_window === true) {
@@ -967,6 +974,13 @@ function isWholeView(v: unknown, shownIndexes: readonly number[]): v is Security
   if (v.oldestEventAt !== null && !isTime(v.oldestEventAt)) return false;
   if (v.dayStart !== null && !isTime(v.dayStart)) return false;
   if (v.blockedSinceDayStart !== null && !isCount(v.blockedSinceDayStart)) return false;
+  if (
+    v.blockedSinceDayStartPartial === true &&
+    (v.blockedSinceDayStart === null ||
+      !(v.floors as unknown[]).includes('blocked_since_day_start'))
+  ) {
+    return false;
+  }
   if (!isArcList(v.still, SECURITY_MAP_MAX_ARCS, shownIndexes)) return false;
   if (!isArcList(v.table, SECURITY_MAP_MAX_BY_COUNTRY, shownIndexes)) return false;
   if (!Array.isArray(v.steps) || v.steps.length > SECURITY_MAP_MAX_STEPS) return false;

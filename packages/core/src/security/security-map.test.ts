@@ -645,6 +645,15 @@ describe("readSecurityMapAnswer: the contract's shape and nothing else", () => {
         answer({ window: { from: FROM, to: TO, live_from: LIVE_FROM, asked_from: TO_MINUS_3H } }),
       ],
       ['a partial day count with no count', answer({ blocked_since_day_start_partial: true })],
+      [
+        'a partial day count not named a floor',
+        answer({
+          day_start: FROM,
+          blocked_since_day_start: 9,
+          blocked_since_day_start_partial: true,
+          floors: [],
+        }),
+      ],
       ['short_window as text', answer({ short_window: 'yes' as never })],
       [
         'a replay cell in a poll',
@@ -1036,6 +1045,17 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
         'a partial day count as text',
         { ...view, whole: { ...w, blockedSinceDayStartPartial: 'no' } },
       ],
+      [
+        'a partial day count with no count',
+        { ...view, whole: { ...w, blockedSinceDayStartPartial: true, blockedSinceDayStart: null } },
+      ],
+      [
+        'a partial day count not named a floor',
+        {
+          ...view,
+          whole: { ...w, blockedSinceDayStartPartial: true, blockedSinceDayStart: 9, floors: [] },
+        },
+      ],
       ['an extra key', { ...view, extra: 1 }],
       ['41 live arcs', { ...view, live: Array.from({ length: 41 }, () => ['US', 0, 0, 1]) }],
       ['an arc with no events', { ...view, live: [['US', 0, 0, 0]] }],
@@ -1400,6 +1420,11 @@ describe('the words', () => {
       value: 'at least 40',
       note: 'Counted from 18:08, your time: there were too many events to count the whole day.',
     });
+    // Partial alone is enough for "at least", even where the floor's name was left out.
+    const partialOnly = { ...partial, whole: { ...partial.whole, floors: [] } };
+    expect(securityMapCounters(partialOnly, true, { timeZone: 'UTC' })[0]?.value).toBe(
+      'at least 40',
+    );
     const day = whole({
       ...busy(),
       day_start: '2026-11-23T08:00:00+00:00',
