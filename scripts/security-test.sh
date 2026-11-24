@@ -1084,6 +1084,39 @@ PGTAP_TESTS=(
   # organization's name is cut at 200 characters, and every time is written in
   # UTC whatever the session's time zone is.
   supabase/tests/0478_platform_security_map.test.sql
+  # What scanners asked for (0479): one table and three functions. The table
+  # has exactly its designed columns (no organization, account, address,
+  # header or hash), its row key computed by the database, two indexes, no
+  # foreign key and no trigger; its category, kind, source and method lists
+  # are held to the letter and are a subset of what the security events
+  # record accepts. anon and authenticated hold nothing on the table or the
+  # functions; service_role SELECT on the table and EXECUTE on the three, and
+  # cannot write a row directly; PUBLIC nothing. No body names a gate word, so
+  # if EXECUTE ever reached authenticated INV-25 would name each function
+  # (shown with the grant made inside a savepoint), and even then the second
+  # lock in each body refuses a signed-in member and a signed-out caller.
+  # Every CHECK refuses a bad row from the table's owner, and the writer
+  # applies the same text rules (printable ASCII only, no @, no run of six
+  # digits, no id, a path or one of two fixed words): every target and query
+  # string the table refuses the writer skips, every one it accepts it
+  # stores. The writer never raises: inputs and elements of many wrong shapes
+  # are skipped and counted, an unusable country, count or time is left empty
+  # or defaulted, only the first 50 elements are read. One row per hour and
+  # content; at most 50 new rows a kind and 300 in all an hour, then one
+  # overflow row a kind that only counts, while an existing row still adds.
+  # The writer and the purge take their own advisory lock, never the security
+  # events'; the read takes none. The purge keeps the events' 90 days, on the
+  # hour either side of the cutoff, oldest first, 5,000 a call. The read's
+  # numbers are worked out by hand for a made-up record: targets, their
+  # method and query string pairs and the overflow counts, most first then the
+  # newest, filtered by kind, category and country, the window's edges, the
+  # limit (10 by default, 50 at most, 5 pairs a target); every refusal is a
+  # fixed word, never raised and never repeating the argument; every time is
+  # in UTC; it writes nothing; a window over the row ceiling (60,000) is read
+  # from a later whole hour and says so, exactly at the ceiling it is read as
+  # asked, and an hour that alone holds more is refused. The two-session
+  # checks are scripts/db-concurrency/0479_security_event_samples_race.sh.
+  supabase/tests/0479_security_event_samples.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
@@ -2679,6 +2712,45 @@ WEB_TESTS=(
   src/components/platform/platform-security-map-section.test.tsx
   src/components/platform/security-map/security-map-client.test.tsx
   'src/app/(platform)/platform/security/map/page.test.tsx'
+
+  # What scanners asked for (part 5, stage 3): a sample is kept only when the
+  # path the request carries is taken by a rule of the route's own kind (the
+  # re-match), never under a path that can carry a token or key (the list is
+  # read from the route tree and fails on a new token route outside it),
+  # never for a method outside the seven, with the rule's own rewrite
+  # parameters dropped from the query string, and only after the core scrub.
+  # The scanner route's answer and its event are the same byte for byte with
+  # or without a sample, and a failing sample changes neither. The recorder
+  # has its own buffer (at most 50, merged, counts capped), never throws and
+  # is never waited on, drops a batch on 55P03 or a missing writer, and logs
+  # one count line of numbers only after every call. Its flush is on the
+  # security events' delay and never starts after their flush, so a probe
+  # request is held no longer with its sample than with its event alone
+  # (review 3B S5; event-samples.hold runs both real recorders). Every
+  # made-up scanner path comes out of the scrub as it was sent
+  # (probe-paths). The new files carry the "Security invariant" marker.
+  src/lib/security/probe-paths.test.ts
+  src/lib/security/probe-match.test.ts
+  src/lib/security/probe-sample.test.ts
+  'src/app/api/security/probe/[kind]/route.test.ts'
+  src/server/security/event-samples.test.ts
+  src/server/security/event-samples.hold.test.ts
+
+  # What was asked for, on the platform console (part 5, stage 3b): the read
+  # is imported by the panel's Server Action alone, which asks the console's
+  # own rule (checkPlatformConsoleRead) before its input or the table, and
+  # answers one fixed refusal; every argument is checked on both sides (a
+  # probe kind, a whole UTC hour within 7 days, two capitals); a missing
+  # function, a failed or refused read and an answer this build does not know
+  # are "could not check", never an empty list; what leaves the server is the
+  # view's keys alone (no organization). The panel's section reads once when
+  # it opens and renders every path and query string as text only, never a
+  # link, never markup; neither panel folder sets HTML from a string.
+  src/server/services/platform/security-event-samples.test.ts
+  src/server/services/platform/security-event-samples.callers.test.ts
+  src/server/actions/platform/security-event-samples.test.ts
+  src/components/platform/security-response/security-response-samples.test.tsx
+  src/components/platform/security-response/security-panels-no-raw-html.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3054,6 +3126,22 @@ CORE_TESTS=(
   # every sentence; a flagged event is never called blocked, a floor says
   # "at least", and a number that could not be read is never a zero.
   src/security/security-map.test.ts
+  # The scrub of what scanners asked for (part 5, stage 3): a path or query
+  # string is kept only as printable ASCII, cut to length, with anything that
+  # reads as an email, an id, a number, an address, a long value or a token
+  # (a 22-character invite token in every position) replaced by a fixed
+  # marker, and a secret-named key's value removed; a second scrub never
+  # shows more than the first; the last step is the table's own predicate; the
+  # ways through that the independent review found (3B) are pinned. Generated hostile
+  # inputs; ordinary scanner shapes come out unchanged (apps/web's
+  # probe-paths.test.ts holds every made-up scanner path to that too).
+  src/security/request-scrub.test.ts
+  # What was asked for, on the console (part 5, stage 3b): the browser's
+  # reader takes exactly the view's keys, each path and query string passing
+  # the table's own text rules, else "could not check"; the refusal is one
+  # fixed answer; an entry asks for its own kind and UTC hour, never one more
+  # than 7 days back.
+  src/security/security-event-samples.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

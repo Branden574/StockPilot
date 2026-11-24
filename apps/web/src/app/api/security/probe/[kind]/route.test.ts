@@ -1,15 +1,25 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { NEVER_SAMPLE_PATHS } from '@/lib/security/probe-sample';
+import { recordSecurityEventSample } from '@/server/security/event-samples';
 import { recordSecurityEvent } from '@/server/security/events';
 
 import * as route from './route';
 
 /**
- * The scanner-path route (next.config.ts rewrites /.env, /wp-login.php and
- * the like here; lib/security/probe-paths.ts): every method answers a
- * plain-text 404 "Not found" that is never cached, and a known kind is
- * recorded as exploit / blocked / <kind> from the web, with the request's own
- * headers and no organization. Any other kind records nothing.
+ * Security invariant: the scanner-path route (next.config.ts rewrites /.env,
+ * /wp-login.php and the like here; lib/security/probe-paths.ts): every method
+ * answers a plain-text 404 "Not found" that is never cached, and a known kind
+ * is recorded as exploit / blocked / <kind> from the web, with the request's
+ * own headers and no organization. Any other kind records nothing.
+ *
+ * What was asked for (part 5, stage 3): beside the event, a scrubbed sample
+ * of the request, only when the path is one the rule of that kind takes, never
+ * under a path that can carry a token, never for a method outside the seven;
+ * and nothing about it can change the answer or the event.
  *
  * Addresses are from the documentation ranges (RFC 5737).
  */
@@ -25,8 +35,9 @@ function call(method: (typeof METHODS)[number], kind: string) {
 }
 
 beforeEach(() => {
-  // The recorder is mocked for every test (src/test/setup.ts).
+  // Both recorders are mocked for every test (src/test/setup.ts).
   expect(recordSecurityEvent).not.toHaveBeenCalled();
+  expect(recordSecurityEventSample).not.toHaveBeenCalled();
 });
 
 describe('the probe route', () => {
@@ -75,135 +86,217 @@ describe('the probe route', () => {
   });
 });
 
-describe('the measurement log line', () => {
-  const KINDS = ['env_file', 'git_dir', 'wordpress', 'php_file', 'admin_tool', 'path_traversal'];
-  const URL_WITH_TEXT =
-    'https://app.example.com/api/security/probe/KIND?example=value&file=example-file';
-  const HEADER_VALUES = [
-    '/example-probe/settings',
-    'example-forwarded-value',
-    'example-cookie-value',
-  ];
-
-  function measured(kind: string, headers: Record<string, string> = {}, method = 'GET') {
-    return new Request(URL_WITH_TEXT.replace('KIND', kind), {
-      method,
-      headers: {
-        'x-forwarded-uri': HEADER_VALUES[0]!,
-        'x-example': HEADER_VALUES[1]!,
-        cookie: HEADER_VALUES[2]!,
-        ...headers,
-      },
-    });
-  }
-
-  let info: ReturnType<typeof vi.spyOn>;
-  beforeEach(() => {
-    info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+/** A request as Vercel hands it after the rewrite: the original path, the rewrite's parameters in the query. */
+function rewritten(
+  path: string,
+  query: string,
+  method: (typeof METHODS)[number] | 'PROPFIND' = 'GET',
+) {
+  return new Request(`https://app.example.com${path}${query ? `?${query}` : ''}`, {
+    method,
+    headers: { 'x-real-ip': '203.0.113.21', 'x-vercel-ip-country': 'NL', cookie: 'example=value' },
   });
-  afterEach(() => {
-    info.mockRestore();
-  });
+}
 
-  it.each(KINDS)('a %s request writes exactly one line with the fixed shape', async (kind) => {
-    const req = measured(kind);
-    await route.GET(req, { params: Promise.resolve({ kind }) });
-    expect(info).toHaveBeenCalledTimes(1);
-    const parsed = JSON.parse(info.mock.calls[0]![0] as string);
-    expect(Object.keys(parsed).sort()).toEqual(
-      ['headerCount', 'headerNames', 'headers', 'kind', 'query', 'tag', 'url'].sort(),
-    );
-    expect(parsed.tag).toBe('security.probe.measure');
-    expect(parsed.kind).toBe(kind);
-    expect(parsed.url).toEqual({ present: true, matchesKind: false });
-    expect(parsed.query).toEqual({ present: true, paramCount: 1, paramNames: ['file'] });
-    expect(parsed.headers['x-forwarded-uri']).toEqual({ present: true, matchesKind: false });
-    expect(parsed.headerCount).toBe([...req.headers.keys()].length);
-    expect(parsed.headerNames).toEqual(['x-forwarded-uri']);
-  });
+async function answerOf(response: Response) {
+  return {
+    status: response.status,
+    headers: [...response.headers].map(([k, v]) => [k.toLowerCase(), v]).sort(),
+    body: [...new Uint8Array(await response.arrayBuffer())],
+  };
+}
 
-  it('a header carrying a path of the kind is reported as a match', async () => {
-    const req = measured('env_file', { 'x-original-url': '/example-probe/.env' });
-    await route.GET(req, { params: Promise.resolve({ kind: 'env_file' }) });
-    const parsed = JSON.parse(info.mock.calls[0]![0] as string);
-    expect(parsed.headers['x-original-url']).toEqual({ present: true, matchesKind: true });
-  });
-
-  it('the line holds no path, query string, header value or header name outside the list', async () => {
-    const req = measured('env_file');
-    await route.GET(req, { params: Promise.resolve({ kind: 'env_file' }) });
-    const line = info.mock.calls[0]![0] as string;
-    for (const text of [
-      '/example-probe',
-      '/api/security/probe/env_file',
-      '?example=value',
-      'example=value',
-      'example-file',
-      'x-example',
-      'cookie',
-      ...HEADER_VALUES,
-    ]) {
-      expect(line.includes(text), text).toBe(false);
-    }
-  });
-
-  it('an unknown kind writes no line', async () => {
-    await route.GET(measured('unknown'), { params: Promise.resolve({ kind: 'unknown' }) });
-    expect(info).not.toHaveBeenCalled();
-  });
-
-  it.each(METHODS)('%s: the answer and the recorded event are what they were', async (method) => {
-    const req = measured('wordpress', {}, method);
-    const response = await route[method](req, { params: Promise.resolve({ kind: 'wordpress' }) });
-    expect(response.status).toBe(404);
-    expect([...response.headers].map(([k, v]) => [k.toLowerCase(), v]).sort()).toEqual([
+/** The answer every probe gets, byte for byte, as it was before samples. */
+function expectedAnswer(method: string) {
+  return {
+    status: 404,
+    headers: [
       ['cache-control', 'no-store'],
       ['content-type', 'text/plain; charset=utf-8'],
-    ]);
-    expect(await response.text()).toBe(method === 'HEAD' ? '' : 'Not found');
-    expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
-    expect(recordSecurityEvent).toHaveBeenCalledWith(
-      { category: 'exploit', outcome: 'blocked', reason: 'wordpress', source: 'web' },
+    ],
+    body: method === 'HEAD' ? [] : [...new TextEncoder().encode('Not found')],
+  };
+}
+
+const EVENT = (reason: string) => ({
+  category: 'exploit',
+  outcome: 'blocked',
+  reason,
+  source: 'web',
+});
+
+describe('what was asked for', () => {
+  const CASES: Array<[string, string, string, { target: string; sample: string | null }]> = [
+    [
+      'env_file',
+      '/backup/.env',
+      'debug=1&dirs=backup&file=.env',
+      { target: '/backup/.env', sample: 'debug=1' },
+    ],
+    [
+      'git_dir',
+      '/app/.git/config',
+      'rest=config&dirs=app',
+      { target: '/app/.git/config', sample: null },
+    ],
+    [
+      'wordpress',
+      '/wp-login.php',
+      'redirect_to=x&wp=wp-login.php',
+      { target: '/wp-login.php', sample: 'redirect_to=x' },
+    ],
+    [
+      'php_file',
+      '/cgi-bin/test.php',
+      'a2=1&dirs=cgi-bin&file=test.php',
+      { target: '/cgi-bin/test.php', sample: 'a2=1' },
+    ],
+    ['admin_tool', '/phpmyadmin/', 'tool=phpmyadmin', { target: '/phpmyadmin/', sample: null }],
+    [
+      'path_traversal',
+      '/a/b/etc/passwd',
+      'dirs=a&dirs=b&target=etc%2Fpasswd',
+      { target: '/a/b/etc/passwd', sample: null },
+    ],
+  ];
+
+  it.each(CASES)(
+    'a %s probe: the scrubbed path and the query as the client sent it, with the headers',
+    async (kind, path, query, expected) => {
+      const req = rewritten(path, query);
+      await route.GET(req, { params: Promise.resolve({ kind }) });
+      expect(recordSecurityEventSample).toHaveBeenCalledTimes(1);
+      expect(recordSecurityEventSample).toHaveBeenCalledWith(
+        { reason: kind, method: 'GET', ...expected },
+        req.headers,
+      );
+      expect(recordSecurityEvent).toHaveBeenCalledWith(EVENT(kind), req.headers);
+    },
+  );
+
+  it('the sample carries no address, header value or cookie of its own', async () => {
+    const req = rewritten('/backup/.env', 'q=example-query');
+    await route.POST(req, { params: Promise.resolve({ kind: 'env_file' }) });
+    const [sample] = vi.mocked(recordSecurityEventSample).mock.calls[0]!;
+    expect(Object.keys(sample).sort()).toEqual(['method', 'reason', 'sample', 'target']);
+    const text = JSON.stringify(sample);
+    for (const value of ['203.0.113.21', 'NL', 'example=value'])
+      expect(text.includes(value), value).toBe(false);
+  });
+
+  it('a secret in the path or the query is scrubbed before it reaches the recorder', async () => {
+    const req = rewritten(
+      '/x/someone%40example.com/.env',
+      'password=vexample&id=0f1e2d3c-4b5a-4968-8776-655443322110',
+    );
+    await route.GET(req, { params: Promise.resolve({ kind: 'env_file' }) });
+    expect(recordSecurityEventSample).toHaveBeenCalledWith(
+      {
+        reason: 'env_file',
+        method: 'GET',
+        target: '/x/<email>/.env',
+        sample: 'password=<removed>&id=<id>',
+      },
       req.headers,
     );
   });
 
-  it('a throwing header accessor still gets the normal 404, the event, and no line', async () => {
-    const real = measured('git_dir');
+  it('no sample when the path is not one the rule of that kind takes; the event is recorded as before', async () => {
+    for (const [kind, path] of [
+      ['env_file', '/api/security/probe/env_file'],
+      ['git_dir', '/.env'],
+      ['php_file', '/wp-content/plugins/example/index.php'],
+      ['wordpress', '/dashboard'],
+    ] as const) {
+      const req = rewritten(path, 'file=.env');
+      const response = await route.GET(req, { params: Promise.resolve({ kind }) });
+      expect(await answerOf(response)).toEqual(expectedAnswer('GET'));
+      expect(recordSecurityEvent).toHaveBeenLastCalledWith(EVENT(kind), req.headers);
+    }
+    expect(recordSecurityEventSample).not.toHaveBeenCalled();
+    expect(recordSecurityEvent).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(NEVER_SAMPLE_PATHS.map((p) => [p]))(
+    'no sample under %s; the event is recorded as before',
+    async (entry) => {
+      const req = rewritten(`${entry}/Qx7kP2mZ9w/.env`, 'x=1&dirs=a&file=.env');
+      const response = await route.GET(req, { params: Promise.resolve({ kind: 'env_file' }) });
+      expect(await answerOf(response)).toEqual(expectedAnswer('GET'));
+      expect(recordSecurityEvent).toHaveBeenCalledWith(EVENT('env_file'), req.headers);
+      expect(recordSecurityEventSample).not.toHaveBeenCalled();
+    },
+  );
+
+  it('no sample for a method outside the seven; the event and the answer are as before', async () => {
+    const req = rewritten('/backup/.env', '', 'PROPFIND');
+    const response = await route.GET(req, { params: Promise.resolve({ kind: 'env_file' }) });
+    expect(await answerOf(response)).toEqual(expectedAnswer('GET'));
+    expect(recordSecurityEvent).toHaveBeenCalledWith(EVENT('env_file'), req.headers);
+    expect(recordSecurityEventSample).not.toHaveBeenCalled();
+  });
+
+  it('no sample for a kind that is not a probe kind', async () => {
+    await route.GET(rewritten('/backup/.env', ''), {
+      params: Promise.resolve({ kind: 'unknown' }),
+    });
+    expect(recordSecurityEventSample).not.toHaveBeenCalled();
+  });
+
+  it.each(METHODS)(
+    '%s: the answer and the event are byte for byte what they were, sampled or not',
+    async (method) => {
+      const sampled = rewritten('/backup/.env', 'q=1', method);
+      const unsampled = rewritten('/r/Qx7kP2mZ9w/.env', 'q=1', method);
+      const direct = new Request('https://app.example.com/api/security/probe/env_file', { method });
+      for (const req of [sampled, unsampled, direct]) {
+        const response = await route[method](req, {
+          params: Promise.resolve({ kind: 'env_file' }),
+        });
+        expect(await answerOf(response)).toEqual(expectedAnswer(method));
+        expect(recordSecurityEvent).toHaveBeenLastCalledWith(EVENT('env_file'), req.headers);
+      }
+      expect(recordSecurityEvent).toHaveBeenCalledTimes(3);
+      expect(recordSecurityEventSample).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordSecurityEventSample).mock.calls[0]![0].method).toBe(method);
+    },
+  );
+
+  it('a recorder that throws cannot change the answer or the event', async () => {
+    vi.mocked(recordSecurityEventSample).mockImplementation(() => {
+      throw new Error('example failure');
+    });
+    for (const method of METHODS) {
+      const req = rewritten('/backup/.env', 'q=1', method);
+      const response = await route[method](req, { params: Promise.resolve({ kind: 'env_file' }) });
+      expect(await answerOf(response)).toEqual(expectedAnswer(method));
+      expect(recordSecurityEvent).toHaveBeenLastCalledWith(EVENT('env_file'), req.headers);
+    }
+    expect(recordSecurityEventSample).toHaveBeenCalledTimes(METHODS.length);
+  });
+
+  it('a request whose address cannot be read still gets the normal 404 and its event, and no sample', async () => {
+    const real = rewritten('/backup/.env', 'q=1');
     const hostile = new Proxy(real, {
       get(target, prop) {
-        if (prop === 'headers') {
-          return {
-            get: () => {
-              throw new Error('example failure');
-            },
-            keys: () => {
-              throw new Error('example failure');
-            },
-            values: () => {
-              throw new Error('example failure');
-            },
-          };
-        }
+        if (prop === 'url') throw new Error('example failure');
         const v = Reflect.get(target, prop, target);
         return typeof v === 'function' ? v.bind(target) : v;
       },
     }) as Request;
-    const response = await route.GET(hostile, { params: Promise.resolve({ kind: 'git_dir' }) });
-    expect(response.status).toBe(404);
-    expect(await response.text()).toBe('Not found');
-    expect(info).not.toHaveBeenCalled();
+    const response = await route.GET(hostile, { params: Promise.resolve({ kind: 'env_file' }) });
+    expect(await answerOf(response)).toEqual(expectedAnswer('GET'));
     expect(recordSecurityEvent).toHaveBeenCalledTimes(1);
+    expect(recordSecurityEventSample).not.toHaveBeenCalled();
   });
 
-  it('a console that throws does not change the answer', async () => {
-    info.mockImplementation(() => {
-      throw new Error('example failure');
-    });
-    const response = await route.GET(measured('php_file'), {
-      params: Promise.resolve({ kind: 'php_file' }),
-    });
-    expect(response.status).toBe(404);
-    expect(await response.text()).toBe('Not found');
+  it('the recorder is never awaited: the route reads nothing back from it', () => {
+    const src = readFileSync(path.join(__dirname, 'route.ts'), 'utf8').replace(
+      /\/\*[\s\S]*?\*\//g,
+      '',
+    );
+    expect(src).toMatch(/\brecordSecurityEventSample\(sample, req\.headers\);/);
+    expect(src).not.toMatch(/await\s+recordSecurityEventSample/);
+    expect(src).not.toMatch(/probe-measure|logProbeMeasurement/);
   });
 });
