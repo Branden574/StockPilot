@@ -80,7 +80,7 @@ export function landDots(): Float32Array {
   return landCache;
 }
 
-/** A country's point, or null for a code with none (a code outside ISO 3166-1, such as XK). */
+/** A country's point, or null for a code with none (one outside ISO 3166-1 the generator does not place). */
 export function countryPoint(code: string): LonLat | null {
   return Object.prototype.hasOwnProperty.call(COUNTRY_POINTS, code)
     ? (COUNTRY_POINTS[code] ?? null)

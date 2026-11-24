@@ -29,6 +29,7 @@ export declare const DOT_STEP: number;
 export declare const BUDGET_GZIP_BYTES: number;
 export declare const ISO_3166_ALPHA2: readonly string[];
 export declare const FALLBACK_POINTS: Readonly<Record<string, readonly [number, number]>>;
+export declare const HAND_ONLY_CODES: readonly string[];
 export declare function readOutline(text: string): OutlineFeature[];
 export declare function countryCodeOf(properties: unknown): string | null;
 export declare function ringContains(ring: readonly Position[], lon: number, lat: number): boolean;
@@ -52,6 +53,7 @@ export declare function countryPoints(
   outline: OutlineFeature[],
   codes: readonly string[],
   fallback: Readonly<Record<string, readonly [number, number]>>,
+  handOnly?: readonly string[],
 ): CountryPointsResult;
 export declare function renderWorldDots(dots: LandBits, step: number): string;
 export declare function renderCountryPoints(result: CountryPointsResult): string;
@@ -61,6 +63,7 @@ export declare function generateWorld(
     step?: number;
     codes?: readonly string[];
     fallback?: Readonly<Record<string, readonly [number, number]>>;
+    handOnly?: readonly string[];
   },
 ): {
   worldDots: string;

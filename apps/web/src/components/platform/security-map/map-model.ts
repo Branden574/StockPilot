@@ -158,8 +158,9 @@ const num = (n: number): string => n.toLocaleString('en-US');
 
 /**
  * The line for events of the window whose country has no point on the map
- * (a code that is not one of ISO 3166-1's, such as XK): they are in the
- * table and never drawn. Null when there are none.
+ * (a code that is neither one of ISO 3166-1's nor in the generator's short
+ * hand-written list): they are in the table and never drawn. Null when there
+ * are none.
  */
 export function notOnMapWords(whole: SecurityMapWholeRead): string | null {
   let events = 0;

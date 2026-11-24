@@ -8,6 +8,7 @@ import {
   BUDGET_GZIP_BYTES,
   DOT_STEP,
   FALLBACK_POINTS,
+  HAND_ONLY_CODES,
   ISO_3166_ALPHA2,
   OUTLINE_SHA256,
   OUTPUT_FILES,
@@ -244,11 +245,31 @@ describe('the points', () => {
     const twice = [...outline, { code: 'ZA', polygons: outline[0]!.polygons }];
     expect(() => countryPoints(twice, CODES, FALLBACK)).toThrow('ZA: twice in the outline');
   });
+
+  it("a hand-only code outside the list: the hand-written point, never the outline's", () => {
+    const outline = readOutline(fixture());
+    const result = countryPoints(outline, CODES, { ...FALLBACK, XK: [20.9, 42.6] }, ['XK']);
+    // The outline's square for XK stands at -165 east, 15 north: not used.
+    expect(result.points.XK).toEqual([20.9, 42.6]);
+    expect(result.how.XK).toBe('fallback table');
+    expect(result.fromFallback).toEqual(['SG', 'XK']);
+    expect(result.notInList).toEqual([]);
+    expect(Object.keys(result.points)).toEqual(['NO', 'SG', 'US', 'XK', 'ZA']);
+    expect(() => countryPoints(outline, CODES, FALLBACK, ['XK'])).toThrow('XK: no point');
+    expect(() => countryPoints(outline, CODES, { ...FALLBACK, ZA: [1, 1] }, ['ZA'])).toThrow(
+      'ZA: in the list and in the hand-only list',
+    );
+  });
 });
 
 describe('the two files from the made-up outline', () => {
   it('hold numbers and codes only: no text from the outline reaches them', () => {
-    const made = generateWorld(fixture(), { step: 30, codes: CODES, fallback: FALLBACK });
+    const made = generateWorld(fixture(), {
+      step: 30,
+      codes: CODES,
+      fallback: FALLBACK,
+      handOnly: [],
+    });
     for (const text of [made.worldDots, made.countryPoints]) {
       expect(text).not.toMatch(/<script>|alert\(1\)|Made-up|No code|Outside the list|U shape/);
     }
@@ -261,7 +282,12 @@ describe('the two files from the made-up outline', () => {
   });
 
   it('read back through world-geometry, the dots stand where the generator put them', () => {
-    const made = generateWorld(fixture(), { step: 30, codes: CODES, fallback: FALLBACK });
+    const made = generateWorld(fixture(), {
+      step: 30,
+      codes: CODES,
+      fallback: FALLBACK,
+      handOnly: [],
+    });
     const land = made.worldDots.match(/land: '([^']*)'/)![1]!;
     const dots = decodeLand({
       source: 'x',
@@ -284,12 +310,14 @@ describe('the two files from the made-up outline', () => {
 });
 
 describe('the committed files', () => {
-  it('every ISO 3166-1 alpha-2 code has a point, and nothing else does', () => {
+  it('every ISO 3166-1 alpha-2 code has a point, and Kosovo (XK); nothing else does', () => {
     expect(ISO_CODES).toHaveLength(249);
     expect(new Set(ISO_CODES).size).toBe(249);
     expect([...ISO_3166_ALPHA2]).toEqual(ISO_CODES);
-    expect(Object.keys(COUNTRY_POINTS).sort()).toEqual([...ISO_CODES].sort());
-    for (const code of ISO_CODES) {
+    expect([...HAND_ONLY_CODES]).toEqual(['XK']);
+    expect(Object.keys(COUNTRY_POINTS)).toHaveLength(250);
+    expect(Object.keys(COUNTRY_POINTS).sort()).toEqual([...ISO_CODES, 'XK'].sort());
+    for (const code of [...ISO_CODES, 'XK']) {
       const [lon, lat] = COUNTRY_POINTS[code]!;
       expect(lon, code).toBeGreaterThanOrEqual(-180);
       expect(lon, code).toBeLessThanOrEqual(180);
@@ -300,13 +328,23 @@ describe('the committed files', () => {
 
   it('every code of the list is a real region (the runtime names it)', () => {
     const names = new Intl.DisplayNames(['en'], { type: 'region' });
-    for (const code of ISO_CODES) expect(names.of(code), code).not.toBe(code);
+    for (const code of [...ISO_CODES, 'XK']) expect(names.of(code), code).not.toBe(code);
   });
 
   it('the points from the hand-written table are exactly the places the outline lacks', () => {
     expect([...COUNTRY_POINTS_FROM_FALLBACK].sort()).toEqual(Object.keys(FALLBACK_POINTS).sort());
     // Singapore and Hong Kong, common sources of requests, are among them.
     expect(COUNTRY_POINTS_FROM_FALLBACK).toEqual(expect.arrayContaining(['SG', 'HK']));
+  });
+
+  it("Kosovo's point is the hand-written one, inside Kosovo", () => {
+    expect(COUNTRY_POINTS.XK).toEqual(FALLBACK_POINTS.XK);
+    expect(COUNTRY_POINTS_FROM_FALLBACK).toContain('XK');
+    const [lon, lat] = COUNTRY_POINTS.XK!;
+    expect(lon).toBeGreaterThan(20);
+    expect(lon).toBeLessThan(21.8);
+    expect(lat).toBeGreaterThan(41.8);
+    expect(lat).toBeLessThan(43.3);
   });
 
   it('the dots read back to their own count, at the generator step', () => {

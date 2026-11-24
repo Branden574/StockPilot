@@ -417,7 +417,9 @@ describe('the flat map', () => {
 
   it('a code with no point has none; never a made-up one', () => {
     expect(countryPoint('DE')).not.toBeNull();
-    expect(countryPoint('XK')).toBeNull();
+    // Kosovo is not an ISO 3166-1 code; its point is written by hand.
+    expect(countryPoint('XK')).not.toBeNull();
+    expect(countryPoint('QY')).toBeNull();
     expect(countryPoint('toString')).toBeNull();
     expect(countryPoint('')).toBeNull();
   });

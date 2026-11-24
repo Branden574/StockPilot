@@ -95,7 +95,7 @@ describe('what is on the map this moment', () => {
   });
 
   it('an arc of a code with no point is not drawn; never placed at a made-up point', () => {
-    const drawn = drawnArcs([arc('DE', 1, 0, 5), arc('XK', 1, 0, 3)]);
+    const drawn = drawnArcs([arc('DE', 1, 0, 5), arc('QY', 1, 0, 3)]);
     expect(drawn.map((d) => d.arc.country)).toEqual(['DE']);
     expect(drawn[0]!.from).toEqual(countryPoint('DE'));
   });
@@ -126,16 +126,17 @@ describe('the line for places with no point', () => {
       notOnMapWords(
         whole([
           ['DE', 1, 0, 50],
-          ['XK', 1, 0, 4],
-          ['XK', 2, 1, 1],
+          ['QY', 1, 0, 4],
+          ['QY', 2, 1, 1],
           ['QZ', 0, 0, 2],
+          ['XK', 1, 0, 9],
         ]),
       ),
     ).toBe(
-      'Not on the map: 7 events come from places the map has no point for (QZ, XK). They are in the table.',
+      'Not on the map: 7 events come from places the map has no point for (QY, QZ). They are in the table.',
     );
-    expect(notOnMapWords(whole([['XK', 1, 0, 1]]))).toBe(
-      'Not on the map: 1 event comes from a place the map has no point for (XK). It is in the table.',
+    expect(notOnMapWords(whole([['QY', 1, 0, 1]]))).toBe(
+      'Not on the map: 1 event comes from a place the map has no point for (QY). It is in the table.',
     );
     expect(notOnMapWords(whole([['DE', 1, 0, 50]]))).toBeNull();
   });

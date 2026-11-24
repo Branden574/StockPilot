@@ -6,7 +6,8 @@
  *   apps/web/src/components/platform/security-map/world-dots.ts
  *       the land as a grid of dots (one bit per cell)
  *   apps/web/src/components/platform/security-map/country-points.ts
- *       one point for every ISO 3166-1 two-letter code (249 of them)
+ *       one point for every ISO 3166-1 two-letter code (249 of them), and for
+ *       the codes outside it in HAND_ONLY_CODES (Kosovo's XK)
  *
  *   node scripts/security-map/generate-world.mjs <ne_110m_admin_0_countries.geojson>
  *       writes both files
@@ -37,11 +38,13 @@
  * that is two capital letters, otherwise ISO_A2 (the plain field is -99 for
  * Norway and France in this release and CN-TW for Taiwan; ISO_A2_EH has NO, FR
  * and TW). A feature with no code (N. Cyprus, Somaliland) is land and has no
- * point. A code outside the 249 (Kosovo's XK) gets no point: the map counts
- * such events in words and never draws them. The places the 1:110m outline
- * leaves out (small islands, Singapore, Hong Kong and others) come from
- * FALLBACK_POINTS, written by hand below; a code in both is an error, and so
- * is one of the 249 with neither.
+ * point. A code outside the 249 gets no point (the map counts such events in
+ * words and never draws them), unless HAND_ONLY_CODES names it: Kosovo's XK,
+ * which is not in ISO 3166-1 but is the code sign-in services give, has its
+ * point written by hand, and the outline's shape for it is not used. The
+ * places the 1:110m outline leaves out (small islands, Singapore, Hong Kong
+ * and others) come from FALLBACK_POINTS, written by hand below; a code of the
+ * 249 in both is an error, and so is one with neither.
  */
 
 import { createHash } from 'node:crypto';
@@ -166,7 +169,14 @@ export const FALLBACK_POINTS = Object.freeze({
   WF: [-176.2, -13.3], // Wallis and Futuna (Wallis)
   WS: [-172.1, -13.8], // Samoa (Upolu and Savai'i)
   YT: [45.2, -12.8], // Mayotte
+  XK: [20.9, 42.6], // Kosovo (the middle of the country; not an ISO 3166-1 code, see HAND_ONLY_CODES)
 });
+
+/**
+ * Codes outside ISO 3166-1 that the map still places, always at the point
+ * written by hand in FALLBACK_POINTS (never one worked out from the outline).
+ */
+export const HAND_ONLY_CODES = Object.freeze(['XK']);
 
 const CODE_RE = /^[A-Z]{2}$/;
 
@@ -406,10 +416,15 @@ export function oneDecimal(n) {
 
 /**
  * A point for every code in `codes`: from the outline where it has the code,
- * else from `fallback`. Errors: a code twice in the outline, a fallback entry
- * for a code the outline has, a code with neither.
+ * else from `fallback`; and for every code in `handOnly` (codes outside the
+ * list), from `fallback` only. Errors: a code twice in the outline, a
+ * fallback entry for a code the outline has, a code with neither, a code in
+ * both lists, a fallback entry for no code of either.
  */
-export function countryPoints(outline, codes, fallback) {
+export function countryPoints(outline, codes, fallback, handOnly = []) {
+  for (const code of handOnly) {
+    if (codes.includes(code)) throw new Error(`${code}: in the list and in the hand-only list`);
+  }
   const fromOutline = new Map();
   const notInList = [];
   let withoutCode = 0;
@@ -418,6 +433,7 @@ export function countryPoints(outline, codes, fallback) {
       withoutCode += 1;
       continue;
     }
+    if (handOnly.includes(feature.code)) continue;
     if (!codes.includes(feature.code)) {
       notInList.push(feature.code);
       continue;
@@ -430,7 +446,7 @@ export function countryPoints(outline, codes, fallback) {
   const points = {};
   const fromFallback = [];
   const how = {};
-  for (const code of codes) {
+  for (const code of [...codes, ...handOnly].sort()) {
     const outlined = fromOutline.get(code);
     const hand = Object.prototype.hasOwnProperty.call(fallback, code) ? fallback[code] : null;
     if (outlined && hand) throw new Error(`${code}: in the outline and in the fallback table`);
@@ -444,7 +460,9 @@ export function countryPoints(outline, codes, fallback) {
     } else throw new Error(`${code}: no point (not in the outline, not in the fallback table)`);
   }
   for (const code of Object.keys(fallback)) {
-    if (!codes.includes(code)) throw new Error(`${code}: in the fallback table and not a code`);
+    if (!codes.includes(code) && !handOnly.includes(code)) {
+      throw new Error(`${code}: in the fallback table and not a code`);
+    }
   }
   return { points, fromFallback, notInList: notInList.sort(), withoutCode, how };
 }
@@ -503,13 +521,14 @@ export function renderCountryPoints(result) {
     ([code, [lon, lat]]) => `  ${code}: [${lon}, ${lat}],`,
   );
   const fallback = result.fromFallback.map((code) => `  '${code}',`);
-  return `${header('One point for every ISO 3166-1 two-letter code, for the attack map: [longitude, latitude].')}
+  return `${header('One point for every ISO 3166-1 two-letter code and the few placed by hand, for the attack map: [longitude, latitude].')}
 
 /**
  * For a code the outline has, the centre of the country's largest polygon when
  * that is inside it, otherwise the middle of the widest stretch of land on that
- * latitude. For the places the outline leaves out, the point written by hand in
- * the script's fallback table (COUNTRY_POINTS_FROM_FALLBACK lists them).
+ * latitude. For the places the outline leaves out, and for the codes outside
+ * ISO 3166-1 the script places by hand, the point written by hand in the
+ * script's fallback table (COUNTRY_POINTS_FROM_FALLBACK lists them).
  */
 export const COUNTRY_POINTS: Readonly<Record<string, readonly [lon: number, lat: number]>> = {
 ${lines.join('\n')}
@@ -525,11 +544,16 @@ ${fallback.join('\n')}
 /** Both files' text, from the outline's text. */
 export function generateWorld(
   text,
-  { step = DOT_STEP, codes = ISO_3166_ALPHA2, fallback = FALLBACK_POINTS } = {},
+  {
+    step = DOT_STEP,
+    codes = ISO_3166_ALPHA2,
+    fallback = FALLBACK_POINTS,
+    handOnly = HAND_ONLY_CODES,
+  } = {},
 ) {
   const outline = readOutline(text);
   const dots = landBits(outline, step);
-  const points = countryPoints(outline, codes, fallback);
+  const points = countryPoints(outline, codes, fallback, handOnly);
   return {
     worldDots: renderWorldDots(dots, step),
     countryPoints: renderCountryPoints(points),
@@ -578,6 +602,7 @@ function main(argv) {
   for (const [how, codes] of Object.entries(byHow)) {
     console.log(`  ${how} (${codes.length}): ${codes.join(' ')}`);
   }
+  console.log(`outside ISO 3166-1, placed by hand: ${HAND_ONLY_CODES.join(' ')}`);
   console.log(
     `codes in the outline outside the list, given no point: ${made.points.notInList.join(' ') || 'none'}`,
   );
