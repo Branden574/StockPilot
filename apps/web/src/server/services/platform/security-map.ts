@@ -56,6 +56,12 @@ import {
 
 /** How long the read may take before the page gives up on it. */
 export const SECURITY_MAP_READ_BUDGET_MS = 6000;
+/**
+ * A read of the whole window slower than this is reported once, as a
+ * warning, with its duration and whether the window was shortened: if it
+ * happens in production the row ceiling is halved in a later migration.
+ */
+export const SECURITY_MAP_SLOW_READ_MS = 2500;
 
 /** The live play: a read of the last ten minutes starts this long before now. */
 export const SECURITY_MAP_RECENT_MINUTES = 10;
@@ -241,7 +247,24 @@ export async function readPlatformSecurityMap(
   input: PlatformSecurityMapRead,
   now: number = Date.now(),
 ): Promise<SecurityMapPollResult> {
+  // The read's own time: the call to the database, from sending to its answer or its error.
+  const started = performance.now();
+  let tookMs: number | null = null;
+  const took = () => (tookMs ??= Math.round(performance.now() - started));
+  let slowReported = false;
+  const reportSlow = async (shortened: boolean | null) => {
+    if (input.scope !== 'whole' || slowReported || took() <= SECURITY_MAP_SLOW_READ_MS) return;
+    slowReported = true;
+    // Only the duration and whether the window was shortened: nothing of the answer.
+    await reportError(new Error(`${FN}: a read of the whole window was slow`), {
+      tag: 'platform.security-map.slow-read',
+      level: 'warning',
+      extra: { ms: took(), shortened },
+    });
+  };
   const fail = async (problem: unknown, code?: string): Promise<SecurityMapPollResult> => {
+    took();
+    await reportSlow(null);
     await reportError(problem instanceof Error ? problem : new Error(rawErrorText(problem)), {
       tag: `platform.security-map.${FN}`,
       level: 'warning',
@@ -268,6 +291,7 @@ export async function readPlatformSecurityMap(
       data: unknown;
       error: { message: string; code?: string } | null;
     };
+    took();
     if (error) {
       if (error.code === 'PGRST202') {
         return await fail(
@@ -291,7 +315,11 @@ export async function readPlatformSecurityMap(
     if (!read.ok) {
       return await fail(new Error(`${FN}: the two readers of the answer disagree (${read.where})`));
     }
-    if (read.refused !== null) return { ok: true, view: null, refusedWindow: read.refused };
+    if (read.refused !== null) {
+      await reportSlow(null);
+      return { ok: true, view: null, refusedWindow: read.refused };
+    }
+    await reportSlow(read.answer.window_shortened);
     return { ok: true, view: securityMapViewOf(read.answer, input.scope), refusedWindow: null };
   } catch (err) {
     return await fail(err);

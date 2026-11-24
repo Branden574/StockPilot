@@ -163,6 +163,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 import {
   SECURITY_MAP_READ_BUDGET_MS,
+  SECURITY_MAP_SLOW_READ_MS,
   platformSecurityMapSchema,
   readPlatformSecurityMap,
 } from './security-map';
@@ -359,6 +360,80 @@ describe('a read that fails is "could not check", reported once, and never throw
       );
     }
     expect(h.reportError).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe('a slow read of the whole window', () => {
+  /** The read takes `ms` on the page's clock: the database answers that much later. */
+  function taking(ms: number, data: unknown = mapAnswer(), error: Answer['error'] = null) {
+    let clock = 1_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    // The stub may ask for the answer more than once in one call: the clock moves once.
+    let answered = false;
+    answer = () => {
+      if (!answered) clock += ms;
+      answered = true;
+      return { data, error };
+    };
+  }
+  const slowReports = () => reports().filter((r) => r.tag === 'platform.security-map.slow-read');
+
+  it('past 2.5 seconds: reported once, as a warning, with its duration and whether the window was shortened, and nothing else', async () => {
+    expect(SECURITY_MAP_SLOW_READ_MS).toBe(2500);
+    taking(2_501);
+    const result = await readPlatformSecurityMap({ scope: 'whole', dayStart: null }, NOW);
+    expect(result.ok && result.view?.scope).toBe('whole');
+    expect(slowReports()).toEqual([
+      {
+        message: 'platform_security_map: a read of the whole window was slow',
+        tag: 'platform.security-map.slow-read',
+        level: 'warning',
+        extra: { ms: 2_501, shortened: false },
+      },
+    ]);
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    // Nothing of the answer: no place, no reason, no organization, no count.
+    const logged = JSON.stringify(h.reportError.mock.calls);
+    for (const text of ['Example', 'wrong_password', 'sign_in_alerts_held', 'US', 'GB']) {
+      expect(logged).not.toContain(text);
+    }
+  });
+
+  it('a shortened window says so', async () => {
+    taking(
+      3_570,
+      mapAnswer({
+        window: {
+          from: '2026-11-23T18:08:00+00:00',
+          to: '2026-11-23T22:00:00+00:00',
+          live_from: '2026-11-23T21:50:00+00:00',
+          asked_from: '2026-11-22T22:00:00+00:00',
+        },
+        window_shortened: true,
+      }),
+    );
+    await readPlatformSecurityMap({ scope: 'whole', dayStart: null }, NOW);
+    expect(slowReports().map((r) => r.extra)).toEqual([{ ms: 3_570, shortened: true }]);
+  });
+
+  it('2.5 seconds or less is not reported, and a poll is never reported as slow', async () => {
+    taking(2_500);
+    await readPlatformSecurityMap({ scope: 'whole', dayStart: null }, NOW);
+    taking(5_000);
+    await readPlatformSecurityMap({ scope: 'recent', dayStart: null }, NOW);
+    expect(h.reportError).not.toHaveBeenCalled();
+  });
+
+  it('a slow read that fails is reported slow once, beside its failure; what was read is unknown', async () => {
+    taking(4_000, null, { message: 'canceling statement due to statement timeout', code: '57014' });
+    expect(await readPlatformSecurityMap({ scope: 'whole', dayStart: null }, NOW)).toBe(
+      SECURITY_MAP_POLL_FAILED,
+    );
+    expect(slowReports().map((r) => r.extra)).toEqual([{ ms: 4_000, shortened: null }]);
+    expect(reports().map((r) => r.tag)).toEqual([
+      'platform.security-map.slow-read',
+      'platform.security-map.platform_security_map',
+    ]);
   });
 });
 
