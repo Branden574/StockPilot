@@ -792,6 +792,29 @@ describe('a token, which the table lets through when it is short, is replaced in
     expect(rate(43, 100_000)).toBeLessThanOrEqual(1);
   });
 
+  it('the rule as measured, pinned: of 200,000 seeded values, exactly 24 at 22 characters and none at 32 read as names', () => {
+    // A change to the rule moves these counts (each sign of a random value
+    // taken out alone moved the 22-character count to 27, 52, 59 or 84):
+    // re-measure it (PROGRESS.md) and re-pin here, with the names below.
+    const names = (seed: number, n: number) => {
+      const own = sequence(seed);
+      let kept = 0;
+      for (let i = 0; i < 200_000; i++) if (!looksLikeToken(own.text(BASE64URL, n))) kept++;
+      return kept;
+    };
+    expect(names(0x70ce22, 22)).toBe(24);
+    expect(names(0x70ce32, 32)).toBe(0);
+  });
+
+  it('an all-capital part longer than five letters reads as a name only with its vowels', () => {
+    expect(looksLikeToken('XDEBUG_SESSION_START')).toBe(false);
+    expect(looksLikeToken('MSSQL_backup_files_2024')).toBe(false);
+    // Six, seven and eight capitals with no vowel: not an acronym.
+    for (const part of ['BCDFGH', 'BCDFGHJ', 'BCDFGHJK']) {
+      expect(looksLikeToken(`${part}_backup_files`), part).toBe(true);
+    }
+  });
+
   it('is replaced by <token>', () => {
     const [a, b] = tokens.filter((v) => !missed.includes(v));
     expect(scrubRequestTarget(`/x/${a}/.env`)).toBe('/x/<token>/.env');
