@@ -418,6 +418,16 @@ describe('the scanner and the sniffer agree on what they are looking at', () => 
       if (code.startsWith('pdf_')) expect(THREAT_MESSAGES[code]).toMatch(/Print to PDF/);
     }
   });
+
+  it('the four kinds of PDF content share one sentence, which names no single rule (part 6)', () => {
+    const four = new Set(
+      (['pdf_javascript', 'pdf_launch_action', 'pdf_embedded_file', 'pdf_rich_media'] as const).map(
+        (c) => THREAT_MESSAGES[c],
+      ),
+    );
+    expect(four.size).toBe(1);
+    expect([...four][0]).not.toMatch(/JavaScript|launch|external program|embedded/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
