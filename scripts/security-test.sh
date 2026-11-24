@@ -1148,6 +1148,25 @@ PGTAP_TESTS=(
   # or anonymous account, at most 20 addresses) each answer as documented. The
   # two-session checks are scripts/db-concurrency/0480_platform_security_alerts_race.sh.
   supabase/tests/0480_platform_security_alerts.test.sql
+  # Vendor risk reviews (0481): no API role reads or writes
+  # supplier_risk_reviews or supplier_risk_items directly (RLS on, no
+  # policy, no privilege for anon, authenticated or service_role; every
+  # direct read and write refused); the eight admin functions are
+  # authenticated only and open with has_org_role(organization, 'admin') and
+  # 0472's authenticator check, so a manager, a staff member, a viewer, an
+  # admin of another organization, a disabled admin, an invitation, an expired
+  # act-as seat, an outsider and a session with no account are refused every
+  # read and write, and the second step is asked for where it is owed; the
+  # two reminder functions are service_role only with a second lock that
+  # refuses a member even with EXECUTE. A supplier of another organization is
+  # never reviewed. The answers are held to the fixed question list and a
+  # final's result to the rules by the table's own CHECKs (the case table is
+  # core's too: vendor-risk.parity.test.ts); an override needs its reason;
+  # one current review and one draft per supplier; a final review and an
+  # item's finding are kept as written on every path; an account deleted
+  # keeps the name and loses the link; the reminder claim stamps once. The
+  # two-session checks are scripts/db-concurrency/0481_supplier_risk_reminder_race.sh.
+  supabase/tests/0481_supplier_risk_reviews.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as

@@ -331,9 +331,14 @@ select is(
   -- member_passkeys.user_id>user_profiles:c:NN,
   -- passkey_bridges.user_id>user_profiles:c:NN and
   -- passkey_challenges.user_id>user_profiles:c:NN (the local census through
-  -- 0474 gave 1f02404a...|138; with 0475 applied it gives this).
-  '76aff65dfb79546f07604818e401184f|141|0/0',
-  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log, 0418''s appearance, 0474''s sign-in alerts and countries and 0475''s passkeys, bridge and challenges (141 keys), and no key to a person is composite or names SET NULL columns');
+  -- 0474 gave 1f02404a...|138; with 0475 applied it gave 76aff65d...|141).
+  -- 0481 (vendor risk reviews) adds two that SET NULL, so a review and an
+  -- item keep the name written beside them when the account is deleted:
+  -- supplier_risk_reviews.reviewer_id>user_profiles:n and
+  -- supplier_risk_items.owner_user_id>user_profiles:n (the local census
+  -- through 0480 gave 76aff65d...|141; with 0481 applied it gives this).
+  'fa47422d30e10d32e544f0fcde5d664b|143|0/0',
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log, 0418''s appearance, 0474''s sign-in alerts and countries, 0475''s passkeys, bridge and challenges and 0481''s reviewer and item owner (143 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
