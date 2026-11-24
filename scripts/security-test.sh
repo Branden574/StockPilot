@@ -1170,7 +1170,8 @@ PGTAP_TESTS=(
   # the claim follows 3, 7, then weekly, at most 6, never within 3 days of the
   # last reminder, oldest first. Every admin function asks for the
   # authenticator rule (0472's helper: mfa_required, aal2_required); a member's
-  # own reads and acknowledgement do not. A correction is never silent: each
+  # own reads and acknowledgement do not; a support (act-as) seat reads what
+  # an admin reads and is refused every write. A correction is never silent: each
   # version keeps who published it and when, the admin's lists and the record
   # say which version each person acknowledged and that the current text
   # corrects it, the member reads both texts, one notice per correction is

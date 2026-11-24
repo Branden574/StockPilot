@@ -135,6 +135,9 @@ export const POLICY_ADMIN_COPY = {
   retired: 'This policy has been retired. Start a new policy instead.',
   notPublished: 'This policy has not been published yet.',
   notAllowed: 'Only owners and admins of this organization can do this.',
+  /** A support (act-as) session reads and never changes a policy (0482, as 0481's vendor reviews). */
+  actAsReadOnly:
+    'A support session can read policies but cannot change them. Ask an owner or admin of this workspace.',
   /** The kept name of an account deleted with no name on it (the database stores it: 0482). */
   formerMemberNoName: 'Former member, no name on the account',
   formerMemberNoNameExplain:
@@ -254,6 +257,7 @@ export function policyReminderEmail(input: { title: string; organizationName: st
  */
 export const POLICY_REFUSAL_COPY: Readonly<Record<string, string>> = {
   policy_admins_only: POLICY_ADMIN_COPY.notAllowed,
+  policy_act_as_read_only: POLICY_ADMIN_COPY.actAsReadOnly,
   policy_not_allowed: POLICY_MEMBER_COPY.notAllowed,
   policy_kind_invalid: 'Choose what kind of policy this is.',
   policy_title_invalid:

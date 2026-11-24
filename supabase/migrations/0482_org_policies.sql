@@ -104,6 +104,16 @@
 --     admins for an authenticator, or the caller has one, the session must
 --     hold the second step (42501 mfa_required, aal2_required). A member's
 --     own reads and acknowledgement are not admin functions.
+--   - A support (act-as) seat reads what an owner or admin of that
+--     organization reads, and never writes: save, discard, publish (a new
+--     version or a correction), retire and Remind now refuse it with 42501
+--     policy_act_as_read_only, right after the authenticator rule, as
+--     0481's writes refuse it (a seat is a membership with
+--     impersonation_expires_at set; an expired one is no member at all and
+--     gets policy_admins_only). A support person who is a real member of the
+--     organization has no seat there (act-as writes none for a real member),
+--     so a real owner or admin membership writes as before. A seat never
+--     acknowledges (it is not a current member).
 --   - An acknowledgement is for the caller's own account only (auth.uid();
 --     the function has no account argument), of a version that is the
 --     current version of a published policy of an organization the caller is
@@ -127,6 +137,7 @@
 --         member, no such policy or version, or a version the caller may not
 --         read or acknowledge: one answer, so another organization's ids
 --         reveal nothing), policy_admins_only (an admin function),
+--         policy_act_as_read_only (an admin write, on a support seat),
 --         aal2_required (acknowledge, and every admin function) and
 --         mfa_required (an admin function, where an authenticator is asked
 --         for and the caller has none).
@@ -355,6 +366,28 @@ comment on function public._org_policy_body_problem(text) is
   'Why a policy body would be refused (0482): empty, too_long (over 30,000 characters), too_many_lines (over 600 lines), forbidden_character, not_normal_form (not NFC, a space at a line''s end, three line feeds in a row, a line feed at either end), or null. The rule of packages/core policyBodyProblem. Used by the check of org_policy_versions. No API role may execute it.';
 comment on function public._org_policy_person_name(uuid) is
   'The name a policy record keeps for an account (0482): its full name, trimmed, at most 200 characters, or null when the name is empty or holds an ''@'' (never an email). No API role may execute it.';
+
+-- Is the caller in this organization on a support (act-as) seat (0413's
+-- reading: a membership with impersonation_expires_at set; 0481's
+-- _supplier_risk_caller_is_act_as, the same body). Such a seat reads the
+-- policies and never writes them.
+create function public._org_policy_caller_is_act_as(p_organization_id uuid)
+returns boolean
+language sql
+stable
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.organization_members m
+     where m.organization_id = p_organization_id
+       and m.user_id = auth.uid()
+       and m.impersonation_expires_at is not null);
+$$;
+
+revoke all on function public._org_policy_caller_is_act_as(uuid) from public, anon, authenticated, service_role;
+
+comment on function public._org_policy_caller_is_act_as(uuid) is
+  'Private (0482). Is the caller (auth.uid()) on an act-as seat in the organization: its membership has impersonation_expires_at set. The five admin writes refuse such a caller (42501 policy_act_as_read_only). SECURITY INVOKER: its callers run as their owner. No API role may execute it.';
 
 -- ── 1. The policies ──────────────────────────────────────────────────────────
 create table public.org_policies (
@@ -1426,6 +1459,10 @@ begin
   end if;
   -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
   perform public.security_events_reader_check(p_organization_id);
+  -- A support (act-as) seat reads and never writes (0481's rule).
+  if public._org_policy_caller_is_act_as(p_organization_id) then
+    raise exception 'policy_act_as_read_only' using errcode = '42501', hint = 'policy_act_as_read_only';
+  end if;
   if p_policy_id is not null then
     select * into v_p from public.org_policies p
      where p.id = p_policy_id and p.organization_id = p_organization_id;
@@ -1483,7 +1520,7 @@ revoke all on function public.org_policy_save_draft(uuid, uuid, text, text, text
 grant execute on function public.org_policy_save_draft(uuid, uuid, text, text, text) to authenticated;
 
 comment on function public.org_policy_save_draft(uuid, uuid, text, text, text) is
-  'For the organization''s owners and admins: saves a policy''s draft (kind, title, body; the last save wins; a published policy keeps its kind and title until the draft is published); with p_policy_id null, makes a new draft policy in p_organization_id. Title and body must be in the normal form of packages/core policy-text.ts. Answers policy_id, draft_version_id, text_hash (pass it to org_policy_publish), updated_at, created. 42501 policy_admins_only (not an admin of p_organization_id, or the policy is not in it), 22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid (detail empty, too_long, too_many_lines, forbidden_character or not_normal_form), P0001 policy_retired; mfa_required and aal2_required by the authenticator rule.';
+  'For the organization''s owners and admins: saves a policy''s draft (kind, title, body; the last save wins; a published policy keeps its kind and title until the draft is published); with p_policy_id null, makes a new draft policy in p_organization_id. Title and body must be in the normal form of packages/core policy-text.ts. Answers policy_id, draft_version_id, text_hash (pass it to org_policy_publish), updated_at, created. 42501 policy_admins_only (not an admin of p_organization_id, or the policy is not in it), policy_act_as_read_only (a support seat), 22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid (detail empty, too_long, too_many_lines, forbidden_character or not_normal_form), P0001 policy_retired; mfa_required and aal2_required by the authenticator rule.';
 
 create function public.org_policy_discard_draft(p_policy_id uuid)
 returns jsonb
@@ -1503,6 +1540,10 @@ begin
   end if;
   -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
   perform public.security_events_reader_check(v_p.organization_id);
+  -- A support (act-as) seat reads and never writes (0481's rule).
+  if public._org_policy_caller_is_act_as(v_p.organization_id) then
+    raise exception 'policy_act_as_read_only' using errcode = '42501', hint = 'policy_act_as_read_only';
+  end if;
   select * into v_p from public.org_policies p where p.id = p_policy_id for update;
 
   if v_p.status = 'draft' then
@@ -1520,7 +1561,7 @@ revoke all on function public.org_policy_discard_draft(uuid) from public, anon, 
 grant execute on function public.org_policy_discard_draft(uuid) to authenticated;
 
 comment on function public.org_policy_discard_draft(uuid) is
-  'For the organization''s owners and admins: discards a policy''s draft. A policy never published is deleted with it (discarded: policy); a published or retired one keeps every published version (discarded: draft, or nothing when there was no draft). 42501 policy_admins_only for anyone else; mfa_required and aal2_required by the authenticator rule.';
+  'For the organization''s owners and admins: discards a policy''s draft. A policy never published is deleted with it (discarded: policy); a published or retired one keeps every published version (discarded: draft, or nothing when there was no draft). 42501 policy_admins_only for anyone else, policy_act_as_read_only for a support seat; mfa_required and aal2_required by the authenticator rule.';
 
 -- Publishes the draft. p_change: new_version (every member is asked again;
 -- the first publish is always one) or correction (nobody is asked again; the
@@ -1552,6 +1593,10 @@ begin
   end if;
   -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
   perform public.security_events_reader_check(v_p.organization_id);
+  -- A support (act-as) seat reads and never writes (0481's rule).
+  if public._org_policy_caller_is_act_as(v_p.organization_id) then
+    raise exception 'policy_act_as_read_only' using errcode = '42501', hint = 'policy_act_as_read_only';
+  end if;
   if p_change is null or p_change not in ('new_version', 'correction') then
     raise exception 'policy_change_invalid' using errcode = '22023', hint = 'policy_change_invalid';
   end if;
@@ -1639,7 +1684,7 @@ revoke all on function public.org_policy_publish(uuid, text, text) from public, 
 grant execute on function public.org_policy_publish(uuid, text, text) to authenticated;
 
 comment on function public.org_policy_publish(uuid, text, text) is
-  'For the organization''s owners and admins: publishes the policy''s draft as its next version, and from then on the version never changes. p_change new_version (asks every current member again; the first publish must be one) or correction (asks nobody again; the round stays the corrected version''s; it keeps the current title and kind; the members who acknowledged an earlier text are told once by org_policy_correction_notices_claim). p_text_hash must be the draft''s (from org_policy_save_draft or org_policy_draft). Answers policy_id, version_id, version_number, needs_acknowledgement, acknowledgement_round, published_at, kind, title, asked_user_ids (the current members, by _notify_is_current_member, for a new version; empty for a correction). 42501 policy_admins_only, 22023 policy_change_invalid and policy_hash_invalid, P0001 policy_retired, policy_no_draft, policy_draft_changed (another save meanwhile), policy_correction_needs_a_version, policy_correction_changes_title, policy_correction_changes_kind, policy_draft_unchanged (a correction with the current words); mfa_required and aal2_required by the authenticator rule.';
+  'For the organization''s owners and admins: publishes the policy''s draft as its next version, and from then on the version never changes. p_change new_version (asks every current member again; the first publish must be one) or correction (asks nobody again; the round stays the corrected version''s; it keeps the current title and kind; the members who acknowledged an earlier text are told once by org_policy_correction_notices_claim). p_text_hash must be the draft''s (from org_policy_save_draft or org_policy_draft). Answers policy_id, version_id, version_number, needs_acknowledgement, acknowledgement_round, published_at, kind, title, asked_user_ids (the current members, by _notify_is_current_member, for a new version; empty for a correction). 42501 policy_admins_only, policy_act_as_read_only (a support seat), 22023 policy_change_invalid and policy_hash_invalid, P0001 policy_retired, policy_no_draft, policy_draft_changed (another save meanwhile), policy_correction_needs_a_version, policy_correction_changes_title, policy_correction_changes_kind, policy_draft_unchanged (a correction with the current words); mfa_required and aal2_required by the authenticator rule.';
 
 create function public.org_policy_retire(p_policy_id uuid)
 returns jsonb
@@ -1659,6 +1704,10 @@ begin
   end if;
   -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
   perform public.security_events_reader_check(v_p.organization_id);
+  -- A support (act-as) seat reads and never writes (0481's rule).
+  if public._org_policy_caller_is_act_as(v_p.organization_id) then
+    raise exception 'policy_act_as_read_only' using errcode = '42501', hint = 'policy_act_as_read_only';
+  end if;
   select * into v_p from public.org_policies p where p.id = p_policy_id for update;
   if v_p.status = 'draft' then
     raise exception 'policy_not_published' using errcode = 'P0001', hint = 'policy_not_published';
@@ -1679,7 +1728,7 @@ revoke all on function public.org_policy_retire(uuid) from public, anon, authent
 grant execute on function public.org_policy_retire(uuid) to authenticated;
 
 comment on function public.org_policy_retire(uuid) is
-  'For the organization''s owners and admins: retires a published policy for good (members are no longer asked or reminded; every version and acknowledgement is kept; a saved draft is discarded). Again on a retired policy: answers its retired_at with already true. Answers policy_id, retired_at, already. 42501 policy_admins_only, P0001 policy_not_published (never published: discard it instead); mfa_required and aal2_required by the authenticator rule.';
+  'For the organization''s owners and admins: retires a published policy for good (members are no longer asked or reminded; every version and acknowledgement is kept; a saved draft is discarded). Again on a retired policy: answers its retired_at with already true. Answers policy_id, retired_at, already. 42501 policy_admins_only, policy_act_as_read_only (a support seat), P0001 policy_not_published (never published: discard it instead); mfa_required and aal2_required by the authenticator rule.';
 
 -- Remind now: once per 24 hours per policy, the current members who have not
 -- acknowledged the current round. Stamp first: the reminder rows and the
@@ -1707,6 +1756,10 @@ begin
   end if;
   -- The app's authenticator rule for owners and admins (0472, as 0474 calls it).
   perform public.security_events_reader_check(v_p.organization_id);
+  -- A support (act-as) seat reads and never writes (0481's rule).
+  if public._org_policy_caller_is_act_as(v_p.organization_id) then
+    raise exception 'policy_act_as_read_only' using errcode = '42501', hint = 'policy_act_as_read_only';
+  end if;
   -- FOR UPDATE: two admins pressing at once remind once.
   select * into v_p from public.org_policies p where p.id = p_policy_id for update;
   if v_p.status = 'draft' then
@@ -1759,7 +1812,7 @@ revoke all on function public.org_policy_remind_now(uuid) from public, anon, aut
 grant execute on function public.org_policy_remind_now(uuid) to authenticated;
 
 comment on function public.org_policy_remind_now(uuid) is
-  'For the organization''s owners and admins: "Remind now" for a published policy, at most once per 24 hours per policy. Stamps first (each recipient''s reminder row: manual_count + 1, last_reminded_at; the policy''s last_remind_now_at), then answers reminded true, reminded_at, next_allowed_at, version_id, version_number, title and recipients (user ids: the current members by _notify_is_current_member without an acknowledgement in the round), for the website to send. reminded false with reason too_soon (and next_allowed_at) or nobody_owed (nothing stamped). 42501 policy_admins_only, P0001 policy_not_published, policy_retired; mfa_required and aal2_required by the authenticator rule.';
+  'For the organization''s owners and admins: "Remind now" for a published policy, at most once per 24 hours per policy. Stamps first (each recipient''s reminder row: manual_count + 1, last_reminded_at; the policy''s last_remind_now_at), then answers reminded true, reminded_at, next_allowed_at, version_id, version_number, title and recipients (user ids: the current members by _notify_is_current_member without an acknowledgement in the round), for the website to send. reminded false with reason too_soon (and next_allowed_at) or nobody_owed (nothing stamped). 42501 policy_admins_only, policy_act_as_read_only (a support seat), P0001 policy_not_published, policy_retired; mfa_required and aal2_required by the authenticator rule.';
 
 -- ── The reminder job's claim (service_role) ──────────────────────────────────
 -- Stamp first, then send (D in the code map): each due reminder is written
@@ -1999,6 +2052,7 @@ comment on function public.org_policy_correction_notices_claim(integer) is
 --   drop function if exists public._org_policy_acknowledgements_guard();
 --   drop function if exists public._org_policy_versions_guard();
 --   drop function if exists public._org_policies_guard();
+--   drop function if exists public._org_policy_caller_is_act_as(uuid);
 --   drop function if exists public._org_policy_person_name(uuid);
 --   drop function if exists public._org_policy_body_problem(text);
 --   drop function if exists public._org_policy_title_problem(text);

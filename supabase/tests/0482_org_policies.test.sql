@@ -38,7 +38,7 @@
 
 begin;
 
-select plan(133);
+select plan(138);
 
 set local timezone = 'UTC';
 
@@ -471,6 +471,7 @@ select is(
   '_org_policies_guard()=' || E'\n' ||
   '_org_policy_acknowledgements_guard()=' || E'\n' ||
   '_org_policy_body_problem(text)=' || E'\n' ||
+  '_org_policy_caller_is_act_as(uuid)=' || E'\n' ||
   '_org_policy_person_name(uuid)=' || E'\n' ||
   '_org_policy_refuse_truncate()=' || E'\n' ||
   '_org_policy_title_problem(text)=' || E'\n' ||
@@ -509,6 +510,7 @@ select is(
   '_org_policies_guard:invoker:postgres:search_path=""' || E'\n' ||
   '_org_policy_acknowledgements_guard:invoker:postgres:search_path=""' || E'\n' ||
   '_org_policy_body_problem:invoker:postgres:search_path=""' || E'\n' ||
+  '_org_policy_caller_is_act_as:invoker:postgres:search_path=""' || E'\n' ||
   '_org_policy_person_name:invoker:postgres:search_path=""' || E'\n' ||
   '_org_policy_refuse_truncate:invoker:postgres:search_path=""' || E'\n' ||
   '_org_policy_title_problem:invoker:postgres:search_path=""' || E'\n' ||
@@ -656,7 +658,7 @@ select is(
   '0482/30: a draft with a wrong kind, title or body is refused (22023), the detail naming the core''s word');
 select is((select count(*)::integer from public.org_policies), 0, '0482/31: and nothing was written');
 
--- Who may write a draft: owners and admins (a live act-as seat is an owner seat), nobody else.
+-- Who may write a draft: owners and admins, nobody else; a live act-as seat is an owner seat that reads and never writes (S7).
 select is(
   (select string_agg(n || '=' || pg_temp.try_as('authenticated', u::uuid,
             format('select public.org_policy_save_draft(%L::uuid, null, ''other'', ''T'', ''B'')', 'a0482000-0000-0000-0000-0000000000a1')),
@@ -665,10 +667,10 @@ select is(
                   ('5 staff', :memberA), ('6 viewer', :viewerA), ('7 disabled admin', :disabledAdmin),
                   ('8 expired act-as seat', :actasOld), ('9 not accepted', :invitedA), ('a outsider', :outsider),
                   ('b owner of B', :ownerB)) v(n, u)),
-  '1 owner=ok, 2 admin=ok, 3 live act-as seat=ok, 4 manager=42501|policy_admins_only, 5 staff=42501|policy_admins_only, '
+  '1 owner=ok, 2 admin=ok, 3 live act-as seat=42501|policy_act_as_read_only, 4 manager=42501|policy_admins_only, 5 staff=42501|policy_admins_only, '
   '6 viewer=42501|policy_admins_only, 7 disabled admin=42501|policy_admins_only, 8 expired act-as seat=42501|policy_admins_only, '
   '9 not accepted=42501|policy_admins_only, a outsider=42501|policy_admins_only, b owner of B=42501|policy_admins_only',
-  '0482/32: an owner, an admin and a live act-as seat may write a draft; a manager, staff, a viewer, a disabled admin, an expired seat, an invitation, an outsider and another organization''s owner may not');
+  '0482/32: an owner and an admin may write a draft; a live act-as seat is refused as read-only; a manager, staff, a viewer, a disabled admin, an expired seat, an invitation, an outsider and another organization''s owner may not');
 
 select pg_temp.keep('p1', (pg_temp.save(:adminA, :orgA, null, 'acceptable_use', :t1, :b1) ->> 'policy_id')::uuid);
 select pg_temp.keep('p6', (pg_temp.save(:adminA, :orgA, null, 'other', 'Smoke policy',
@@ -1749,6 +1751,123 @@ select is(
   pg_temp.err(pg_temp.as_(null, 'select public.org_policy_correction_notices_claim(1)', 'aal1', 'anon')),
   '42501 42501',
   '0482/133: without the grant, authenticated and anon are refused the notices claim by its grant');
+
+-- ── 12. S7 (the coordinator, 2026-11-24): a support (act-as) seat reads what an admin reads, and never writes ──
+-- An organization of its own (E). A live seat, an expired seat, and a support person who is a real admin of E
+-- (act-as writes no seat for a real member: only its session row) and is on a live seat in D.
+\set orgE '\'a0482000-0000-0000-0000-000000000101\''
+\set ownerE '\'a0482000-0000-0000-0000-000000000102\''
+\set seatE '\'a0482000-0000-0000-0000-000000000103\''
+\set seatOldE '\'a0482000-0000-0000-0000-000000000104\''
+\set supportE '\'a0482000-0000-0000-0000-000000000105\''
+\set memberE '\'a0482000-0000-0000-0000-000000000106\''
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:ownerE,   'policy-owner-e@test.local',    '{"full_name": "Policy Owner E"}'::jsonb),
+  (:seatE,    'policy-seat-e@test.local',     '{"full_name": "Policy Support Seat E"}'::jsonb),
+  (:seatOldE, 'policy-seat-old-e@test.local', '{"full_name": "Policy Old Seat E"}'::jsonb),
+  (:supportE, 'policy-support-e@test.local',  '{"full_name": "Policy Support Admin E"}'::jsonb),
+  (:memberE,  'policy-member-e@test.local',   '{"full_name": "Policy Member E"}'::jsonb);
+insert into public.organizations (id, name, slug, mfa_policy) values (:orgE, 'Policy Org E', 'a0482000-org-e', 'optional');
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:orgE, :ownerE,   'owner', now() - interval '50 days', null),
+  (:orgE, :seatE,    'owner', now() - interval '1 hour',  now() + interval '1 hour'),
+  (:orgE, :seatOldE, 'owner', now() - interval '3 hours', now() - interval '1 hour'),
+  (:orgE, :supportE, 'admin', now() - interval '50 days', null),
+  (:orgE, :memberE,  'staff', now() - interval '50 days', null),
+  (:orgD, :supportE, 'owner', now() - interval '1 hour',  now() + interval '1 hour');
+insert into public.platform_impersonation_sessions (admin_user_id, target_organization_id, started_at, expires_at) values
+  (:supportE, :orgE, now() - interval '10 minutes', now() + interval '50 minutes'),
+  (:supportE, :orgD, now() - interval '10 minutes', now() + interval '50 minutes');
+\set tE '\'Rules E\''
+\set bE '\'# Rules\nClose the gate.\''
+insert into answers values ('pE', pg_temp.save(:ownerE, :orgE, null, 'acceptable_use', :tE, :bE));
+select pg_temp.keep('pE', (select (v ->> 'policy_id')::uuid from answers where k = 'pE'));
+select pg_temp.pub(:ownerE, pg_temp.id('pE'), 'new_version');
+select pg_temp.save(:ownerE, :orgE, pg_temp.id('pE'), 'acceptable_use', :tE, :bE || E'\nClose it quietly.');
+insert into answers values ('pE2', pg_temp.save(:ownerE, :orgE, null, 'other', 'Draft E', 'Not yet.'));
+select pg_temp.keep('pE2', (select (v ->> 'policy_id')::uuid from answers where k = 'pE2'));
+
+-- The five writes, seven calls (publish twice: a new version and a correction), each valid for a real admin.
+create function pg_temp.seat_writes(p_org uuid, p_policy uuid) returns text[] language sql stable as $$
+  select array[
+    format('select public.org_policy_save_draft(%L::uuid, null, ''other'', ''Seat E'', ''From support.'')', p_org),
+    format('select public.org_policy_save_draft(%L::uuid, %L::uuid, ''acceptable_use'', ''Rules E'', %L)', p_org, p_policy,
+           E'# Rules\nClose the gate.\nFrom support.'),
+    format('select public.org_policy_publish(%L::uuid, ''correction'', %L)', p_policy, pg_temp.draft_hash(p_policy)),
+    format('select public.org_policy_publish(%L::uuid, ''new_version'', %L)', p_policy, pg_temp.draft_hash(p_policy)),
+    format('select public.org_policy_retire(%L::uuid)', p_policy),
+    format('select public.org_policy_remind_now(%L::uuid)', p_policy),
+    format('select public.org_policy_discard_draft(%L::uuid)', p_policy)];
+$$;
+-- Every row of the four tables for one organization.
+create function pg_temp.org_rows(p_org uuid) returns text language sql stable as $$
+  select md5(
+    coalesce((select string_agg(to_jsonb(x)::text, ',' order by x.id) from public.org_policies x where x.organization_id = p_org), '') || '/' ||
+    coalesce((select string_agg(to_jsonb(x)::text, ',' order by x.id) from public.org_policy_versions x where x.organization_id = p_org), '') || '/' ||
+    coalesce((select string_agg(to_jsonb(x)::text, ',' order by x.id) from public.org_policy_acknowledgements x where x.organization_id = p_org), '') || '/' ||
+    coalesce((select string_agg(to_jsonb(x)::text, ',' order by x::text) from public.org_policy_reminders x where x.organization_id = p_org), ''));
+$$;
+-- Each call kept (not undone), so a write let through shows in the rows.
+create function pg_temp.each_kept(p_user uuid, p_calls text[]) returns text language plpgsql as $$
+declare
+  out text := ''; c text;
+begin
+  foreach c in array p_calls loop
+    out := out || pg_temp.err(pg_temp.as_(p_user, c)) || ' ';
+  end loop;
+  return rtrim(out);
+end;
+$$;
+insert into answers values ('rowsE', to_jsonb(pg_temp.org_rows(:orgE)));
+-- The calls and the rows read after them are two statements (a statement's reads see the tables as it began).
+insert into answers values ('seatE_w', to_jsonb(pg_temp.each_kept(:seatE, pg_temp.seat_writes(:orgE, pg_temp.id('pE')))));
+select is(
+  (select v #>> '{}' from answers where k = 'seatE_w') || ' ' ||
+  ((select v #>> '{}' from answers where k = 'rowsE') = pg_temp.org_rows(:orgE))::text,
+  '42501|policy_act_as_read_only 42501|policy_act_as_read_only 42501|policy_act_as_read_only 42501|policy_act_as_read_only '
+  '42501|policy_act_as_read_only 42501|policy_act_as_read_only 42501|policy_act_as_read_only true',
+  '0482/134: a live support seat is refused each write: a new draft, a draft of a published policy, a correction, a new version, retire, Remind now and discard (42501 policy_act_as_read_only), and nothing changed');
+select is(
+  (pg_temp.rows_of(:seatE, 'org_policies_for_admin', :orgE) = pg_temp.rows_of(:ownerE, 'org_policies_for_admin', :orgE))::text || ' ' ||
+  (pg_temp.fn1(:seatE, 'org_policy_draft', pg_temp.id('pE')) = pg_temp.fn1(:ownerE, 'org_policy_draft', pg_temp.id('pE')))::text || ' ' ||
+  (pg_temp.fn1(:seatE, 'org_policy_status', pg_temp.id('pE')) = pg_temp.fn1(:ownerE, 'org_policy_status', pg_temp.id('pE')))::text || ' ' ||
+  (pg_temp.rows_of(:seatE, 'org_policy_acknowledgement_record', pg_temp.id('pE'))
+     = pg_temp.rows_of(:ownerE, 'org_policy_acknowledgement_record', pg_temp.id('pE')))::text || ' ' ||
+  -- the words without the caller's own fields (what the caller acknowledged and owes)
+  (pg_temp.txt(:seatE, pg_temp.id('pE'), 1) - array['my_acknowledgement', 'owed', 'acknowledged_in_current_round',
+     'acknowledged_version_number', 'corrected_since_acknowledged']
+   = pg_temp.txt(:ownerE, pg_temp.id('pE'), 1) - array['my_acknowledgement', 'owed', 'acknowledged_in_current_round',
+     'acknowledged_version_number', 'corrected_since_acknowledged'])::text || ' ' ||
+  jsonb_array_length(pg_temp.rows_of(:seatE, 'org_policies_for_admin', :orgE)) || ' ' ||
+  pg_temp.err(pg_temp.fn1(:seatE, 'org_policy_draft', pg_temp.id('pE'))) || ' ' ||
+  pg_temp.err(pg_temp.txt(:seatE, pg_temp.id('pE2'))) || ' ' || pg_temp.err(pg_temp.txt(:memberE, pg_temp.id('pE2'))),
+  'true true true true true 2 ok P0001|policy_not_published 42501|policy_not_allowed',
+  '0482/135: the same seat reads what an owner reads: the admin list (the draft policy too), the draft, the status, the record and the words, and a draft policy as an admin does (not published), not as a member');
+select is(
+  pg_temp.each_err(:seatOldE, 'aal1', pg_temp.admin_calls(:orgE, pg_temp.id('pE'))),
+  '42501|policy_admins_only 42501|policy_admins_only 42501|policy_admins_only 42501|policy_admins_only 42501|policy_admins_only '
+  '42501|policy_admins_only 42501|policy_admins_only 42501|policy_admins_only 42501|policy_admins_only',
+  '0482/136: an expired seat is no member: every admin read and write refuses it (policy_admins_only)');
+select is(
+  pg_temp.each_err(:supportE, 'aal1', pg_temp.seat_writes(:orgE, pg_temp.id('pE'))) || ' / ' ||
+  pg_temp.each_err(:supportE, 'aal1', pg_temp.admin_calls(:orgD, pg_temp.id('pD'))),
+  'ok ok ok ok ok ok ok / ok ok ok ok 42501|policy_act_as_read_only 42501|policy_act_as_read_only '
+  '42501|policy_act_as_read_only 42501|policy_act_as_read_only 42501|policy_act_as_read_only',
+  '0482/137: a support person who is a real admin of E writes there as any admin, also while acting as E; their live seat in D reads there and writes nothing');
+select is(
+  (select string_agg(p.proname || ':' ||
+            (strpos(p.prosrc, 'if public._org_policy_caller_is_act_as(') > strpos(p.prosrc, 'perform public.security_events_reader_check(')
+             and strpos(p.prosrc, 'perform public.security_events_reader_check(') > 0
+             and strpos(p.prosrc, 'if public._org_policy_caller_is_act_as(')
+                 < (select min(n) from unnest(array[strpos(p.prosrc, ' for update'), strpos(p.prosrc, 'insert into public.'),
+                                                    strpos(p.prosrc, 'update public.'), strpos(p.prosrc, 'delete from public.'),
+                                                    length(p.prosrc)]) n where n > 0))::text,
+            ',' order by p.proname)
+     from pg_proc p
+    where pg_temp.is_ours(p.oid) and (p.prosrc like '%security_events_reader_check%' or p.prosrc like '%_org_policy_caller_is_act_as%')),
+  'org_policies_for_admin:false,org_policy_acknowledgement_record:false,org_policy_discard_draft:true,org_policy_draft:false,'
+  'org_policy_publish:true,org_policy_remind_now:true,org_policy_retire:true,org_policy_save_draft:true,org_policy_status:false,org_policy_text:false',
+  '0482/138: each of the five writes refuses a support seat right after the authenticator rule, before it locks or writes a row; no read does');
 
 select * from finish();
 rollback;

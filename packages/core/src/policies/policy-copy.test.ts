@@ -146,6 +146,9 @@ describe('the words', () => {
     });
     expect(POLICY_ADMIN_COPY.formerMemberNoName).toBe('Former member, no name on the account');
     expect(policyRefusalWords('mfa_required')).toBe(POLICY_ADMIN_COPY.authenticatorNeeded);
+    expect(policyRefusalWords('policy_act_as_read_only')).toBe(
+      'A support session can read policies but cannot change them. Ask an owner or admin of this workspace.',
+    );
     expect(policyRefusalWords('aal2_required')).toBe(
       'Finish signing in with your second step, then try again.',
     );
