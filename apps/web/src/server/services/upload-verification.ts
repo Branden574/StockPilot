@@ -8,14 +8,34 @@ import {
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
 import { createAdminClient } from '@/lib/supabase/admin';
 import type { SecurityEventHeaders } from '@/server/security/events';
+import {
+  ORDER_ATTACHMENT_MAX_BYTES,
+  PO_ATTACHMENT_MAX_BYTES,
+  SUPPORT_SCREENSHOT_MAX_BYTES,
+} from '@/lib/upload-size-limits';
 import { checkStoredUpload, type UploadSurface } from '@/server/security/upload-checks';
 
 import { ServiceError, type ServiceContext } from './context';
+import { uploadObjectsStillNamed } from './upload-still-named';
 
 const SURFACE_OF_BUCKET: Readonly<Record<DocumentBucket, UploadSurface>> = {
   'po-attachments': 'po_attachment',
   'order-attachments': 'order_attachment',
   'support-attachments': 'support_screenshot',
+};
+
+/** Each bucket's own cap (part 6): nothing past it is read. */
+const MAX_BYTES_OF_BUCKET: Readonly<Record<DocumentBucket, number>> = {
+  'po-attachments': PO_ATTACHMENT_MAX_BYTES,
+  'order-attachments': ORDER_ATTACHMENT_MAX_BYTES,
+  'support-attachments': SUPPORT_SCREENSHOT_MAX_BYTES,
+};
+
+/** The table and column whose rows name an object of each bucket (part 6). */
+const RECORDS_OF_BUCKET: Readonly<Record<DocumentBucket, { table: string; columns: readonly string[] }>> = {
+  'po-attachments': { table: 'po_attachments', columns: ['storage_path'] },
+  'order-attachments': { table: 'order_request_attachments', columns: ['storage_path'] },
+  'support-attachments': { table: 'support_tickets', columns: ['attachment_path'] },
 };
 
 /**
@@ -62,7 +82,7 @@ const SURFACE_OF_BUCKET: Readonly<Record<DocumentBucket, UploadSurface>> = {
  * for a file to hide.
  */
 export async function verifyStoredDocumentOrDelete(
-  ctx: Pick<ServiceContext, 'organizationId'>,
+  ctx: Pick<ServiceContext, 'organizationId' | 'userId'>,
   bucket: DocumentBucket,
   storagePath: string,
   opts: { unreadableMessage?: string; headers?: SecurityEventHeaders | null } = {},
@@ -74,12 +94,20 @@ export async function verifyStoredDocumentOrDelete(
   // as a security event in this organization. The prefix read doubles as the
   // existence check, so a finalize never preceded by a real PUT writes no
   // phantom row; an object readable a moment ago and unreadable now is
-  // removed and refused (we have not inspected it, so it gets no row).
+  // refused and kept (we have not inspected it, so it gets no row, and the
+  // person is asked to try again). An object over the bucket's cap is refused
+  // from the size storage states, before any of it is read.
   const checked = await checkStoredUpload(store, storagePath, {
     surface: SURFACE_OF_BUCKET[bucket],
     accept: uploadKindsForMimes(DOCUMENT_BUCKET_MIME_ALLOWLISTS[bucket]),
     organizationId: ctx.organizationId,
+    maxBytes: MAX_BYTES_OF_BUCKET[bucket],
     removeOnRefusal: [storagePath],
+    // A second finalize of a recorded path, or a ticket that already holds
+    // this screenshot: refused, never removed.
+    stillNamed: (paths) =>
+      uploadObjectsStillNamed(RECORDS_OF_BUCKET[bucket].table, RECORDS_OF_BUCKET[bucket].columns, paths),
+    removedBy: { organizationId: ctx.organizationId, userId: ctx.userId },
     unreadableMessage: opts.unreadableMessage ?? 'This file could not be verified.',
     headers: opts.headers ?? null,
     wrongTypeMessage: 'This file could not be uploaded because it failed our security checks.',

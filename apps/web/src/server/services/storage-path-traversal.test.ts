@@ -6,21 +6,28 @@ vi.mock('@/lib/po-parser', () => ({ parsePoFile: vi.fn() }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: vi.fn(), SCAN_MODEL_NAME: 'mock' }));
 const { createAdminClientMock } = vi.hoisted(() => ({ createAdminClientMock: vi.fn() }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMock }));
-// ItemImagesService.record now sniffs via a RANGE READ of the object's
-// leading bytes (fetchObjectPrefix) instead of download(). The helper is the
-// storage-read seam here: makeStorageSpy wires it to the same `body` its
-// download stub used to serve, and the refusal assertions check IT was never
-// reached — same property as before (no storage read happens on hostile
-// input), stated against the call that now performs the read.
+// ItemImagesService.record and ProcedureVideosService.record read the
+// object's leading bytes with a RANGE READ (fetchObjectWindow, part 6's upload
+// check) instead of download(). The helper is the storage-read seam here:
+// makeStorageSpy wires it to the same `body` its download stub used to serve,
+// and the refusal assertions check IT was never reached — same property as
+// before (no storage read happens on hostile input), stated against the call
+// that now performs the read.
 const { fetchObjectPrefixMock, fetchObjectWindowMock } = vi.hoisted(() => ({
   fetchObjectPrefixMock: vi.fn(),
-  // A procedure video's finalize reads only its leading window (part 6).
   fetchObjectWindowMock: vi.fn(),
 }));
 vi.mock('@/lib/storage-object-prefix', () => ({
   fetchObjectPrefix: fetchObjectPrefixMock,
   fetchObjectWindow: fetchObjectWindowMock,
+  fetchObjectWhole: vi.fn(async () => null),
 }));
+// The records' own per-person limits and their look for a recorded object
+// (part 6) are tested beside each service; here they allow and find nothing.
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async () => ({ allowed: true, failed: false })),
+}));
+vi.mock('./upload-still-named', () => ({ uploadObjectsStillNamed: vi.fn(async () => false) }));
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
   revalidateTag: vi.fn(),
@@ -108,9 +115,9 @@ function pdfBytes(): Uint8Array {
  *  (mocked) range-read helper serves as the object's leading bytes, mirroring
  *  what the download stub used to return; null = the object does not exist. */
 function makeStorageSpy(body: Uint8Array | null) {
-  fetchObjectPrefixMock.mockImplementation(async () =>
-    body ? { prefix: body, totalSize: body.byteLength } : null,
-  );
+  const serve = async () => (body ? { prefix: body, totalSize: body.byteLength } : null);
+  fetchObjectPrefixMock.mockImplementation(serve);
+  fetchObjectWindowMock.mockImplementation(serve);
   const remove = vi.fn(async () => ({ data: null, error: null }));
   const createSignedUrl = vi.fn(async () => ({
     data: { signedUrl: 'https://signed.example/get' },
@@ -147,7 +154,7 @@ describe('ItemImagesService.record — HI-8', () => {
     expect((err as ServiceError).code).toBe('validation_error');
     // The refusal must precede the storage call: a check that ran after the
     // prefix read would already have read the victim's object.
-    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+    expect(fetchObjectWindowMock).not.toHaveBeenCalled();
   });
 
   it('REFUSES a traversal in thumbPath even when storagePath is legitimate', async () => {
@@ -160,7 +167,7 @@ describe('ItemImagesService.record — HI-8', () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ServiceError);
     expect((err as ServiceError).code).toBe('validation_error');
-    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+    expect(fetchObjectWindowMock).not.toHaveBeenCalled();
   });
 
   it('REFUSES a path pinned to a DIFFERENT item — the shape pins the item id, not just the org', async () => {
@@ -184,7 +191,12 @@ describe('ItemImagesService.record — HI-8', () => {
     const row = await svc.record(ENTITY, `${ORG}/items/${ENTITY}/${FILE}.webp`, true, {
       thumbPath: `${ORG}/items/${ENTITY}/${FILE}-thumb.webp`,
     });
-    expect(fetchObjectPrefixMock).toHaveBeenCalledWith(expect.anything(), `${ORG}/items/${ENTITY}/${FILE}.webp`);
+    expect(fetchObjectWindowMock).toHaveBeenCalledWith(
+      expect.anything(),
+      `${ORG}/items/${ENTITY}/${FILE}.webp`,
+      expect.anything(),
+      { maxTotalBytes: 10 * 1024 * 1024 },
+    );
     expect(storage.remove).not.toHaveBeenCalled();
     expect(row).toMatchObject({ id: 'img-1' });
   });
@@ -333,7 +345,11 @@ describe('ProcedureVideosService.record — HI-8', () => {
     const mp4 = new Uint8Array([0, 0, 0, 0x14, ...[...'ftypisom'].map((c) => c.charCodeAt(0)), 0, 0, 2, 0, ...[...'mp41'].map((c) => c.charCodeAt(0))]);
     const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0, 0x0b, 8, 0, 5, 0, 4, 1, 0, 0xff, 0xd9]);
     makeStorageSpy(jpeg);
-    fetchObjectWindowMock.mockResolvedValue({ prefix: mp4, totalSize: mp4.byteLength });
+    fetchObjectWindowMock.mockImplementation(async (_b: unknown, path: string) =>
+      path.endsWith('.poster.jpg')
+        ? { prefix: jpeg, totalSize: jpeg.byteLength }
+        : { prefix: mp4, totalSize: mp4.byteLength },
+    );
     const { svc } = svcWith();
     const row = await svc.record({
       procedureId: ENTITY,

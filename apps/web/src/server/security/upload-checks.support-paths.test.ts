@@ -51,11 +51,14 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 9, resetAt: Date.now() })),
 }));
 vi.mock('@/lib/storage-object-prefix', () => ({
-  fetchObjectPrefix: vi.fn(async (_bucket: unknown, path: string) => {
+  fetchObjectWindow: vi.fn(async (_bucket: unknown, path: string) => {
     const body = h.objects[path];
     return body ? { prefix: body, totalSize: body.byteLength } : null;
   }),
+  fetchObjectWhole: vi.fn(async (_bucket: unknown, path: string) => h.objects[path] ?? null),
 }));
+// The look for a ticket that already holds this screenshot (part 6): none here.
+vi.mock('@/server/services/upload-still-named', () => ({ uploadObjectsStillNamed: vi.fn(async () => false) }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => ({ storage: { from: () => ({ remove: h.remove }) } })),
 }));

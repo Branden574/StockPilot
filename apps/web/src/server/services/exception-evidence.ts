@@ -32,7 +32,7 @@ import {
 } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
-import { checkUploadBytes } from '@/server/security/upload-checks';
+import { auditRemoval, checkUploadBytes } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, type ServiceContext } from './context';
@@ -473,11 +473,18 @@ export class ExceptionEvidenceService {
     } catch {
       return err;
     }
+    // Part 6: every removal of a refused upload leaves one audit line.
+    const by = { organizationId: this.ctx.organizationId, userId: this.ctx.userId };
     if (row && row.storage_path === path) {
-      if (thumb && row.thumbnail_path !== thumb) await removeQuietly(store, [thumb]);
+      if (thumb && row.thumbnail_path !== thumb) {
+        await removeQuietly(store, [thumb]);
+        await auditRemoval('exception_evidence', 'path_refusal', 1, by);
+      }
       return recordedWins ? alreadyRecordedError() : err;
     }
-    await removeQuietly(store, thumb ? [path, thumb] : [path]);
+    const removing = thumb ? [path, thumb] : [path];
+    await removeQuietly(store, removing);
+    await auditRemoval('exception_evidence', 'path_refusal', removing.length, by);
     return err;
   }
 

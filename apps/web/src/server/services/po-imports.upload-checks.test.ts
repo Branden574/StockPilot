@@ -51,12 +51,12 @@ beforeEach(() => {
   mockParsePoFile.mockResolvedValue({ lines: [], rawText: '' });
 });
 
-function parseStub(sourceType: 'pdf' | 'csv' | 'scan', body: Buffer) {
+function parseStub(sourceType: 'pdf' | 'csv' | 'scan' | 'xlsx', body: Buffer, status = 'uploaded') {
   const stub = makeSupabaseStub({
     'po_imports.select': {
       data: {
         id: IMPORT_ID,
-        status: 'uploaded',
+        status,
         source_type: sourceType,
         storage_path: `${PATH}.${sourceType}`,
         vendor_id: null,
@@ -172,6 +172,45 @@ describe('PO import file at parse', () => {
     expect(mockParsePoFile).not.toHaveBeenCalled();
     expect(failedWith(stub)).toBe('This file is not a picture or PDF we can read as a purchase order.');
     expect(record.mock.calls[0]![0]).toMatchObject({ reason: 'upload_wrong_type' });
+  });
+
+  it('a removal leaves one audit line, with no path', async () => {
+    const stub = parseStub('pdf', enc('just words'));
+    await svcFor(stub).parseImport(IMPORT_ID);
+    const lines = mockAudit.mock.calls.filter(
+      ([e]) => (e as { event: string }).event === 'security.upload_refused_removed',
+    );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]![0]).toEqual({
+      event: 'security.upload_refused_removed',
+      entityType: 'upload',
+      entityId: null,
+      extra: { surface: 'po_import_file', why: 'wrong_type', objects: 1 },
+    });
+    expect(JSON.stringify(lines[0])).not.toContain('po-imports');
+  });
+
+  it.each(['parsed', 'needs_review', 'failed'])(
+    'Re-parse of an import already %s: a refused file is refused and recorded, never removed',
+    async (status) => {
+      const stub = parseStub('pdf', enc('just words'), status);
+      await svcFor(stub).parseImport(IMPORT_ID);
+      expect(mockParsePoFile).not.toHaveBeenCalled();
+      expect(failedWith(stub)).toBe('This file is not a PDF.');
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(adminRemove).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['a scan import', 'scan' as const, enc('<!DOCTYPE html><p>x</p>')],
+    ['an older spreadsheet import', 'xlsx' as const, Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00])],
+  ])('%s refused at its first parse is kept (only a CSV or PDF upload is removed)', async (_what, type, body) => {
+    const stub = parseStub(type, body);
+    await svcFor(stub).parseImport(IMPORT_ID);
+    expect(mockParsePoFile).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(adminRemove).not.toHaveBeenCalled();
   });
 
   it('a recorder that fails: still refused, still removed', async () => {

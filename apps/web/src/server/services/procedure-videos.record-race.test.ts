@@ -27,6 +27,9 @@ vi.mock('@/lib/storage-object-prefix', () => ({
   }),
 }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async () => ({ allowed: true, failed: false })),
+}));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 
 import { ServiceError } from './context';

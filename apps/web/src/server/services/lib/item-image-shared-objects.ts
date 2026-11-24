@@ -2,6 +2,7 @@ import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { uploadObjectsStillNamed } from '@/server/services/upload-still-named';
 
 /**
  * Which of `objects` (item-images storage paths) another item_images row in
@@ -59,4 +60,16 @@ export async function objectsNamedByOtherImageRows(
     });
     return null;
   }
+}
+
+/**
+ * Part 6: whether any item_images row names one of `objects`, as its master
+ * or its thumb (this photo recorded before, or a duplicated item's row).
+ * Asked before a refused photo's objects are removed at its finalize, so a
+ * refusal never removes a recorded photo's file. Service role, for the reason
+ * above; here for the same reason too. Throws when the look fails: the caller
+ * then removes nothing.
+ */
+export function itemImageObjectsNamed(objects: readonly string[]): Promise<boolean> {
+  return uploadObjectsStillNamed('item_images', ['storage_path', 'thumb_path'], objects);
 }

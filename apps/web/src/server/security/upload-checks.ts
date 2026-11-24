@@ -3,8 +3,9 @@ import 'server-only';
 import { headers as currentHeaders } from 'next/headers';
 
 import { THREAT_MESSAGES, type DocumentThreatCode } from '@/lib/document-threat-scan';
+import { sniffNeedsMoreBytes } from '@/lib/image-signature';
 import {
-  fetchObjectPrefix,
+  fetchObjectWhole,
   fetchObjectWindow,
   type PrefixCapableBucket,
 } from '@/lib/storage-object-prefix';
@@ -17,6 +18,9 @@ import {
   type UploadRefusalCode,
   type UploadRefusalFamily,
 } from '@/lib/upload-inspect';
+
+import { audit } from '@/server/services/audit';
+import type { ServiceContext } from '@/server/services/context';
 
 import { recordSecurityEvent, type SecurityEventHeaders } from './events';
 
@@ -208,7 +212,6 @@ export async function checkUploadPrefix(
 
 /** The storage calls a stored-object check makes, stated structurally. */
 export type StoredUploadBucket = PrefixCapableBucket & {
-  download(path: string): Promise<{ data: Blob | null; error: { message: string } | null }>;
   remove(paths: string[]): Promise<unknown>;
 };
 
@@ -219,103 +222,182 @@ export type StoredUploadResult =
       mime: string;
       width: number | null;
       height: number | null;
-      /** The whole object as it was checked. */
+      /** The whole object as it was checked (a video: its leading window). */
       bytes: Uint8Array;
     }
   /**
-   * `family` null: the object could not be read, so nothing was judged or
-   * recorded. `absent`: it could not be read at all (never uploaded, or
-   * already gone), so nothing was removed either; a path whose object is
-   * optional (an item photo's thumbnail) reads that as "none".
+   * `family` null: nothing was judged or recorded (the object could not be
+   * read, or it is over the path's size ceiling). `absent`: it could not be
+   * read at all (never uploaded, or already gone), so nothing was removed
+   * either; a path whose object is optional (an item photo's thumbnail) reads
+   * that as "none".
    */
   | { ok: false; family: UploadRefusalFamily | null; message: string; absent?: true };
 
+/**
+ * Why a refused upload's objects were removed, for the audit line: the
+ * check's family, an object over its path's ceiling, or a refusal of the
+ * path's own (a limit, a cap, a failed re-encode).
+ */
+export type UploadRemovalWhy = UploadRefusalFamily | 'too_large' | 'path_refusal';
+
+/** Who a removal is written to the audit log as: the caller's own context. */
+export interface UploadRemovedBy {
+  organizationId: string;
+  userId: string;
+}
+
 export interface StoredUploadInput extends UploadCheckInput {
+  /**
+   * The largest object this path takes, in bytes (its bucket's own cap,
+   * lib/upload-size-limits.ts). A larger one is refused from the size storage
+   * states, before any of its body is read, and nothing past this is ever
+   * read.
+   */
+  maxBytes: number;
+  /** The path's own sentence for an object over `maxBytes`. */
+  tooLargeMessage?: string;
   /** Every object of this upload to remove on a refusal (the file, and its thumbnail or poster). */
   removeOnRefusal: readonly string[];
+  /**
+   * Asked before anything is removed: true when a record (this one recorded
+   * already, or another) still names one of these objects. Then nothing is
+   * removed. A look that fails keeps them too.
+   */
+  stillNamed: (paths: readonly string[]) => Promise<boolean>;
+  /** Who removed it: every removal writes one audit line. */
+  removedBy: UploadRemovedBy;
   /** The path's own sentence for an object that could not be read. */
   unreadableMessage: string;
 }
 
+/** The sentence for an object over its path's ceiling, when the path has none of its own. */
+export const UPLOAD_TOO_LARGE_MESSAGE = 'This file is too large to upload. Pick a smaller one.';
+
 /**
- * The delete is best-effort on purpose and the refusal is not (the rule of
- * upload-verification.ts): a failed cleanup must not turn "this file was
- * refused" into an internal error.
+ * The removal of a refused upload's objects. Never while a record names one
+ * of them (the look first; a failed look keeps them), always with one audit
+ * line naming who and why (never a path or a name), and best-effort on
+ * purpose (the rule of upload-verification.ts): a failed cleanup must not
+ * turn "this file was refused" into an internal error.
  */
-async function removeQuietly(store: StoredUploadBucket, paths: readonly string[]): Promise<void> {
+async function removeRefused(
+  store: StoredUploadBucket,
+  input: StoredUploadInput,
+  why: UploadRemovalWhy,
+): Promise<void> {
+  const paths = [...new Set(input.removeOnRefusal)];
   if (paths.length === 0) return;
+  let named: boolean;
   try {
-    await store.remove([...paths]);
+    named = await input.stillNamed(paths);
+  } catch {
+    named = true;
+  }
+  if (named) return;
+  try {
+    await store.remove(paths);
   } catch {
     // Deliberately swallowed: no row points at the object.
   }
+  await auditRemoval(input.surface, why, paths.length, input.removedBy);
 }
 
-async function downloadWhole(store: StoredUploadBucket, path: string): Promise<Uint8Array | null> {
+/** One audit line for a removal: the surface, the kind of refusal and how many objects. */
+export async function auditRemoval(
+  surface: UploadSurface,
+  why: UploadRemovalWhy,
+  objects: number,
+  by: UploadRemovedBy,
+): Promise<void> {
   try {
-    const { data, error } = await store.download(path);
-    if (error || !data) return null;
-    return new Uint8Array(await data.arrayBuffer());
+    await audit(
+      {
+        event: 'security.upload_refused_removed',
+        entityType: 'upload',
+        entityId: null,
+        extra: { surface, why, objects },
+      },
+      { organizationId: by.organizationId, userId: by.userId } as ServiceContext,
+    );
   } catch {
-    return null;
+    // audit() never rejects; this is belt and braces.
   }
 }
 
+/** A window an image sniff cannot decide (a JPEG whose frame header sits past it). */
+function windowUndecided(head: { prefix: Uint8Array; totalSize: number }): boolean {
+  return head.totalSize > head.prefix.byteLength && sniffNeedsMoreBytes(head.prefix);
+}
+
 /**
- * THE FINALIZE CHECK of an object a client put in storage: the leading bytes
- * first (a fake is refused before it is read whole), then the whole object.
- * On a refusal every object of the upload is removed and one event is
- * recorded. An object that cannot be read is refused with the path's own
- * sentence, records nothing (nothing was judged), and is removed only when it
- * was readable a moment before (the rule of verify-or-delete: an object that
- * was never uploaded has nothing to remove).
+ * THE FINALIZE CHECK of an object a client put in storage. The leading
+ * window first, with the size storage states: an object over the path's
+ * ceiling is refused and removed before any of its body is read, and a fake
+ * is refused from the window when the window decides. Then the whole object,
+ * at most the ceiling and exactly the stated size (a short or failed read is
+ * "could not be read": nothing judged, recorded or removed). On a refusal the
+ * upload's objects are removed (never while a record names one) and one event
+ * is recorded.
  */
 export async function checkStoredUpload(
   store: StoredUploadBucket,
   path: string,
   input: StoredUploadInput,
 ): Promise<StoredUploadResult> {
-  const head = await fetchObjectPrefix(store, path);
+  const head = await fetchObjectWindow(store, path, fetch, { maxTotalBytes: input.maxBytes });
   if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
+  if (head.overLimit) {
+    await removeRefused(store, input, 'too_large');
+    return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
+  }
   const prefixKinds = input.accept.filter((k) => k !== 'text' && k !== 'docx' && k !== 'xlsx');
-  if (prefixKinds.length === input.accept.length) {
+  if (prefixKinds.length === input.accept.length && !windowUndecided(head)) {
     const first = await checkUploadPrefix(head.prefix, input);
     if (!first.ok) {
-      await removeQuietly(store, input.removeOnRefusal);
+      await removeRefused(store, input, first.family);
       return first;
     }
   }
   const whole =
-    head.totalSize > head.prefix.byteLength ? await downloadWhole(store, path) : head.prefix;
-  if (!whole) {
-    // Readable a moment ago, unreadable now: fail closed, nothing judged.
-    await removeQuietly(store, input.removeOnRefusal);
+    head.totalSize > head.prefix.byteLength
+      ? await fetchObjectWhole(store, path, head.totalSize)
+      : head.prefix;
+  if (!whole || whole.byteLength !== head.totalSize) {
+    // Readable a moment ago, not now: nothing judged, so nothing removed or
+    // recorded. The person is asked to try again.
     return { ok: false, family: null, message: input.unreadableMessage };
   }
   const verdict = await checkUploadBytes(whole, input);
   if (!verdict.ok) {
-    await removeQuietly(store, input.removeOnRefusal);
+    await removeRefused(store, input, verdict.family);
     return verdict;
   }
   return { ...verdict, bytes: whole };
 }
 
 /**
- * THE FINALIZE CHECK of a stored video: its container's signature, from the
- * leading window only (never widened, never read whole: a video may be a
- * gigabyte). On a refusal every object of the upload is removed and one
- * event is recorded. What the video carries is not inspected.
+ * THE FINALIZE CHECK of a stored video: its size from storage and its
+ * container's signature from the leading window only (never widened, never
+ * read whole: a video may be a gigabyte). Over the ceiling, or a wrong
+ * signature, removes the upload's objects (never while a record names one)
+ * and, for a wrong signature, records one event. What the video carries is
+ * not inspected.
  */
 export async function checkStoredUploadSignature(
   store: StoredUploadBucket,
   path: string,
   input: StoredUploadInput,
 ): Promise<StoredUploadResult> {
-  const head = await fetchObjectWindow(store, path);
+  const head = await fetchObjectWindow(store, path, fetch, { maxTotalBytes: input.maxBytes });
   if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
+  if (head.overLimit) {
+    await removeRefused(store, input, 'too_large');
+    return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
+  }
   const verdict = await checkUploadPrefix(head.prefix, input);
   if (!verdict.ok) {
-    await removeQuietly(store, input.removeOnRefusal);
+    await removeRefused(store, input, verdict.family);
     return verdict;
   }
   return { ...verdict, bytes: head.prefix };

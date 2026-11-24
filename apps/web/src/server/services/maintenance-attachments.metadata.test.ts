@@ -83,6 +83,7 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHol
 import { recordSecurityEvent } from '@/server/security/events';
 import { expectOneRefusal, HTML_PAGE, withArchiveAfter } from '@/test/upload-fixtures';
 
+import { audit } from './audit';
 import { MaintenanceAttachmentsService } from './maintenance-attachments';
 
 const ORG = '0a0a0a0a-0000-4000-8000-000000000001';
@@ -796,6 +797,9 @@ describe('one finalize per upload at a time', () => {
     });
     expect(bucket.calls.remove).toEqual([[`${stem}.png`]]);
     expect(bucket.objects.has(THUMB)).toBe(true);
+    // Part 6: that removal leaves one audit line too.
+    const lines = vi.mocked(audit).mock.calls.filter(([e]) => e.event === 'security.upload_refused_removed');
+    expect(lines.map(([e]) => e.extra)).toEqual([{ surface: 'maintenance_photo', why: 'path_refusal', objects: 1 }]);
   });
 
   it("a duplicate refused by the person's minute limit no longer deletes the upload the first finalize is saving", async () => {
@@ -1300,6 +1304,10 @@ describe('the upload check (part 6)', () => {
     expect(inserted).toHaveLength(0);
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ event: 'photo_rejected' }));
     expectOneRefusal(record, { reason, organizationId: ORG }, [path, FILE, 'leak.']);
+    // The removal leaves one audit line, with no path.
+    const lines = vi.mocked(audit).mock.calls.filter(([e]) => e.event === 'security.upload_refused_removed');
+    expect(lines.map(([e]) => e.extra)).toEqual([{ surface: 'maintenance_photo', why: 'path_refusal', objects: 2 }]);
+    expect(JSON.stringify(lines)).not.toContain(FILE);
   });
 
   it('a refusal when the "is it recorded" look fails: one event, and nothing deleted (as before)', async () => {
@@ -1308,6 +1316,7 @@ describe('the upload check (part 6)', () => {
     await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({ message: 'invalid_image' });
     expect(bucket.objects.has(`${stem}.jpg`)).toBe(true);
     expectOneRefusal(record, { reason: 'upload_wrong_type', organizationId: ORG });
+    expect(vi.mocked(audit).mock.calls.some(([e]) => e.event === 'security.upload_refused_removed')).toBe(false);
   });
 
   it('a recorder that fails: still refused, still deleted, still nothing recorded', async () => {

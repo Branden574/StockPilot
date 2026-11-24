@@ -9,13 +9,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // Fixtures are tiny made-up files built here (the repository is public).
 // ---------------------------------------------------------------------------
 
-const { fetchObjectPrefixMock, fetchObjectWindowMock } = vi.hoisted(() => ({
+const { fetchObjectPrefixMock, fetchObjectWindowMock, fetchObjectWholeMock } = vi.hoisted(() => ({
   fetchObjectPrefixMock: vi.fn(),
   fetchObjectWindowMock: vi.fn(),
+  fetchObjectWholeMock: vi.fn(),
 }));
 vi.mock('@/lib/storage-object-prefix', () => ({
   fetchObjectPrefix: fetchObjectPrefixMock,
   fetchObjectWindow: fetchObjectWindowMock,
+  fetchObjectWhole: fetchObjectWholeMock,
   SNIFF_PREFIX_BYTES: 4096,
 }));
 vi.mock('next/headers', () => ({
@@ -26,6 +28,7 @@ vi.mock('next/headers', () => ({
 
 import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { recordSecurityEvent } from '@/server/security/events';
+import { audit } from '@/server/services/audit';
 
 import {
   checkStoredUpload,
@@ -33,11 +36,14 @@ import {
   checkUploadBytes,
   checkUploadPrefix,
   UPLOAD_OFFICE_MACRO_MESSAGE,
+  UPLOAD_TOO_LARGE_MESSAGE,
   UPLOAD_WRONG_TYPE_MESSAGE,
   type StoredUploadBucket,
 } from './upload-checks';
 
 const record = vi.mocked(recordSecurityEvent);
+const auditMock = vi.mocked(audit);
+const USER = '33333333-3333-4333-8333-333333333333';
 const ORG = '11111111-1111-4111-8111-111111111111';
 const NAME = 'invoice-of-a-secret-vendor.pdf';
 const PATH = `${ORG}/22222222-2222-4222-8222-222222222222/${NAME}`;
@@ -176,57 +182,117 @@ describe('checkUploadBytes: one event on a refusal, none on a clean file', () =>
   });
 });
 
+/** The one audit line of a removal: who, which path's surface, why, how many; never a path. */
+function onlyRemovalLine(surface: string, why: string, objects: number) {
+  expect(auditMock).toHaveBeenCalledTimes(1);
+  const [payload, ctx] = auditMock.mock.calls[0]!;
+  expect(payload).toEqual({
+    event: 'security.upload_refused_removed',
+    entityType: 'upload',
+    entityId: null,
+    extra: { surface, why, objects },
+  });
+  expect(ctx).toMatchObject({ organizationId: ORG, userId: USER });
+  expect(JSON.stringify(payload)).not.toContain(NAME);
+  expect(JSON.stringify(payload)).not.toContain(ORG);
+}
+
 describe('checkStoredUpload: the finalize of an object a client put in storage', () => {
-  function bucket(downloadBody: Uint8Array | null = null) {
+  function bucket() {
     const remove = vi.fn(async () => ({ data: null, error: null }));
-    const download = vi.fn(async () =>
-      downloadBody
-        ? { data: new Blob([new Uint8Array(downloadBody)]), error: null }
-        : { data: null, error: { message: 'gone' } },
-    );
-    const store = { remove, download, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
-    return { store, remove, download };
+    const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
+    return { store, remove };
   }
+  const MAX = 15 * 1024 * 1024;
+  const stillNamed = vi.fn(async () => false);
   const stored = {
     ...base,
     accept: ['png', 'pdf'] as const,
+    maxBytes: MAX,
     removeOnRefusal: [PATH, `${PATH}.thumb`],
+    stillNamed,
+    removedBy: { organizationId: ORG, userId: USER },
     unreadableMessage: 'This file could not be verified.',
   };
-
-  it('a clean small object: no download, no removal, no event, and the bytes it checked', async () => {
-    fetchObjectPrefixMock.mockResolvedValue({ prefix: PNG, totalSize: PNG.byteLength });
-    const { store, remove, download } = bucket();
-    const out = await checkStoredUpload(store, PATH, stored);
-    expect(out).toMatchObject({ ok: true, kind: 'png', bytes: PNG });
-    expect(download).not.toHaveBeenCalled();
-    expect(remove).not.toHaveBeenCalled();
-    expect(record).not.toHaveBeenCalled();
+  beforeEach(() => {
+    stillNamed.mockImplementation(async () => false);
   });
 
-  it('a large object is read whole for the scan; a hidden file in it is refused, removed, one event', async () => {
+  it('a clean small object: no whole read, no removal, no event, and the bytes it checked', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: PNG, totalSize: PNG.byteLength });
+    const { store, remove } = bucket();
+    const out = await checkStoredUpload(store, PATH, stored);
+    expect(out).toMatchObject({ ok: true, kind: 'png', bytes: PNG });
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
+    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('the window read is always given the path ceiling', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: PNG, totalSize: PNG.byteLength });
+    await checkStoredUpload(bucket().store, PATH, { ...stored, maxBytes: 5 * 1024 * 1024 });
+    expect(fetchObjectWindowMock).toHaveBeenCalledWith(expect.anything(), PATH, expect.any(Function), {
+      maxTotalBytes: 5 * 1024 * 1024,
+    });
+  });
+
+  it('a large object is read whole, exactly its stated size; a hidden file in it is refused, removed, one event, one audit line', async () => {
     const big = concat(PNG, new Uint8Array(5000).fill(0x20), Uint8Array.from([0x50, 0x4b, 0x05, 0x06]));
-    fetchObjectPrefixMock.mockResolvedValue({ prefix: big.subarray(0, 4096), totalSize: big.byteLength });
-    const { store, remove, download } = bucket(big);
+    fetchObjectWindowMock.mockResolvedValue({ prefix: big.subarray(0, 4096), totalSize: big.byteLength });
+    fetchObjectWholeMock.mockResolvedValue(big);
+    const { store, remove } = bucket();
     const out = await checkStoredUpload(store, PATH, stored);
     expect(out).toMatchObject({ ok: false, family: 'hidden_file', message: THREAT_MESSAGES.appended_payload });
-    expect(download).toHaveBeenCalledWith(PATH);
+    expect(fetchObjectWholeMock).toHaveBeenCalledWith(store, PATH, big.byteLength);
+    expect(stillNamed).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
     expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
     expect(onlyEvent().event.reason).toBe('upload_hidden_file');
+    onlyRemovalLine('po_attachment', 'hidden_file', 2);
+  });
+
+  it('an object over the ceiling is refused from the size storage states: never read, removed, an audit line, no event', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: MAX + 1, overLimit: true });
+    const { store, remove } = bucket();
+    const out = await checkStoredUpload(store, PATH, stored);
+    expect(out).toEqual({ ok: false, family: null, message: UPLOAD_TOO_LARGE_MESSAGE });
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
+    expect(record).not.toHaveBeenCalled();
+    onlyRemovalLine('po_attachment', 'too_large', 2);
+    // The path's own sentence when it has one.
+    const own = await checkStoredUpload(bucket().store, PATH, { ...stored, tooLargeMessage: 'Too big.' });
+    expect(own).toMatchObject({ ok: false, message: 'Too big.' });
   });
 
   it('a fake is refused from its leading bytes before any whole read: removed, one event', async () => {
-    fetchObjectPrefixMock.mockResolvedValue({ prefix: HTML, totalSize: 10_000_000 });
-    const { store, remove, download } = bucket();
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: 10_000_000 });
+    const { store, remove } = bucket();
     const out = await checkStoredUpload(store, PATH, { ...stored, wrongTypeMessage: 'Not a real image.' });
     expect(out).toEqual({ ok: false, family: 'wrong_type', message: 'Not a real image.' });
-    expect(download).not.toHaveBeenCalled();
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
     expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
     expect(onlyEvent().event.reason).toBe('upload_wrong_type');
   });
 
-  it('an object that cannot be read records nothing and is not removed; one gone between reads is removed', async () => {
-    fetchObjectPrefixMock.mockResolvedValue(null);
+  it('a window an image sniff cannot decide is judged on the whole object, not refused from the window', async () => {
+    // A JPEG whose frame header sits past the window: start of image, then a long metadata segment.
+    const app1 = new Uint8Array(6002);
+    app1.set([0xff, 0xe1, 0x17, 0x70]);
+    const sof = Uint8Array.from([0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0]);
+    const jpeg = concat(Uint8Array.from([0xff, 0xd8]), app1, sof, Uint8Array.from([0xff, 0xd9]));
+    fetchObjectWindowMock.mockResolvedValue({ prefix: jpeg.subarray(0, 4096), totalSize: jpeg.byteLength });
+    fetchObjectWholeMock.mockResolvedValue(jpeg);
+    const { store, remove } = bucket();
+    const out = await checkStoredUpload(store, PATH, { ...stored, accept: ['jpeg'] });
+    expect(fetchObjectWholeMock).toHaveBeenCalledWith(store, PATH, jpeg.byteLength);
+    expect(out).toMatchObject({ ok: true, kind: 'jpeg' });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('an object that cannot be read records nothing and is not removed; nor one that fails its second read', async () => {
+    fetchObjectWindowMock.mockResolvedValue(null);
     const first = bucket();
     expect(await checkStoredUpload(first.store, PATH, stored)).toEqual({
       ok: false,
@@ -235,28 +301,62 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
       absent: true,
     });
     expect(first.remove).not.toHaveBeenCalled();
-    fetchObjectPrefixMock.mockResolvedValue({ prefix: PDF.subarray(0, 8), totalSize: 9000 });
-    const second = bucket(null);
+    fetchObjectWindowMock.mockResolvedValue({ prefix: PDF.subarray(0, 8), totalSize: 9000 });
+    fetchObjectWholeMock.mockResolvedValue(null);
+    const second = bucket();
     const gone = await checkStoredUpload(second.store, PATH, stored);
-    expect(gone).toMatchObject({ ok: false, family: null });
-    // Removed, so not "absent": a path with an optional object must not read it as "none".
-    expect(gone).not.toHaveProperty('absent');
-    expect(second.remove).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
+    expect(gone).toEqual({ ok: false, family: null, message: 'This file could not be verified.' });
+    // Readable a moment ago: nothing was judged, so nothing is removed or recorded.
+    expect(second.remove).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+    // A whole read of another length is the same: judged on nothing.
+    fetchObjectWholeMock.mockResolvedValue(new Uint8Array(8999));
+    const third = bucket();
+    expect(await checkStoredUpload(third.store, PATH, stored)).toMatchObject({ ok: false, family: null });
+    expect(third.remove).not.toHaveBeenCalled();
+  });
+
+  it('nothing a record still names is ever removed: the refusal stands, the event is recorded, no audit line', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    stillNamed.mockResolvedValue(true);
+    const { store, remove } = bucket();
+    expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: 'wrong_type' });
+    expect(stillNamed).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
+    expect(remove).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+    expect(onlyEvent().event.reason).toBe('upload_wrong_type');
+  });
+
+  it('a look that fails keeps the objects too; the look comes before any removal', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: MAX * 2, overLimit: true });
+    stillNamed.mockRejectedValue(new Error('look failed'));
+    const { store, remove } = bucket();
+    expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: null });
+    expect(remove).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('a path named twice is removed once, as one object', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    const { store, remove } = bucket();
+    await checkStoredUpload(store, PATH, { ...stored, removeOnRefusal: [PATH, PATH] });
+    expect(remove).toHaveBeenCalledWith([PATH]);
+    onlyRemovalLine('po_attachment', 'wrong_type', 1);
   });
 
   it('a recorder failure still removes and still refuses', async () => {
     record.mockImplementation(async () => {
       throw new Error('recorder down');
     });
-    fetchObjectPrefixMock.mockResolvedValue({ prefix: PDF_SCRIPT, totalSize: PDF_SCRIPT.byteLength });
+    fetchObjectWindowMock.mockResolvedValue({ prefix: PDF_SCRIPT, totalSize: PDF_SCRIPT.byteLength });
     const { store, remove } = bucket();
     expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: 'active_content' });
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
   it('a removal that throws is swallowed: the refusal stands', async () => {
-    fetchObjectPrefixMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
     const { store, remove } = bucket();
     remove.mockRejectedValue(new Error('storage down'));
     expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: 'wrong_type' });
@@ -264,30 +364,64 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
 });
 
 describe('checkStoredUploadSignature: a video, by its container only', () => {
+  const stillNamed = vi.fn(async () => false);
   const input = {
     ...base,
     surface: 'procedure_video' as const,
     accept: ['mp4', 'quicktime', 'webm'] as const,
+    maxBytes: 1024 * 1024 * 1024,
     removeOnRefusal: [PATH, `${PATH}.poster.jpg`],
+    stillNamed,
+    removedBy: { organizationId: ORG, userId: USER },
     unreadableMessage: 'This video could not be read.',
   };
-  it('reads the leading window only, never the whole video', async () => {
+  beforeEach(() => {
+    stillNamed.mockImplementation(async () => false);
+  });
+  it('reads the leading window only, with the ceiling, never the whole video', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: MP4, totalSize: 900_000_000 });
-    const download = vi.fn();
     const remove = vi.fn();
-    const store = { download, remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
+    const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
     expect(await checkStoredUploadSignature(store, PATH, input)).toMatchObject({ ok: true, kind: 'mp4' });
-    expect(download).not.toHaveBeenCalled();
+    expect(fetchObjectWindowMock).toHaveBeenCalledWith(store, PATH, expect.any(Function), {
+      maxTotalBytes: 1024 * 1024 * 1024,
+    });
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
     expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
   });
 
-  it('a file that is not a video is refused, the video and its poster removed, one event', async () => {
+  it('a video over the ceiling is refused from its stated size and removed, with an audit line', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: 2 ** 31, overLimit: true });
+    const remove = vi.fn(async () => ({}));
+    const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
+    expect(await checkStoredUploadSignature(store, PATH, input)).toEqual({
+      ok: false,
+      family: null,
+      message: UPLOAD_TOO_LARGE_MESSAGE,
+    });
+    expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.poster.jpg`]);
+    expect(record).not.toHaveBeenCalled();
+    onlyRemovalLine('procedure_video', 'too_large', 2);
+  });
+
+  it('a file that is not a video is refused, the video and its poster removed, one event, one audit line', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
     const remove = vi.fn(async () => ({}));
-    const store = { download: vi.fn(), remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
+    const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
     expect(await checkStoredUploadSignature(store, PATH, input)).toMatchObject({ ok: false, family: 'wrong_type' });
     expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.poster.jpg`]);
     expect(onlyEvent().event.reason).toBe('upload_wrong_type');
+    onlyRemovalLine('procedure_video', 'wrong_type', 2);
+  });
+
+  it('a video a record still names is never removed', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    stillNamed.mockResolvedValue(true);
+    const remove = vi.fn(async () => ({}));
+    const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
+    expect(await checkStoredUploadSignature(store, PATH, input)).toMatchObject({ ok: false });
+    expect(remove).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
   });
 });

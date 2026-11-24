@@ -16,7 +16,9 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
-import { checkStoredUpload } from '@/server/security/upload-checks';
+import { AVATAR_MAX_BYTES, ORG_LOGO_MAX_BYTES } from '@/lib/upload-size-limits';
+import { auditRemoval, checkStoredUpload } from '@/server/security/upload-checks';
+import { uploadObjectsStillNamed } from '@/server/services/upload-still-named';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
   ACCOUNT_DELETE_LAST_OWNER_COPY,
@@ -179,6 +181,13 @@ export async function updateProfileNameAction(input: {
   }
 }
 
+/**
+ * Part 6: saving an avatar or a logo reads the whole picture once. A modest
+ * per-person limit (per minute) sits before that read, closed when the
+ * limiter cannot answer, the same as the neighbouring limits.
+ */
+const PICTURE_SAVE_LIMIT = 20;
+
 const urlSchema = z.object({
   url: z.string().url().nullable(),
 });
@@ -270,11 +279,21 @@ export async function setAvatarUrlAction(input: {
       if (!objectPath || !isValidStoragePath(objectPath, userAvatarPathShape(ctx.userId))) {
         return err('validation_error', 'Avatar URL must point at your own avatar in the StockPilot storage bucket.');
       }
+      // Part 6: the check reads the whole picture (up to the bucket's cap).
+      // A per-person limit before that read, closed like its neighbours.
+      const rl = await checkRateLimit(`avatar:set:${ctx.userId}`, PICTURE_SAVE_LIMIT, 60_000, 'closed');
+      if (!rl.allowed) {
+        return err('conflict', 'Too many picture changes in the last minute. Please wait a moment and try again.');
+      }
       const checked = await checkStoredUpload(createAdminClient().storage.from('user-avatars'), objectPath, {
         surface: 'avatar',
         accept: uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['user-avatars']),
         organizationId: ctx.organizationId,
+        maxBytes: AVATAR_MAX_BYTES,
         removeOnRefusal: [objectPath],
+        // The saved picture (a re-save of the same URL) is never removed.
+        stillNamed: () => uploadObjectsStillNamed('user_profiles', ['avatar_url'], [candidate]),
+        removedBy: { organizationId: ctx.organizationId, userId: ctx.userId },
         unreadableMessage: 'That picture could not be read. Try uploading it again.',
         wrongTypeMessage: 'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
       });
@@ -414,12 +433,21 @@ export async function setOrgLogoUrlAction(input: {
       // whole logo (only when the first look was not already all of it) for
       // a file hidden after the picture, removes a refused object, and
       // records the refusal as a security event in this organization.
+      const rl = await checkRateLimit(`org-logo:set:${ctx.userId}`, PICTURE_SAVE_LIMIT, 60_000, 'closed');
+      if (!rl.allowed) {
+        return err('conflict', 'Too many logo changes in the last minute. Please wait a moment and try again.');
+      }
       const logos = createAdminClient().storage.from('org-logos');
+      // The saved logo (a re-save of the same URL) is never removed.
+      const logoStillNamed = () => uploadObjectsStillNamed('organizations', ['logo_url'], [candidate]);
       const checked = await checkStoredUpload(logos, objectPath, {
         surface: 'org_logo',
         accept: uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['org-logos']),
         organizationId: ctx.organizationId,
+        maxBytes: ORG_LOGO_MAX_BYTES,
         removeOnRefusal: [objectPath],
+        stillNamed: logoStillNamed,
+        removedBy: { organizationId: ctx.organizationId, userId: ctx.userId },
         unreadableMessage: 'That logo upload could not be read. Try uploading again.',
         wrongTypeMessage: 'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
       });
@@ -440,7 +468,20 @@ export async function setOrgLogoUrlAction(input: {
           size.height !== null &&
           size.width * size.height > DECODE_MAX_INPUT_PIXELS[checked.kind]
         ) {
-          await logos.remove([objectPath]);
+          // The same guard and audit line as every refused upload (part 6).
+          let named = true;
+          try {
+            named = await logoStillNamed();
+          } catch {
+            named = true;
+          }
+          if (!named) {
+            await logos.remove([objectPath]);
+            await auditRemoval('org_logo', 'too_large', 1, {
+              organizationId: ctx.organizationId,
+              userId: ctx.userId,
+            });
+          }
           return err(
             'validation_error',
             `That logo is too large to print (${size.width} by ${size.height} pixels). Save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.`,

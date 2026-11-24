@@ -4,7 +4,12 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { sniffImage } from './image-signature';
-import { fetchObjectPrefix, SNIFF_PREFIX_BYTES } from './storage-object-prefix';
+import {
+  fetchObjectPrefix,
+  fetchObjectWhole,
+  fetchObjectWindow,
+  SNIFF_PREFIX_BYTES,
+} from './storage-object-prefix';
 
 /**
  * The helper is the storage-read seam for the magic-byte sniff callers
@@ -324,6 +329,122 @@ describe('fetchObjectPrefix — indeterminate-window fallback', () => {
     expect(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
   });
 });
+
+/** A body that counts what was pulled from it and whether it was cancelled. */
+function countingStream(full: Uint8Array, chunk = 1024) {
+  const seen = { pulled: 0, cancelled: false };
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (seen.pulled >= full.byteLength) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(full.subarray(seen.pulled, seen.pulled + chunk));
+      seen.pulled += chunk;
+    },
+    cancel() {
+      seen.cancelled = true;
+    },
+  });
+  return { stream, seen };
+}
+
+describe('a ceiling on the read (part 6)', () => {
+  it('206: a stated size over the ceiling is answered from the header alone, the body never read', async () => {
+    const { stream, seen } = countingStream(objectBytes(4096));
+    const fetchImpl = vi.fn(async () =>
+      new Response(stream, { status: 206, headers: { 'content-range': 'bytes 0-4095/20000' } }),
+    );
+    const out = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
+      maxTotalBytes: 10000,
+    });
+    expect(out).toEqual({ prefix: new Uint8Array(0), totalSize: 20000, overLimit: true });
+    expect(seen.pulled).toBeLessThanOrEqual(1024);
+    expect(seen.cancelled).toBe(true);
+  });
+
+  it('200 (range ignored): a Content-Length over the ceiling is refused the same way, nothing buffered', async () => {
+    const full = objectBytes(20000);
+    const { stream, seen } = countingStream(full);
+    const fetchImpl = vi.fn(async () =>
+      new Response(stream, { status: 200, headers: { 'content-length': '20000' } }),
+    );
+    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
+      maxTotalBytes: 10000,
+    });
+    expect(out).toMatchObject({ totalSize: 20000, overLimit: true });
+    expect(out!.prefix.byteLength).toBe(0);
+    expect(seen.pulled).toBeLessThan(full.byteLength);
+    expect(seen.cancelled).toBe(true);
+    // Never widened to a whole read either.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('a size at the ceiling is read as before; no ceiling is no limit', async () => {
+    const full = objectBytes(10240);
+    const fetchImpl = vi.fn(async () =>
+      new Response(bodyOf(full.subarray(0, 4096)), {
+        status: 206,
+        headers: { 'content-range': 'bytes 0-4095/10240' },
+      }),
+    );
+    const at = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
+      maxTotalBytes: 10240,
+    });
+    expect(at).toMatchObject({ totalSize: 10240 });
+    expect(at).not.toHaveProperty('overLimit');
+    const none = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    expect(none).not.toHaveProperty('overLimit');
+  });
+
+  it('the window is never widened: an undecided JPEG window stays a window', async () => {
+    const jpeg = new Uint8Array(8209);
+    jpeg.set([0xff, 0xd8, 0xff, 0xe1, 0x20, 0x02]);
+    const fetchImpl = vi.fn(async () =>
+      new Response(bodyOf(jpeg.subarray(0, 4096)), {
+        status: 206,
+        headers: { 'content-range': 'bytes 0-4095/8209' },
+      }),
+    );
+    const out = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    expect(out!.prefix.byteLength).toBe(4096);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('fetchObjectWhole (part 6)', () => {
+  it('reads exactly the stated size and cancels the rest', async () => {
+    const full = objectBytes(10240);
+    const { stream, seen } = countingStream(concat2(full, new Uint8Array(50_000)));
+    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 }));
+    const out = await fetchObjectWhole(okSigner(), PATH, 10240, fetchImpl as unknown as typeof fetch);
+    expect(out!.byteLength).toBe(10240);
+    expect(Array.from(out!.subarray(0, 8))).toEqual(Array.from(full.subarray(0, 8)));
+    expect(seen.pulled).toBeLessThanOrEqual(10240 + 1024);
+    expect(seen.cancelled).toBe(true);
+  });
+
+  it('a body that ends short, a length other than the stated one, or a failure is null', async () => {
+    const full = objectBytes(10240);
+    const short = vi.fn(async () => new Response(bodyOf(full.subarray(0, 5000)), { status: 200 }));
+    expect(await fetchObjectWhole(okSigner(), PATH, 10240, short as unknown as typeof fetch)).toBeNull();
+    const other = vi.fn(async () =>
+      new Response(bodyOf(full), { status: 200, headers: { 'content-length': '99999' } }),
+    );
+    expect(await fetchObjectWhole(okSigner(), PATH, 10240, other as unknown as typeof fetch)).toBeNull();
+    const gone = vi.fn(async () => new Response('gone', { status: 404 }));
+    expect(await fetchObjectWhole(okSigner(), PATH, 10240, gone as unknown as typeof fetch)).toBeNull();
+    const refused = { createSignedUrl: vi.fn(async () => ({ data: null, error: { message: 'no' } })) };
+    expect(await fetchObjectWhole(refused, PATH, 10240, short as unknown as typeof fetch)).toBeNull();
+  });
+});
+
+function concat2(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.byteLength + b.byteLength);
+  out.set(a, 0);
+  out.set(b, a.byteLength);
+  return out;
+}
 
 /**
  * B29: the bucket sizes the module's comments give are the buckets' own

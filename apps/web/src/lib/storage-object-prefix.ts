@@ -74,7 +74,23 @@ export type ObjectPrefix = {
   prefix: Uint8Array;
   /** The object's FULL size in bytes — never the prefix length. */
   totalSize: number;
+  /**
+   * Set when the caller gave a ceiling (`maxTotalBytes`) and the size storage
+   * stated is above it: the body was never read (`prefix` is empty) and the
+   * caller refuses the object as too large (part 6).
+   */
+  overLimit?: true;
 };
+
+/** A ceiling for one read (part 6): a size storage states above it is refused before any body read. */
+export interface ObjectReadLimit {
+  maxTotalBytes?: number;
+}
+
+/** The answer for an object over the ceiling: its size, and nothing of its body. */
+function overLimitAnswer(total: number): ObjectPrefix {
+  return { prefix: new Uint8Array(0), totalSize: total, overLimit: true };
+}
 
 /** The one storage-js method this helper needs, stated structurally so tests
  *  and callers are not coupled to the concrete StorageFileApi class. */
@@ -140,6 +156,7 @@ export async function fetchObjectPrefix(
   bucket: PrefixCapableBucket,
   path: string,
   fetchImpl: typeof fetch = fetch,
+  limit: ObjectReadLimit = {},
 ): Promise<ObjectPrefix | null> {
   let signedUrl: string;
   try {
@@ -150,8 +167,8 @@ export async function fetchObjectPrefix(
     return null;
   }
 
-  const head = await fetchLeadingWindow(signedUrl, fetchImpl);
-  if (!head) return null;
+  const head = await fetchLeadingWindow(signedUrl, fetchImpl, limit);
+  if (!head || head.overLimit) return head;
 
   // The metadata-heavy-JPEG fallback: only when the sniff of the window is
   // INDETERMINATE (classifier ran out of bytes — never for a definitive
@@ -176,6 +193,7 @@ export async function fetchObjectWindow(
   bucket: PrefixCapableBucket,
   path: string,
   fetchImpl: typeof fetch = fetch,
+  limit: ObjectReadLimit = {},
 ): Promise<ObjectPrefix | null> {
   let signedUrl: string;
   try {
@@ -185,15 +203,45 @@ export async function fetchObjectWindow(
   } catch {
     return null;
   }
-  return fetchLeadingWindow(signedUrl, fetchImpl);
+  return fetchLeadingWindow(signedUrl, fetchImpl, limit);
+}
+
+/**
+ * The WHOLE object, bounded (part 6): exactly `expectedSize` bytes, the size a
+ * window read of the same object stated (which the caller has already held to
+ * its ceiling), read from a stream that is cancelled at that size, so a
+ * misbehaving or replaced object can never make this buffer more. A body that
+ * ends short, or a failure anywhere, is null: the caller answers "could not be
+ * read" and judges nothing.
+ */
+export async function fetchObjectWhole(
+  bucket: PrefixCapableBucket,
+  path: string,
+  expectedSize: number,
+  fetchImpl: typeof fetch = fetch,
+): Promise<Uint8Array | null> {
+  let signedUrl: string;
+  try {
+    const { data, error } = await bucket.createSignedUrl(path, PREFIX_URL_TTL_SECONDS);
+    if (error || !data?.signedUrl) return null;
+    signedUrl = data.signedUrl;
+  } catch {
+    return null;
+  }
+  const whole = await fetchWholeObject(signedUrl, expectedSize, fetchImpl);
+  return whole && whole.prefix.byteLength === expectedSize ? whole.prefix : null;
 }
 
 /** The Range request for the leading window, and the full size from the
- *  response's own headers. Null on any failure. */
+ *  response's own headers. Null on any failure. With a ceiling, a stated
+ *  size above it is answered from the headers alone: the body is cancelled
+ *  unread. */
 async function fetchLeadingWindow(
   signedUrl: string,
   fetchImpl: typeof fetch,
+  limit: ObjectReadLimit = {},
 ): Promise<ObjectPrefix | null> {
+  const over = (total: number) => limit.maxTotalBytes !== undefined && total > limit.maxTotalBytes;
   let res: Response;
   try {
     res = await fetchImpl(signedUrl, {
@@ -219,6 +267,10 @@ async function fetchLeadingWindow(
   if (res.status === 206) {
     const total = totalFromContentRange(res.headers.get('content-range'));
     if (total === null) return null;
+    if (over(total)) {
+      await res.body?.cancel().catch(() => undefined);
+      return overLimitAnswer(total);
+    }
     // The body is the (at most SNIFF_PREFIX_BYTES-long) range itself. A body
     // read that fails (the connection drops mid-body) is null like every
     // other failure here, never a throw out of this function (L65a).
@@ -249,6 +301,10 @@ async function fetchLeadingWindow(
     if (lenHeader === null) return null;
     const total = Number(lenHeader);
     if (!Number.isSafeInteger(total) || total < 0) return null;
+    if (over(total)) {
+      await res.body?.cancel().catch(() => undefined);
+      return overLimitAnswer(total);
+    }
     if (!res.body) {
       // A 200 with no body stream: only legal for an empty payload.
       return total === 0 ? { prefix: new Uint8Array(0), totalSize: 0 } : null;
@@ -292,6 +348,13 @@ async function fetchWholeObject(
     return null;
   }
   if (res.status !== 200) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  // A stated length other than the one the window read named means the
+  // object changed between the two reads: unreadable, judged on nothing.
+  const lenHeader = res.headers.get('content-length');
+  if (lenHeader !== null && Number(lenHeader) !== expectedSize) {
     await res.body?.cancel().catch(() => undefined);
     return null;
   }

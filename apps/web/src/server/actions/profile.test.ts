@@ -133,7 +133,9 @@ vi.mock('@/lib/supabase/server', () => ({
  */
 const {
   logoStorage,
-  fetchObjectPrefixMock,
+  fetchObjectWindowMock,
+  fetchObjectWholeMock,
+  stillNamedMock,
   adminAuth,
   adminRpc,
   checkRateLimitMock,
@@ -152,7 +154,10 @@ const {
       body: null as Uint8Array | null,
       remove: vi.fn(),
     },
-    fetchObjectPrefixMock: vi.fn(),
+    fetchObjectWindowMock: vi.fn(),
+    /** Part 6: the whole read after the window, and the look for a saved picture. */
+    fetchObjectWholeMock: vi.fn(async (): Promise<Uint8Array | null> => null),
+    stillNamedMock: vi.fn(async (): Promise<boolean> => false),
     /** SP-008 — the auth delete is the step that can fail on its own (a dead
      *  service-role key 401s here while every user-authed read stays up, the
      *  2026-07-21 incident). Hoisted so a test can make it fail. */
@@ -231,9 +236,13 @@ vi.mock('@/lib/supabase/admin', () => ({
   })),
 }));
 
+// Part 6: the upload check reads a window first (held to the bucket's cap),
+// then the whole object only when the window is not all of it.
 vi.mock('@/lib/storage-object-prefix', () => ({
-  fetchObjectPrefix: fetchObjectPrefixMock,
+  fetchObjectWindow: fetchObjectWindowMock,
+  fetchObjectWhole: fetchObjectWholeMock,
 }));
+vi.mock('@/server/services/upload-still-named', () => ({ uploadObjectsStillNamed: stillNamedMock }));
 
 vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
@@ -417,7 +426,7 @@ describe('setAvatarUrlAction', () => {
       'user_profiles.update': { data: null, error: null },
     });
     // Part 6: the avatar's finalize check reads the object the URL names.
-    fetchObjectPrefixMock.mockImplementation(async () => ({ prefix: pngBytes(), totalSize: 26 }));
+    fetchObjectWindowMock.mockImplementation(async () => ({ prefix: pngBytes(), totalSize: 26 }));
   });
 
   it('persists null to clear the avatar', async () => {
@@ -481,7 +490,7 @@ describe('setOrgLogoUrlAction', () => {
     vi.clearAllMocks();
     sessionState.role = 'admin';
     logoStorage.body = pngBytes();
-    fetchObjectPrefixMock.mockImplementation(async () =>
+    fetchObjectWindowMock.mockImplementation(async () =>
       logoStorage.body
         ? { prefix: logoStorage.body, totalSize: logoStorage.body.byteLength }
         : null,
@@ -534,7 +543,8 @@ describe('setOrgLogoUrlAction', () => {
     if (!result.ok) expect(result.error.code).toBe('validation_error');
     // Verify-or-DELETE: the unverified object must not survive at its public URL.
     expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-1.png']);
-    expect(audit).not.toHaveBeenCalled();
+    // Nothing is saved or audited as a change; the removal leaves its one line.
+    expect(vi.mocked(audit).mock.calls.map(([p]) => p.event)).toEqual(['security.upload_refused_removed']);
   });
 
   it('MED-23 — a URL naming an object that was never uploaded is refused without persisting', async () => {
@@ -551,7 +561,9 @@ describe('setOrgLogoUrlAction', () => {
     logoStorage.body = pngBytes();
     const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-2.png` });
     expect(result.ok).toBe(true);
-    expect(fetchObjectPrefixMock).toHaveBeenCalledWith(expect.anything(), 'org-1/logo-2.png');
+    expect(fetchObjectWindowMock).toHaveBeenCalledWith(expect.anything(), 'org-1/logo-2.png', expect.anything(), {
+      maxTotalBytes: 5 * 1024 * 1024,
+    });
     expect(logoStorage.remove).not.toHaveBeenCalled();
   });
 
@@ -570,7 +582,7 @@ describe('setOrgLogoUrlAction', () => {
     const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}${tail}` });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('validation_error');
-    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+    expect(fetchObjectWindowMock).not.toHaveBeenCalled();
     expect(logoStorage.remove).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
   });
@@ -578,7 +590,7 @@ describe('setOrgLogoUrlAction', () => {
   it('clearing the logo (url: null) needs no object to exist and touches storage not at all', async () => {
     const result = await setOrgLogoUrlAction({ url: null });
     expect(result.ok).toBe(true);
-    expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+    expect(fetchObjectWindowMock).not.toHaveBeenCalled();
     expect(logoStorage.remove).not.toHaveBeenCalled();
   });
 
@@ -663,6 +675,35 @@ describe('setOrgLogoUrlAction', () => {
         }
         expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-big.png']);
         expect(stubHolder.stub!.chainArgs.get('organizations.update')).toBeUndefined();
+        // The removal's one audit line (part 6), nothing else.
+        expect(vi.mocked(audit).mock.calls).toEqual([
+          [
+            {
+              event: 'security.upload_refused_removed',
+              entityType: 'upload',
+              entityId: null,
+              extra: { surface: 'org_logo', why: 'too_large', objects: 1 },
+            },
+            { organizationId: 'org-1', userId: 'user-1' },
+          ],
+        ]);
+      },
+    );
+
+    it.each([
+      ['a PNG of 10000 by 5001', pngHeaderOf(10000, 5001)],
+      ['a WebP of 7072 by 7072', webpHeaderOf(7072, 7072)],
+    ])(
+      '%s that is the saved logo already is refused, and never removed (part 6)',
+      async (_l, body) => {
+        logoStorage.body = body;
+        // The picture passes the check (no look there); the pixel refusal looks once.
+        stillNamedMock.mockResolvedValue(true);
+        const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-big.png` });
+        stillNamedMock.mockResolvedValue(false);
+        expect(result.ok).toBe(false);
+        expect(stillNamedMock.mock.calls).toEqual([['organizations', ['logo_url'], [`${LOGO_URL_BASE}logo-big.png`]]]);
+        expect(logoStorage.remove).not.toHaveBeenCalled();
         expect(audit).not.toHaveBeenCalled();
       },
     );
@@ -2294,7 +2335,7 @@ describe('avatar and logo finalize: the upload check (part 6)', () => {
     sessionState.role = 'admin';
     for (const k of Object.keys(objects)) delete objects[k];
     record.mockImplementation(async () => undefined);
-    fetchObjectPrefixMock.mockImplementation(async (_bucket: unknown, path: string) => {
+    fetchObjectWindowMock.mockImplementation(async (_bucket: unknown, path: string) => {
       const body = objects[path];
       return body ? { prefix: body, totalSize: body.byteLength } : null;
     });
@@ -2344,7 +2385,7 @@ describe('avatar and logo finalize: the upload check (part 6)', () => {
     async (tail) => {
       const result = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}${tail}` });
       expect(result.ok).toBe(false);
-      expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+      expect(fetchObjectWindowMock).not.toHaveBeenCalled();
       expect(saved('user_profiles')).toBe(false);
     },
   );
@@ -2377,5 +2418,74 @@ describe('avatar and logo finalize: the upload check (part 6)', () => {
     expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/l2.png']);
     expect(saved('user_profiles')).toBe(false);
     expect(saved('organizations')).toBe(false);
+  });
+
+  it('the avatar and the logo are held to their bucket ceilings: a larger one is refused from its size, never read whole', async () => {
+    fetchObjectWindowMock.mockImplementation(
+      async (_bucket: unknown, _path: string, _fetch: unknown, limit?: { maxTotalBytes?: number }) => ({
+        prefix: new Uint8Array(0),
+        totalSize: (limit?.maxTotalBytes ?? 0) + 1,
+        overLimit: true,
+      }),
+    );
+    const avatar = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}big.png` });
+    expect(avatar).toEqual(err('validation_error', 'This file is too large to upload. Pick a smaller one.'));
+    const logo = await setOrgLogoUrlAction({
+      url: 'https://supa.example.com/storage/v1/object/public/org-logos/org-1/big.png',
+    });
+    expect(logo.ok).toBe(false);
+    expect(fetchObjectWindowMock.mock.calls.map((c) => c[3])).toEqual([
+      { maxTotalBytes: 5 * 1024 * 1024 },
+      { maxTotalBytes: 5 * 1024 * 1024 },
+    ]);
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
+    expect(avatarStorage.remove).toHaveBeenCalledWith(['user-1/big.png']);
+    expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/big.png']);
+    expect(record).not.toHaveBeenCalled();
+    expect(vi.mocked(audit).mock.calls.map(([p]) => (p as { extra?: unknown }).extra)).toEqual([
+      { surface: 'avatar', why: 'too_large', objects: 1 },
+      { surface: 'org_logo', why: 'too_large', objects: 1 },
+    ]);
+    expect(saved('user_profiles')).toBe(false);
+    expect(saved('organizations')).toBe(false);
+  });
+
+  it('the saved avatar or logo, refused on a re-save, is never removed (the look comes first)', async () => {
+    stillNamedMock.mockResolvedValue(true);
+    objects['user-1/a4.png'] = HTML_PAGE;
+    objects['org-1/l4.png'] = HTML_PAGE;
+    expect((await setAvatarUrlAction({ url: `${AVATAR_PREFIX}a4.png` })).ok).toBe(false);
+    expect(
+      (await setOrgLogoUrlAction({
+        url: 'https://supa.example.com/storage/v1/object/public/org-logos/org-1/l4.png',
+      })).ok,
+    ).toBe(false);
+    expect(stillNamedMock.mock.calls).toEqual([
+      ['user_profiles', ['avatar_url'], [`${AVATAR_PREFIX}a4.png`]],
+      ['organizations', ['logo_url'], ['https://supa.example.com/storage/v1/object/public/org-logos/org-1/l4.png']],
+    ]);
+    expect(avatarStorage.remove).not.toHaveBeenCalled();
+    expect(logoStorage.remove).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+    stillNamedMock.mockResolvedValue(false);
+  });
+
+  it('a per-person limit, closed, comes before the avatar or the logo is read', async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, count: 21, resetAt: 0 });
+    objects['user-1/a5.png'] = TINY_PNG;
+    objects['org-1/l5.png'] = TINY_PNG;
+    const avatar = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}a5.png` });
+    const logo = await setOrgLogoUrlAction({
+      url: 'https://supa.example.com/storage/v1/object/public/org-logos/org-1/l5.png',
+    });
+    expect(avatar.ok || logo.ok).toBe(false);
+    if (!avatar.ok) expect(avatar.error.code).toBe('conflict');
+    if (!logo.ok) expect(logo.error.code).toBe('conflict');
+    expect(checkRateLimitMock).toHaveBeenCalledWith('avatar:set:user-1', 20, 60_000, 'closed');
+    expect(checkRateLimitMock).toHaveBeenCalledWith('org-logo:set:user-1', 20, 60_000, 'closed');
+    expect(fetchObjectWindowMock).not.toHaveBeenCalled();
+    expect(saved('user_profiles')).toBe(false);
+    expect(saved('organizations')).toBe(false);
+    checkRateLimitMock.mockResolvedValue({ allowed: true, count: 1, resetAt: 0 });
   });
 });

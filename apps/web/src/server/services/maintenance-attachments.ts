@@ -17,7 +17,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
-import { checkUploadBytes, checkUploadPrefix } from '@/server/security/upload-checks';
+import { auditRemoval, checkUploadBytes, checkUploadPrefix } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
@@ -470,6 +470,10 @@ export class MaintenanceAttachmentsService {
     }
     if (recordedPaths.length > 0) {
       await store.remove([args.path]);
+      await auditRemoval('maintenance_photo', 'path_refusal', 1, {
+        organizationId: this.ctx.organizationId,
+        userId: this.ctx.userId,
+      });
       throw new ServiceError('forbidden', 'Invalid upload path.');
     }
 
@@ -519,7 +523,13 @@ export class MaintenanceAttachmentsService {
         throw err;
       }
       if (recorded.includes(args.path)) throw new ServiceError('conflict', ALREADY_RECORDED);
-      await store.remove(recorded.length > 0 ? [args.path] : [args.path, thumbPath]);
+      const removing = recorded.length > 0 ? [args.path] : [args.path, thumbPath];
+      await store.remove(removing);
+      // Part 6: every removal of a refused upload leaves one audit line.
+      await auditRemoval('maintenance_photo', 'path_refusal', removing.length, {
+        organizationId: this.ctx.organizationId,
+        userId: this.ctx.userId,
+      });
       if (notify) this.notifyPhotoRejected(requestId, parent);
       throw err;
     };

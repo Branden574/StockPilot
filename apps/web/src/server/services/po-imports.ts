@@ -44,7 +44,7 @@ import {
   type TrackingProfileCache,
 } from './sports-profiles';
 import { buildPoCharges } from '@/lib/po-imports/charges';
-import type { UploadKind } from '@/lib/upload-inspect';
+import type { UploadKind, UploadRefusalFamily } from '@/lib/upload-inspect';
 import {
   isAllowedPoImportUploadMime,
   PO_IMPORT_SCAN_MIME_TYPES,
@@ -55,7 +55,7 @@ import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { isValidStoragePath, poImportPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { checkUploadBytes } from '@/server/security/upload-checks';
+import { auditRemoval, checkUploadBytes } from '@/server/security/upload-checks';
 import {
   encodedInValueLength,
   IN_FILTER_MAX_ENCODED_CHARS,
@@ -237,29 +237,30 @@ const PO_SCAN_KINDS: readonly UploadKind[] = ['jpeg', 'png', 'webp', 'heic', 'pd
 /**
  * A refused import file is removed with the service role (its path was
  * shape-checked when the row was recorded), UNLESS another import in the
- * organization names the same object: a scan's file is keyed by its hash and
- * shared with a cancelled earlier import of the same document, and a
- * recorded path may name any file in the folder. Removing it then would break
- * that other import's document link, so it is kept, and it is kept when that
- * look fails too. Best-effort: the refusal stands either way, and nothing
- * serves this bucket.
+ * organization names the same object (a scan's file is keyed by its hash and
+ * shared with a cancelled earlier import of the same document). Removing it
+ * then would break that other import's document link, so it is kept, and it
+ * is kept when that look fails too. A removal leaves one audit line.
+ * Best-effort: the refusal stands either way, and nothing serves this bucket.
  */
 async function removeRefusedImportFile(
-  organizationId: string,
+  ctx: Pick<ServiceContext, 'organizationId' | 'userId'>,
   importId: string,
   path: string,
+  why: UploadRefusalFamily,
 ): Promise<void> {
   try {
     const admin = createAdminClient();
     const { data: others, error } = await admin
       .from('po_imports')
       .select('id')
-      .eq('organization_id', organizationId)
+      .eq('organization_id', ctx.organizationId)
       .eq('storage_path', path)
       .neq('id', importId)
       .limit(1);
     if (error || !Array.isArray(others) || others.length > 0) return;
     await admin.storage.from('po-imports').remove([path]);
+    await auditRemoval('po_import_file', why, 1, { organizationId: ctx.organizationId, userId: ctx.userId });
   } catch {
     // Deliberately swallowed.
   }
@@ -1387,7 +1388,14 @@ export class PoImportsService {
             : 'This file is not a CSV text file. Save it as CSV and upload it again.',
       });
       if (!checked.ok) {
-        await removeRefusedImportFile(this.ctx.organizationId, id, header.storage_path as string);
+        // Removed only at the first parse of a CSV or PDF upload: a file an
+        // earlier parse already read is kept (the refusal stands).
+        const firstParse =
+          header.status === 'uploaded' &&
+          ((header.source_type as string) === 'csv' || (header.source_type as string) === 'pdf');
+        if (firstParse) {
+          await removeRefusedImportFile(this.ctx, id, header.storage_path as string, checked.family);
+        }
         throw new RefusedImportFileError(checked.message);
       }
       const parsed = await parsePoFile(buffer, sourceType);

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { createAdminClientMock, createSignedUrlMock, createSignedUrlsMock, fetchObjectPrefixMock } = vi.hoisted(() => ({
+const { createAdminClientMock, createSignedUrlMock, createSignedUrlsMock, fetchObjectWindowMock } = vi.hoisted(() => ({
   createAdminClientMock: vi.fn(),
   createSignedUrlMock: vi.fn(),
   createSignedUrlsMock: vi.fn(),
-  fetchObjectPrefixMock: vi.fn(),
+  fetchObjectWindowMock: vi.fn(),
 }));
 
 // Pass-through so the wrapped per-path signer runs on every call (i.e.
@@ -18,14 +18,24 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: createAdminClientMock,
 }));
 
-// record() sniffs the just-uploaded object via a RANGE READ of its leading
-// bytes (fetchObjectPrefix) instead of a full download(). The helper is the
-// seam — its own suite (lib/storage-object-prefix.test.ts) proves the
-// range/streaming mechanics; here it defaults to a genuine png prefix so the
-// audit-capture tests below exercise the ordinary "an image was uploaded"
-// path (mirrors supabase-mock's old download() default and its rationale).
+// record() checks the just-uploaded object from a RANGE READ of its leading
+// bytes (fetchObjectWindow, part 6's upload check) instead of a full
+// download(). The helper is the seam — its own suite
+// (lib/storage-object-prefix.test.ts) proves the range/streaming mechanics;
+// here it defaults to a genuine png that fits the window, so the audit-capture
+// tests below exercise the ordinary "an image was uploaded" path and no whole
+// read is made.
 vi.mock('@/lib/storage-object-prefix', () => ({
-  fetchObjectPrefix: fetchObjectPrefixMock,
+  fetchObjectWindow: fetchObjectWindowMock,
+  fetchObjectWhole: vi.fn(async () => null),
+}));
+// The record's own per-person limit and its look for a recorded object
+// (part 6) are tested in item-images.upload-checks.test.ts.
+vi.mock('@/lib/rate-limit', () => ({
+  checkRateLimit: vi.fn(async () => ({ allowed: true, failed: false })),
+}));
+vi.mock('@/server/services/upload-still-named', () => ({
+  uploadObjectsStillNamed: vi.fn(async () => false),
 }));
 
 vi.mock('./context', () => ({
@@ -122,7 +132,7 @@ beforeEach(() => {
     },
   });
   const png = mockPngPrefix();
-  fetchObjectPrefixMock.mockResolvedValue({ prefix: png, totalSize: png.byteLength });
+  fetchObjectWindowMock.mockResolvedValue({ prefix: png, totalSize: png.byteLength });
 });
 
 /**
@@ -696,7 +706,7 @@ describe('ItemImagesService.record — thumb sidecar verification (SP-135)', () 
     const remove = pinBucket(stub);
     const png = mockPngPrefix();
     const html = new TextEncoder().encode('<html><script>alert(1)</script></html>');
-    fetchObjectPrefixMock.mockImplementation(async (_bucket: unknown, path: string) =>
+    fetchObjectWindowMock.mockImplementation(async (_bucket: unknown, path: string) =>
       path === THUMB
         ? { prefix: html, totalSize: html.byteLength }
         : { prefix: png, totalSize: png.byteLength },
@@ -711,7 +721,8 @@ describe('ItemImagesService.record — thumb sidecar verification (SP-135)', () 
 
     expect(remove).toHaveBeenCalledWith([MASTER, THUMB]);
     expect(stub.chains.has('item_images.insert')).toBe(false);
-    expect(audit).not.toHaveBeenCalled();
+    // No item change is audited; the removal leaves its one line (part 6).
+    expect(vi.mocked(audit).mock.calls.map(([p]) => p.event)).toEqual(['security.upload_refused_removed']);
   });
 
   it('treats a MISSING thumb object as "no thumb" — records thumb_path null and still succeeds', async () => {
@@ -724,7 +735,7 @@ describe('ItemImagesService.record — thumb sidecar verification (SP-135)', () 
     });
     const remove = pinBucket(stub);
     const png = mockPngPrefix();
-    fetchObjectPrefixMock.mockImplementation(async (_bucket: unknown, path: string) =>
+    fetchObjectWindowMock.mockImplementation(async (_bucket: unknown, path: string) =>
       path === THUMB ? null : { prefix: png, totalSize: png.byteLength },
     );
     const svc = new ItemImagesService(

@@ -1053,6 +1053,10 @@ describe('finalize: the upload check (part 6)', () => {
     expect(storage.upload).not.toHaveBeenCalled();
     expect(recordArgs(admin)).toBeUndefined();
     expectOneRefusal(record, { reason, organizationId: ORG }, [PATH, FILE]);
+    // The removal leaves one audit line, with no path.
+    const lines = vi.mocked(audit).mock.calls.filter(([e]) => e.event === 'security.upload_refused_removed');
+    expect(lines.map(([e]) => e.extra)).toEqual([{ surface: 'exception_evidence', why: 'path_refusal', objects: 1 }]);
+    expect(JSON.stringify(lines)).not.toContain(FILE);
   });
 
   it('an empty object or one never uploaded is this path\'s own refusal: no event', async () => {
@@ -1072,6 +1076,7 @@ describe('finalize: the upload check (part 6)', () => {
     });
     expect(storage.remove).not.toHaveBeenCalled();
     expectOneRefusal(record, { reason: 'upload_wrong_type', organizationId: ORG });
+    expect(vi.mocked(audit).mock.calls.some(([e]) => e.event === 'security.upload_refused_removed')).toBe(false);
   });
 
   it('a recorder that fails: still refused, still deleted, still no row', async () => {
