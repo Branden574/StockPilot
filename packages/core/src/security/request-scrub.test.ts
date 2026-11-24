@@ -24,12 +24,14 @@ import {
   SAMPLE_SECRET_KEY_NAMES,
   SAMPLE_SECRET_KEY_PARTS,
   SAMPLE_TARGET_MAX,
+  SAMPLE_TOKEN_RUN_MIN,
   SAMPLE_UNREADABLE_TARGET,
   SCRUB_RULES,
   isSampleMethod,
   isSecretQueryKey,
   isStorableSample,
   isStorableTarget,
+  looksLikeToken,
   scrubRequestSample,
   scrubRequestTarget,
 } from './request-scrub';
@@ -115,6 +117,7 @@ function plantedValues(seq: ReturnType<typeof sequence>): Planted {
     'hex',
     'jwt',
     'dotted_token',
+    'short_token',
   ] as const);
   const word = () => seq.text(LOWER, seq.int(3, 9));
   switch (kind) {
@@ -174,6 +177,9 @@ function plantedValues(seq: ReturnType<typeof sequence>): Planted {
       const part = () => seq.text(BASE64URL, seq.int(16, 40));
       return { kind, value: `${part()}.${part()}.${part()}`, written: '' };
     }
+    case 'short_token':
+      // The shape of this app's invite token: 22 characters of base64url.
+      return { kind, value: seq.text(BASE64URL, 22), written: '' };
   }
 }
 
@@ -386,19 +392,19 @@ describe('each rule', () => {
     expect(t('/x/12:30:45/v1.2.3/.env')).toBe('/x/12:30:45/v1.2.3/.env');
   });
   it('a long value, and a short key before it is kept', () => {
-    expect(t(`/x/${'xy12'.repeat(8)}/.env`)).toBe('/x/<long value>/.env');
+    expect(t(`/x/${'wxyz'.repeat(8)}/.env`)).toBe('/x/<long value>/.env');
+    // Letters and digits mixed through it: a token.
+    expect(t(`/x/${'xy12'.repeat(8)}/.env`)).toBe('/x/<token>/.env');
     expect(scrubRequestSample(`q=${'abcdefghij'.repeat(3)}`)).toBe('q=<long value>');
     expect(scrubRequestSample(`${'k'.repeat(24)}=1`)).toBe('<long value>');
     expect(scrubRequestSample('q=hello+world+these+are+words')).toBe('q=<long value>');
   });
-  it('a long base64url run that changes case and digits like a random value', () => {
-    expect(t('/x/Zk3_q9Lm-7Rt2_Wx8-Bv4Nc6Yp1/.env')).toBe('/x/<long value>/.env');
+  it('a run shaped like a token, short or long, with `-` and `_` or without', () => {
+    expect(t('/x/Zk3_q9Lm-7Rt2_Wx8-Bv4Nc6Yp1/.env')).toBe('/x/<token>/.env');
     expect(t('/wp-content/plugins/advanced-custom-fields-pro/x.php')).toBe(
       '/wp-content/plugins/advanced-custom-fields-pro/x.php',
     );
-    expect(t('/wp-content/plugins/Simple_Ajax_Chat_v2_Plugin/x.php')).toBe(
-      '/wp-content/plugins/Simple_Ajax_Chat_v2_Plugin/x.php',
-    );
+    expect(t('/wp-content/plugins/JMXInvokerServlet/x.php')).toBe('/wp-content/plugins/JMXInvokerServlet/x.php');
   });
   it('a JWT shape, and any three long base64url parts joined by dots', () => {
     const part = 'Ab1_'.repeat(5);
@@ -527,7 +533,7 @@ describe('generated hostile inputs (seeded)', () => {
       expectSafe(out, planted, SAMPLE_TARGET_MAX);
       expect(scrubRequestTarget(out), `scrubbed twice: ${input}`).toBe(out);
     }
-    expect(kinds.size).toBe(18);
+    expect(kinds.size).toBe(19);
   });
 
   it(`${RUNS} query strings: the same, for samples`, () => {
@@ -542,7 +548,7 @@ describe('generated hostile inputs (seeded)', () => {
       expectSafe(out, planted, SAMPLE_QUERY_MAX);
       expect(scrubRequestSample(out), `scrubbed twice: ${input}`).toBe(out);
     }
-    expect(kinds.size).toBe(19);
+    expect(kinds.size).toBe(20);
   });
 
   it('a planted value with a malformed escape somewhere: unreadable, or no sample', () => {
@@ -569,6 +575,130 @@ describe('generated hostile inputs (seeded)', () => {
         expect(isStorableSample(sample), raw).toBe(true);
         expect(scrubRequestSample(sample)).toBe(sample);
       }
+    }
+  });
+});
+
+// ── A short token, in every position (0479 review, round 2) ─────────────────
+
+describe('a 22-character base64url token, which the table lets through, never survives', () => {
+  const seq = sequence(0x5eed05);
+  const tokens = Array.from({ length: 2_000 }, () => seq.text(BASE64URL, 22));
+
+  const POSITIONS: Array<[string, (v: string) => string | null]> = [
+    ['a middle path segment', (v) => scrubRequestTarget(`/backup/${v}/.env`)],
+    ['the last path segment', (v) => scrubRequestTarget(`/backup/${v}`)],
+    ['a file name before its extension', (v) => scrubRequestTarget(`/x/${v}.php`)],
+    ['a query value under an ordinary key', (v) => scrubRequestSample(`page=2&q=${v}`)],
+    ['a query value with no key', (v) => scrubRequestSample(v)],
+    ['a query key itself', (v) => scrubRequestSample(`${v}=1&page=2`)],
+  ];
+
+  it.each(POSITIONS)('as %s', (_where, scrub) => {
+    for (const value of tokens) {
+      const out = scrub(value) ?? '';
+      expect(out.includes(value), `${value} -> ${out}`).toBe(false);
+      expect(decodedForm(out).includes(value)).toBe(false);
+    }
+  });
+
+  it('nor with a word joined to it by `-` or `_`', () => {
+    for (const value of tokens.slice(0, 500)) {
+      for (const joined of [`invite-${value}`, `${value}_backup`, `x-${value}-y`]) {
+        expect(scrubRequestTarget(`/a/${joined}/.env`).includes(value), joined).toBe(false);
+      }
+    }
+  });
+
+  it('every length from the shortest looked at up to 43', () => {
+    for (let n = SAMPLE_TOKEN_RUN_MIN + 2; n <= 43; n++) {
+      for (let i = 0; i < 300; i++) {
+        const value = seq.text(BASE64URL, n);
+        expect(scrubRequestTarget(`/x/${value}/.env`).includes(value), value).toBe(false);
+      }
+    }
+  });
+
+  it('is replaced by <token>', () => {
+    expect(scrubRequestTarget(`/x/${tokens[0]}/.env`)).toBe('/x/<token>/.env');
+    expect(scrubRequestSample(`q=${tokens[1]}`)).toBe('q=<token>');
+  });
+
+  it('the ordinary mixed-case names it also replaces (a digit, few vowels, or not only words), pinned', () => {
+    const replaced = [
+      'Simple_Ajax_Chat_v2_Plugin',
+      'wpFileManagerPro_2024_v3',
+      'MyPlugin2Settings_Config',
+      'phpMyAdmin-5-2-1-all-languages',
+      'WordPress_SEO_by_Yoast',
+      'ExchangeServer2019',
+      'Ultimate_Member_v2',
+      'ContactForm7_Extension',
+      'WP_Super_Cache_2',
+      'GetObjectList_v2',
+      'getUserById2023x',
+      'RevSliderAdmin_v6',
+      'iPhone14ProMax_case',
+      'UTF8_General_CI_x64',
+      'CVE-2021-44228-test',
+      'CVE_2017_9841_check',
+      'HtmlAdaptor_action_InvokeOp',
+      'jmx-console_HtmlAdaptor',
+      'elFinderConnector_php',
+      'FCKeditor_2_6_editor',
+      'getAllUsersFromDB',
+      'ShowUserProfileById',
+      'MSSQL_DB_Backup_x64',
+      'SAP_NetWeaver_Portal_7',
+      'AppsLocalLogin_jsp',
+      'OWA_Exchange_2016_CU23',
+      'ZyXEL_NAS_Firmware_v5',
+      'iOS_17_Profile_Install',
+    ];
+    for (const name of replaced) {
+      expect(looksLikeToken(name), name).toBe(true);
+      expect(scrubRequestTarget(`/x/${name}/.env`), name).toBe('/x/<token>/.env');
+    }
+  });
+
+  it('the ordinary names it keeps', () => {
+    const kept = [
+      // No capital, or no lower-case letter: never a token.
+      'advanced-custom-fields-pro',
+      'google-analytics-for-wordpress',
+      'all-in-one-wp-migration',
+      'call_user_func_array',
+      'ee-simple-file-list-ajax',
+      'jquery-ui-1-12-1',
+      'x86_64-linux-gnu',
+      'backup-2026-01-31-db',
+      'nginx-1-25-3-alpine',
+      'XDEBUG_SESSION_START',
+      'HTTP_X_FORWARDED_FOR',
+      'AWS_ACCESS_KEY_ID',
+      // Mixed case, only words and short acronyms, no digit.
+      'PHPUnit_Framework_TestCase',
+      'WooCommerce-Payments',
+      'JetEngine_Booking_Form',
+      'TinyMCE_Advanced',
+      'InfiniteWP_Client',
+      'SpringBootActuator',
+      'Content-Disposition',
+      'Revslider_Show_Image',
+      'ThemeGrill_Demo_Importer',
+      'WPvivid_Backup_Restore',
+      'DuplicatorPro_Installer',
+      'UpdraftPlus_Backups',
+      'DotNetNuke_Install_wizard',
+      'JMXInvokerServlet',
+      'EJBInvokerServlet',
+      'ProductKeyExtractor',
+      'Telerik-Web-UI-WebResource',
+      'ScriptResource_axd',
+    ];
+    for (const name of kept) {
+      expect(looksLikeToken(name), name).toBe(false);
+      expect(scrubRequestTarget(`/wp-content/plugins/${name}/x.php`), name).toBe(`/wp-content/plugins/${name}/x.php`);
     }
   });
 });

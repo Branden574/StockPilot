@@ -411,30 +411,97 @@ function findLongValue(view: string): Found[] {
   });
 }
 
+/** The shortest run of letters, digits, `-` and `_` that is looked at as a possible token. */
+export const SAMPLE_TOKEN_RUN_MIN = 16;
+
+const TOKEN_RUN = new RegExp(
+  `(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{${SAMPLE_TOKEN_RUN_MIN},}(?![A-Za-z0-9_-])`,
+  'g',
+);
+
+/** The pieces of one part of a run: a capital acronym, a word, or a digit group. */
+const RUN_PIECE = /[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/g;
+
 /**
- * A run of 24 or more letters, digits, `-` and `_` that changes between
- * lower case, upper case and digits as often as a random value does (at
- * least five times, and at least once in five characters), which a plugin or
- * file name does not: `advanced-custom-fields-pro` and `Simple_Ajax_Chat_v2`
- * are kept, a token in base64url is not.
+ * Whether a run reads as a name made of words: split at `-` and `_`, each
+ * part is only words (three letters or more, with a vowel: a, e, i, o, u or
+ * y), capital acronyms of at most five letters (at most three of them), digit
+ * groups, and a `v` or `x` just before digits (`v2`, `x64`); at least one word.
  */
-function looksRandom(text: string): boolean {
-  let changes = 0;
-  for (let i = 1; i < text.length; i++) {
-    const a = classOf(text[i - 1]!);
-    const b = classOf(text[i]!);
-    if (a === 'other' || b === 'other' || a === b) continue;
-    // A capital after a lower-case letter (camelCase) or any letter next to a digit.
-    if ((a === 'lower' && b === 'upper') || a === 'digit' || b === 'digit') changes++;
+function readsAsWords(run: string): boolean {
+  let acronyms = 0;
+  let words = 0;
+  for (const part of run.split(/[-_]+/)) {
+    const pieces = part.match(RUN_PIECE) ?? [];
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i]!;
+      if (/^[0-9]+$/.test(piece)) continue;
+      if (/^[A-Z]+$/.test(piece)) {
+        if (piece.length > 5) return false;
+        acronyms++;
+        continue;
+      }
+      if (/^[vx]$/.test(piece) && /^[0-9]/.test(pieces[i + 1] ?? '')) continue;
+      if (piece.length < 3 || !/[aeiouy]/i.test(piece)) return false;
+      words++;
+    }
   }
-  return changes >= 5 && changes * 5 >= text.length;
+  return acronyms <= 3 && words >= 1;
 }
 
-function classOf(ch: string): 'lower' | 'upper' | 'digit' | 'other' {
-  if (ch >= 'a' && ch <= 'z') return 'lower';
-  if (ch >= 'A' && ch <= 'Z') return 'upper';
-  if (ch >= '0' && ch <= '9') return 'digit';
-  return 'other';
+/**
+ * Whether a run of letters, digits, `-` and `_` (one whole run, at least
+ * SAMPLE_TOKEN_RUN_MIN long) is shaped like a token, such as this app's
+ * 22-character base64url invite token, which the table's long-value rule
+ * lets through (it is under 24 characters, and a `-` or `_` breaks a run).
+ * With both an upper-case and a lower-case letter, it is when either
+ *   - it shows a sign of a random value: a digit, or vowels under a quarter
+ *     of its letters, or three or more capitals right after a lower-case
+ *     letter; or
+ *   - it does not read as a name made of words (readsAsWords).
+ * With one letter case only, it is when a letter and a digit stand next to
+ * each other four times or more (`x86_64-linux-gnu`, `backup-2026-01-31-db`
+ * and `XDEBUG_SESSION_START` are kept).
+ * Measured on random base64url values (see PROGRESS.md for the counts); the
+ * mixed-case names it also replaces and the names it keeps are pinned in
+ * request-scrub.test.ts.
+ */
+/** How often a letter and a digit stand next to each other in `run`. */
+function letterDigitChanges(run: string): number {
+  let changes = 0;
+  for (let i = 1; i < run.length; i++) {
+    const a = run[i - 1]!;
+    const b = run[i]!;
+    const aDigit = a >= '0' && a <= '9';
+    const bDigit = b >= '0' && b <= '9';
+    const aLetter = /[A-Za-z]/.test(a);
+    const bLetter = /[A-Za-z]/.test(b);
+    if ((aDigit && bLetter) || (aLetter && bDigit)) changes++;
+  }
+  return changes;
+}
+
+export function looksLikeToken(run: string): boolean {
+  let upper = 0;
+  let lower = 0;
+  let digits = 0;
+  let vowels = 0;
+  let humps = 0;
+  for (let i = 0; i < run.length; i++) {
+    const c = run[i]!;
+    if (c >= 'A' && c <= 'Z') {
+      upper++;
+      const before = run[i - 1];
+      if (before !== undefined && before >= 'a' && before <= 'z') humps++;
+    } else if (c >= 'a' && c <= 'z') lower++;
+    else if (c >= '0' && c <= '9') digits++;
+    if ('aeiouAEIOU'.includes(c)) vowels++;
+  }
+  // One letter case only (or none): a token only when letters and digits
+  // are mixed through it, which a name with a version or a date is not.
+  if (upper === 0 || lower === 0) return letterDigitChanges(run) >= 4;
+  const randomSign = digits > 0 || vowels * 4 < upper + lower || humps >= 3;
+  return randomSign || !readsAsWords(run);
 }
 
 function countDigits(text: string): number {
@@ -485,13 +552,14 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
     marker: SAMPLE_MARKERS.id,
     find: (view) => all(/(?<![0-9A-Fa-f])[0-9A-Fa-f]{32}(?![0-9A-Fa-f])/g, view),
   },
-  { name: 'long_value', marker: SAMPLE_MARKERS.longValue, find: findLongValue },
   {
-    name: 'random_run',
-    marker: SAMPLE_MARKERS.longValue,
-    find: (view) =>
-      all(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{24,}(?![A-Za-z0-9_-])/g, view, looksRandom),
+    // A run shaped like a token (looksLikeToken), long or short, with `-` and `_` or without.
+    name: 'token_shape',
+    marker: SAMPLE_MARKERS.token,
+    find: (view) => all(TOKEN_RUN, view, looksLikeToken),
   },
+  { name: 'long_value', marker: SAMPLE_MARKERS.longValue, find: findLongValue },
+
   {
     name: 'digits',
     marker: SAMPLE_MARKERS.number,
