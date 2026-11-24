@@ -120,6 +120,8 @@ describe('reading the outline', () => {
     expect(countryCodeOf({ ISO_A2: '-99', ISO_A2_EH: 'FR' })).toBe('FR');
     expect(countryCodeOf({ ISO_A2: 'DE', ISO_A2_EH: '-99' })).toBe('DE');
     expect(countryCodeOf({ ISO_A2: 'CN-TW', ISO_A2_EH: 'TW' })).toBe('TW');
+    // Both well formed and different: ISO_A2_EH is the one kept.
+    expect(countryCodeOf({ ISO_A2: 'AA', ISO_A2_EH: 'BB' })).toBe('BB');
     expect(countryCodeOf({ ISO_A2: 'de', ISO_A2_EH: '<b>' })).toBeNull();
     expect(countryCodeOf(null)).toBeNull();
   });

@@ -321,6 +321,22 @@ describe('the reads', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it('one read at a time: a tab hidden and shown while a read is out sends no second read', async () => {
+    const { spy } = mount(() => new Promise(() => {}));
+    await advance(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+    visibility = 'hidden';
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    visibility = 'visible';
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await advance(10 * 60_000);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it("a read of the last ten minutes never replaces the window's table or numbers", async () => {
     mount(async (input) =>
       (input as { scope: string }).scope === 'whole' ? wholeRead() : recentRead(liveAnswer()),
@@ -397,6 +413,10 @@ describe('flagged against blocked', () => {
     expect(blocked.querySelector('[data-mark]')!.getAttribute('data-mark')).toBe('filled');
     expect(flaggedArc.querySelector('path')!.getAttribute('stroke-dasharray')).not.toBeNull();
     expect(flaggedArc.querySelector('[data-mark]')!.getAttribute('data-mark')).toBe('hollow');
+    // The mark itself, not only its label: hollow has no fill, filled has the colour.
+    expect(flaggedArc.querySelector('[data-mark]')!.getAttribute('fill')).toBe('none');
+    const blockedFill = blocked.querySelector('[data-mark]')!.getAttribute('fill');
+    expect(blockedFill).toMatch(/^#[0-9a-f]{6}$/);
     expect(Number(flaggedArc.querySelector('path')!.getAttribute('stroke-width'))).toBeLessThan(
       Number(blocked.querySelector('path')!.getAttribute('stroke-width')),
     );

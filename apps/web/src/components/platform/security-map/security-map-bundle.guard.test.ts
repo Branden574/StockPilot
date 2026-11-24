@@ -74,9 +74,13 @@ describe("three.js stays in the attack map's lazy island", () => {
     ]);
     const island = files.find((f) => f.rel === `${DIR}/security-map-island.tsx`)!.text;
     expect(island.startsWith("'use client';")).toBe(true);
-    expect(island).toMatch(
-      /dynamic\(\s*\(\) => import\('\.\/security-map-client'\)[\s\S]*?ssr: false/,
+    // The code only, comments taken out: a comment that says "ssr: false"
+    // proves nothing.
+    const code = island.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code).toMatch(
+      /dynamic\(\s*\(\) =>\s*import\('\.\/security-map-client'\)\.then\(\(m\) => m\.SecurityMapClient\),\s*\{\s*ssr: false,/,
     );
+    expect(code.match(/\bssr:/g)).toHaveLength(1);
   });
 
   it('the globe component, the client and the island are client modules', () => {
