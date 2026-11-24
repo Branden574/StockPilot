@@ -360,11 +360,16 @@ async function fetchWholeObject(
   }
   if (!res.body) return null;
   try {
-    const body = await readPrefixFromStream(res.body, expectedSize);
+    // With no stated length, the body must END BY ITSELF at the attested
+    // size: one byte more is read for that, and a body with more is not the
+    // object the window read (it changed): unreadable, never a prefix judged
+    // as the whole.
+    const stated = lenHeader !== null;
+    const body = await readPrefixFromStream(res.body, stated ? expectedSize : expectedSize + 1);
     // A stream that ended short of the attested size is a failed read, not a
     // smaller object — judging (and possibly deleting) on a partial body is
     // exactly what this fallback exists to avoid.
-    if (body.byteLength < expectedSize) return null;
+    if (body.byteLength !== expectedSize) return null;
     return { prefix: body, totalSize: expectedSize };
   } catch {
     return null;

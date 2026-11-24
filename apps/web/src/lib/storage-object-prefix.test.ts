@@ -416,12 +416,34 @@ describe('fetchObjectWhole (part 6)', () => {
   it('reads exactly the stated size and cancels the rest', async () => {
     const full = objectBytes(10240);
     const { stream, seen } = countingStream(concat2(full, new Uint8Array(50_000)));
-    const fetchImpl = vi.fn(async () => new Response(stream, { status: 200 }));
+    const fetchImpl = vi.fn(
+      async () => new Response(stream, { status: 200, headers: { 'content-length': '10240' } }),
+    );
     const out = await fetchObjectWhole(okSigner(), PATH, 10240, fetchImpl as unknown as typeof fetch);
     expect(out!.byteLength).toBe(10240);
     expect(Array.from(out!.subarray(0, 8))).toEqual(Array.from(full.subarray(0, 8)));
     expect(seen.pulled).toBeLessThanOrEqual(10240 + 1024);
     expect(seen.cancelled).toBe(true);
+  });
+
+  it('with no stated length, the body must end by itself at the size: one with more is never judged as the whole (review round 2, F3)', async () => {
+    const full = objectBytes(10240);
+    const unstated = (bytes: Uint8Array) =>
+      vi.fn(async () => {
+        const res = new Response(countingStream(bytes).stream, { status: 200 });
+        res.headers.delete('content-length');
+        return res;
+      });
+    // The object grew after the window read: its first 10240 bytes are not the object.
+    const longer = unstated(concat2(full, new Uint8Array(50_000)));
+    expect(await fetchObjectWhole(okSigner(), PATH, 10240, longer as unknown as typeof fetch)).toBeNull();
+    // One byte more is enough to tell.
+    const oneMore = unstated(concat2(full, new Uint8Array(1)));
+    expect(await fetchObjectWhole(okSigner(), PATH, 10240, oneMore as unknown as typeof fetch)).toBeNull();
+    // A body that ends by itself at the stated size is the whole object.
+    const exact = unstated(full);
+    const out = await fetchObjectWhole(okSigner(), PATH, 10240, exact as unknown as typeof fetch);
+    expect(out!.byteLength).toBe(10240);
   });
 
   it('a body that ends short, a length other than the stated one, or a failure is null', async () => {
