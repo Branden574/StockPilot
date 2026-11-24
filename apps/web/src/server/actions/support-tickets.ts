@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { clientIpFromHeaders } from '@/lib/client-ip';
+import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { isValidStoragePath, supportAttachmentPathShape } from '@/lib/storage-path';
@@ -169,6 +170,7 @@ export async function submitDashboardTicketAction(
         unreadableMessage: SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE,
       });
     } catch (e) {
+      rethrowControlFlow(e);
       if (e instanceof ServiceError) return { ok: false, error: e.message };
       void reportError(e, { tag: 'support-tickets.dashboard-screenshot' });
       return { ok: false, error: 'Could not submit your request. Please try again.' };

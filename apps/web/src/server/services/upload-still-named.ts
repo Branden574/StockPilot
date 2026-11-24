@@ -22,6 +22,7 @@ export async function uploadObjectsStillNamed(
     const { data, error } = await admin
       .from(table)
       .select('id')
+      // in-list-bound: one upload's objects (a file and its thumbnail or poster), two paths at most
       .in(column, [...paths])
       .limit(1);
     if (error) throw new Error(`${table}.${column} look failed`);

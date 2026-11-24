@@ -17,7 +17,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
 import { AVATAR_MAX_BYTES, ORG_LOGO_MAX_BYTES } from '@/lib/upload-size-limits';
-import { auditRemoval, checkStoredUpload } from '@/server/security/upload-checks';
+import { checkStoredUpload, removeUnlessNamed } from '@/server/security/upload-checks';
 import { uploadObjectsStillNamed } from '@/server/services/upload-still-named';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
@@ -439,7 +439,8 @@ export async function setOrgLogoUrlAction(input: {
       }
       const logos = createAdminClient().storage.from('org-logos');
       // The saved logo (a re-save of the same URL) is never removed.
-      const logoStillNamed = () => uploadObjectsStillNamed('organizations', ['logo_url'], [candidate]);
+      const logoStillNamed = (_paths?: readonly string[]) =>
+        uploadObjectsStillNamed('organizations', ['logo_url'], [candidate]);
       const checked = await checkStoredUpload(logos, objectPath, {
         surface: 'org_logo',
         accept: uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['org-logos']),
@@ -468,20 +469,11 @@ export async function setOrgLogoUrlAction(input: {
           size.height !== null &&
           size.width * size.height > DECODE_MAX_INPUT_PIXELS[checked.kind]
         ) {
-          // The same guard and audit line as every refused upload (part 6).
-          let named = true;
-          try {
-            named = await logoStillNamed();
-          } catch {
-            named = true;
-          }
-          if (!named) {
-            await logos.remove([objectPath]);
-            await auditRemoval('org_logo', 'too_large', 1, {
-              organizationId: ctx.organizationId,
-              userId: ctx.userId,
-            });
-          }
+          // The same look and audit line as every refused upload (part 6).
+          await removeUnlessNamed(logos, [objectPath], logoStillNamed, 'org_logo', 'too_large', {
+            organizationId: ctx.organizationId,
+            userId: ctx.userId,
+          });
           return err(
             'validation_error',
             `That logo is too large to print (${size.width} by ${size.height} pixels). Save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.`,

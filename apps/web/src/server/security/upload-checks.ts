@@ -286,21 +286,38 @@ async function removeRefused(
   input: StoredUploadInput,
   why: UploadRemovalWhy,
 ): Promise<void> {
-  const paths = [...new Set(input.removeOnRefusal)];
-  if (paths.length === 0) return;
+  await removeUnlessNamed(store, input.removeOnRefusal, input.stillNamed, input.surface, why, input.removedBy);
+}
+
+/**
+ * The same removal for a path that refuses a file on a rule of its own
+ * (the logo's pixel limit): the look first, then the removal and its one
+ * audit line. True when the objects were removed.
+ */
+export async function removeUnlessNamed(
+  store: { remove(paths: string[]): Promise<unknown> },
+  objects: readonly string[],
+  stillNamed: (paths: readonly string[]) => Promise<boolean>,
+  surface: UploadSurface,
+  why: UploadRemovalWhy,
+  by: UploadRemovedBy,
+): Promise<boolean> {
+  const paths = [...new Set(objects)];
+  if (paths.length === 0) return false;
   let named: boolean;
   try {
-    named = await input.stillNamed(paths);
+    named = await stillNamed(paths);
   } catch {
     named = true;
   }
-  if (named) return;
+  if (named) return false;
   try {
     await store.remove(paths);
   } catch {
     // Deliberately swallowed: no row points at the object.
   }
-  await auditRemoval(input.surface, why, paths.length, input.removedBy);
+  await auditRemoval(surface, why, paths.length, by);
+  return true;
 }
 
 /** One audit line for a removal: the surface, the kind of refusal and how many objects. */
