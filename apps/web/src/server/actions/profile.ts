@@ -268,10 +268,7 @@ export async function setAvatarUrlAction(input: {
       if (!candidate.startsWith(prefix)) {
         return err('validation_error', 'Avatar URL must point at your own avatar in the StockPilot storage bucket.');
       }
-      // Part 6: the avatar's finalize check. user-avatars is a PUBLIC bucket
-      // whose allowed_mime_types (0046) only read the Content-Type the browser
-      // sent, so until now nothing had looked at the bytes this URL names.
-      // The key is shape-checked first (the prefix check above is only a
+      // Part 6: the avatar's finalize check. The key is shape-checked first (the prefix check above is only a
       // prefix: the HI-8 rule), then the one upload check reads the object;
       // a refusal removes it, records a security event in this organization
       // and answers a plain sentence, and the URL is never saved.

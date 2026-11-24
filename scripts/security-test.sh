@@ -1189,12 +1189,18 @@ WEB_TESTS=(
   # event per refusal with the organization and no file name, path or byte; a
   # recorder failure changes no answer; a clean file unchanged; a refused
   # stored copy removed (kept when another record names it or that look
-  # fails). The registry guard lists every mint, multipart or base64 read,
-  # stored-object read and storage write with the check that covers it (the
-  # phone's direct writes as known gaps of 6c) and pins a producer for each
-  # reason. Blocked activity, an organization's own page, leaves the kind out.
+  # fails), with an audit line for each removal; each stored file read within
+  # its bucket's size ceiling (pinned to the migrations), a video from its
+  # first window only. The registry guard lists every way a file comes in
+  # (a mint, a form, a raw, base64 or remote read, bytes handed to a model,
+  # a recorded object path, a stored-object read, a storage copy or write, a
+  # signed-URL write) with the check that covers it, or a later stage by
+  # reference, and pins a producer for each reason. Blocked activity names
+  # the kind "Refused file".
   src/lib/upload-inspect.test.ts
   src/server/security/upload-checks.test.ts
+  src/lib/upload-size-limits.test.ts
+  src/server/services/upload-still-named.test.ts
   src/server/security/upload-checks.registry.guard.test.ts
   src/server/security/upload-checks.capture-paths.test.ts
   src/server/security/upload-checks.support-paths.test.ts

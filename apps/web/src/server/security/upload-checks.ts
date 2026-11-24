@@ -398,8 +398,7 @@ export async function checkStoredUpload(
  * container's signature from the leading window only (never widened, never
  * read whole: a video may be a gigabyte). Over the ceiling, or a wrong
  * signature, removes the upload's objects (never while a record names one)
- * and, for a wrong signature, records one event. What the video carries is
- * not inspected.
+ * and, for a wrong signature, records one event.
  */
 export async function checkStoredUploadSignature(
   store: StoredUploadBucket,

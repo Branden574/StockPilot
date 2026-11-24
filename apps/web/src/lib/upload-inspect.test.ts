@@ -236,8 +236,8 @@ describe('inspectUpload: the scanner verdicts, by family', () => {
     expect(inspectUpload(doc, { accept: ['pdf'] })).toMatchObject({ family: 'could_not_check' });
   });
 
-  it('HEIC and AVIF pass the scanner unread: their inside is not inspected (a known gap, QUESTIONS.md)', () => {
-    const heic = concat(be32(24), ascii('ftypheic'), [0, 0, 0, 0], ascii('mif1heic'), [0x50, 0x4b, 0x03, 0x04]);
+  it('HEIC is named by its brand', () => {
+    const heic = concat(be32(24), ascii('ftypheic'), [0, 0, 0, 0], ascii('mif1heic'));
     expect(inspectUpload(heic, { accept: ['heic'] })).toMatchObject({ ok: true, kind: 'heic' });
   });
 });

@@ -1074,7 +1074,7 @@ describe('POST /api/orders/sign — the upload check (part 6)', () => {
       body: JSON.stringify({
         token: TOKEN,
         signerName: 'Bob Signer',
-        signerEmail: 'bob@site.org',
+        signerEmail: 'bob@example.com',
         signatureDataUrl: 'data:image/png;base64,' + Buffer.from(bytes).toString('base64'),
       }),
     }) as never;
@@ -1104,7 +1104,7 @@ describe('POST /api/orders/sign — the upload check (part 6)', () => {
     expect(body.error.code).toBe('validation_error');
     expect(body.error.message).toMatch(/^[A-Z][^<>{}]+\.$/);
     expect(rpc).not.toHaveBeenCalled();
-    expectOneRefusal(await record(), { reason, organizationId: 'org-1' }, [TOKEN, 'Bob Signer', 'bob@site.org']);
+    expectOneRefusal(await record(), { reason, organizationId: 'org-1' }, [TOKEN, 'Bob Signer', 'bob@example.com']);
   });
 
   it('a recorder that fails: still refused, nothing signed', async () => {

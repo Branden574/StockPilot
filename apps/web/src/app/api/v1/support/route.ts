@@ -51,8 +51,8 @@ export async function POST(req: NextRequest) {
 
   // Attachment must live under the caller's own uid folder (mirror the web
   // action + the mig 0260 storage INSERT policy). A positive SHAPE since
-  // part 6, as the web action has had since SP-142: this was a prefix check,
-  // which `${uid}/../../...` passes, and the screenshot is now READ below.
+  // part 6, as the web action has had since SP-142, because the screenshot
+  // is now READ below.
   if (
     data.attachmentPath &&
     !isValidStoragePath(data.attachmentPath, supportAttachmentPathShape(ctx.userId))

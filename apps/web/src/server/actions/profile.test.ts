@@ -2320,10 +2320,10 @@ describe('deleteOwnAccountAction', () => {
 
 // ---------------------------------------------------------------------------
 // Security invariant (part 6, stage 6a): the avatar and the organization
-// logo are finalized through the one upload check. Both buckets are PUBLIC,
-// so a refused object is removed and its URL is never saved; the person reads
-// a plain sentence; exactly one malware / blocked event is recorded in the
-// organization, with no path. The avatar had no byte check at all before.
+// logo are finalized through the one upload check. A refused object is
+// removed and its URL is never saved; the person reads a plain sentence;
+// exactly one malware / blocked event is recorded in the organization, with
+// no path.
 // Tiny made-up files only (test/upload-fixtures.ts).
 // ---------------------------------------------------------------------------
 describe('avatar and logo finalize: the upload check (part 6)', () => {

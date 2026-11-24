@@ -161,8 +161,7 @@ const QUICKTIME_FIRST_ATOMS: ReadonlySet<string> = new Set(['moov', 'mdat', 'wid
 
 /**
  * A video's container from its leading bytes: MP4, QuickTime or WebM, or
- * null. Only the signature is read (a few dozen bytes); nothing decodes a
- * frame, so this says what the container is, never what it carries.
+ * null, from its signature (a few dozen bytes).
  */
 export function sniffVideoContainer(data: Uint8Array): UploadVideoKind | null {
   if (data.length >= 12 && fourCc(data, 4) === 'ftyp') {

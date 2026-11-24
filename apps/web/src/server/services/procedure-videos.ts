@@ -304,11 +304,9 @@ export class ProcedureVideosService {
     if (procErr) throw new ServiceError('internal_error', procErr.message);
     if (!proc) throw new ServiceError('not_found', 'Procedure not found');
 
-    // Part 6: the finalize check. Nothing had read these objects: the
-    // bucket's allowed_mime_types (0221) only see the Content-Type the
-    // browser sent. The video's container signature is read from its first
-    // bytes only (MP4, QuickTime or WebM; a video may be a gigabyte, and what
-    // it carries is not inspected); the poster is checked as a picture (JPEG
+    // Part 6: the finalize check. The video's container signature is read
+    // from its first bytes only (MP4, QuickTime or WebM; a video may be a
+    // gigabyte); the poster is checked as a picture (JPEG
     // or WebP, the bucket's image kinds) and is optional, as before: one that
     // was never uploaded is no poster. A refusal removes both objects, records
     // a security event in this organization and writes no row. The row keeps

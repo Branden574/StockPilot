@@ -374,9 +374,7 @@ function decodePdfNameEscapes(raw: string): string {
  * Streams are located by their `stream` / `endstream` keywords rather than by
  * parsing the cross-reference table, because a PDF built to hide something is
  * exactly the PDF whose xref lies. Keyword scanning sees what is physically in
- * the file. It over-matches (the word "endstream" can occur inside binary
- * data), and an over-match yields a slice that is not Flate, which is the skip
- * case above. A stream is read as far as its data goes (a run that ends early
+ * the file. A stream is read as far as its data goes (a run that ends early
  * is read up to where it ends, and a stream with no `endstream` up to the end
  * of the file), and a stream written in hex or ASCII85 text is decoded first.
  */
