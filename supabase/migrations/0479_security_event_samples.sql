@@ -23,9 +23,10 @@
 --      lock behind the app's scrubber, anything that is not printable ASCII
 --      (so every control, invisible, bidirectional and non-ASCII character),
 --      an '@' (or one percent-encoded, once or more), a run of six digits, an
---      IPv4 address, a run of 24 or more characters of the base64 and hex
---      alphabet (the scrubber's own long-value rule) and an id (with its
---      dashes, or 32 hex characters without them).
+--      IPv4 address, a long value (24 or more letters, digits, '+' and '=' in
+--      a row; '/', '-' and '_' break a run, so the words of a path or a
+--      plugin name never make one) and an id (with its dashes, or 32 hex
+--      characters without them).
 --      Its category, reason and source are a documented subset of 0472's:
 --      category exploit, source web, and a reason that is one of the six
 --      probe kinds. The probe route is the one place that samples, and a
@@ -184,9 +185,11 @@ create table public.security_event_samples (
   -- bidirectional or other non-ASCII character); no '@', and none
   -- percent-encoded once or more ('%40', '%2540', ...), so no email address;
   -- no run of six digits; no IPv4 address (four dot-separated groups of one
-  -- to three digits); no run of 24 or more characters of the base64 and hex
-  -- alphabet (letters, digits, + / _ = -: the scrubber's long-value rule,
-  -- so no token, key or long id); no id, with its dashes or as 32 hex
+  -- to three digits); no long value (24 or more letters, digits, '+' and
+  -- '=' in a row: a token, a key, a long id or base64; '/', '-' and '_'
+  -- break a run, because path and word separators are what scanner paths
+  -- and plugin names are made of, and the console must show those names;
+  -- the scrubber in core may replace more); no id, with its dashes or as 32 hex
   -- characters without them; and the shape of a path or one of the two
   -- fixed words. Every scrubber marker (<email>, <id>, <number>,
   -- <long value>, <token>, <removed>, <address>) and both fixed words pass.
@@ -198,7 +201,7 @@ create table public.security_event_samples (
            and target !~ '%(25)*40'
            and target !~ '[0-9]{6}'
            and target !~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
-           and target !~ '[A-Za-z0-9+/_=-]{24}'
+           and target !~ '[A-Za-z0-9+=]{24}'
            and target !~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
            and target !~* '[0-9a-f]{32}'
            and (target ~ '^/' or target in ('(unreadable)', '(more than could be listed)'))),
@@ -211,7 +214,7 @@ create table public.security_event_samples (
            and sample !~ '%(25)*40'
            and sample !~ '[0-9]{6}'
            and sample !~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
-           and sample !~ '[A-Za-z0-9+/_=-]{24}'
+           and sample !~ '[A-Za-z0-9+=]{24}'
            and sample !~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
            and sample !~* '[0-9a-f]{32}')),
   -- An overflow row only counts: no method, no country, no sample. Every
@@ -234,7 +237,7 @@ create table public.security_event_samples (
 comment on table public.security_event_samples is
   'What scanners asked for: for requests refused as a probe (category exploit, source web, reason one of the six probe kinds), the scrubbed path (target), the method and the scrubbed query string (sample), with a country and a count, by UTC hour. No column for an organization, an account, an address, a header, a body or a source hash. Attacker-chosen text: shown as text only, never as a link or markup. No API role reads a row except through platform_security_event_samples (bounded), or writes one except through record_security_event_samples(jsonb) (at most 50 new rows a kind and 300 in all an hour, then one overflow row a kind); rows whose hour began more than 90 days ago are removed by purge_security_event_samples(). The platform console reads it through platform_security_event_samples.';
 comment on column public.security_event_samples.target is
-  'The path asked for, scrubbed by the app (printable ASCII; no @, plain or percent-encoded; no run of six digits; no IPv4 address; no run of 24 base64 or hex characters; no id), 1 to 200 characters: starts with /, or is (unreadable), or (more than could be listed) on an overflow row. Written by whoever sent the request: text only.';
+  'The path asked for, scrubbed by the app (printable ASCII; no @, plain or percent-encoded; no run of six digits; no IPv4 address; no run of 24 letters, digits, + or =; no id), 1 to 200 characters: starts with /, or is (unreadable), or (more than could be listed) on an overflow row. Written by whoever sent the request: text only.';
 comment on column public.security_event_samples.sample is
   'The query string asked for, scrubbed by the app under the same rules as target, at most 300 characters; null when there was none. Written by whoever sent the request: text only.';
 
@@ -355,7 +358,7 @@ begin
        or v_target ~ '%(25)*40'
        or v_target ~ '[0-9]{6}'
        or v_target ~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
-       or v_target ~ '[A-Za-z0-9+/_=-]{24}'
+       or v_target ~ '[A-Za-z0-9+=]{24}'
        or v_target ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
        or v_target ~* '[0-9a-f]{32}'
        or not (v_target ~ '^/' or v_target = '(unreadable)') then
@@ -376,7 +379,7 @@ begin
          or v_sample ~ '%(25)*40'
          or v_sample ~ '[0-9]{6}'
          or v_sample ~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
-         or v_sample ~ '[A-Za-z0-9+/_=-]{24}'
+         or v_sample ~ '[A-Za-z0-9+=]{24}'
          or v_sample ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
          or v_sample ~* '[0-9a-f]{32}' then
         v_skipped := v_skipped + 1;
