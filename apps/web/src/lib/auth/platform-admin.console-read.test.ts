@@ -152,7 +152,7 @@ describe("checkPlatformConsoleRead: the page's rule, for a read the console poll
   it('an allowlisted account with NO authenticator, signed in with its password alone, is refused (the action check serves it)', async () => {
     server.unenrolledUsers.add(FIXTURE_USER_ID);
     await signIn(sessionClaims({ aal: 'aal1' }));
-    // The hole this check exists to close: the existing action check says yes.
+    // Why this check is its own: the action check says yes to this session.
     await expect(checkPlatformAdmin()).resolves.toMatchObject({ ok: true });
     // The console itself says no, and so does this check.
     await expect(requirePlatformAdmin()).rejects.toThrow('NOT_FOUND');
