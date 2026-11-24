@@ -1304,8 +1304,14 @@ export function ItemForm({
           lqip,
           isFirst: i === 0,
         });
-        if (record.ok) uploaded++;
-        else failed++;
+        if (record.ok) {
+          uploaded++;
+        } else {
+          // The server's own sentence for this photo (a refusal, a limit), so
+          // the person is told why it was not added, not only that it failed.
+          toast.error(record.error.message);
+          failed++;
+        }
       }
     } finally {
       setUploadingImages(false);
