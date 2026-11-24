@@ -49,19 +49,32 @@ const feedEntry = (over: Record<string, unknown> = {}) => ({
   country: 'US',
   city: 'Example Falls',
   events: 11,
+  at_least: false,
   organization_id: null,
   organization_name: null,
   organizations: 0,
   ...over,
 });
 
-/** The contract's answer: nineteen keys. */
+const FLAGGED_ENTRY = feedEntry({
+  outcome: 'flagged',
+  reason: 'sign_in_alerts_held',
+  country: 'GB',
+  city: 'Example Borough',
+  events: 4,
+  at_least: true,
+});
+
+/** The contract's answer (VERSION 2): twenty-four keys. */
 const mapAnswer = (over: Record<string, unknown> = {}) => ({
   window: {
     from: '2026-11-22T22:00:00+00:00',
     to: '2026-11-23T22:00:00+00:00',
     live_from: '2026-11-23T21:50:00+00:00',
+    asked_from: '2026-11-22T22:00:00+00:00',
   },
+  window_shortened: false,
+  short_window: false,
   refused: null,
   generated_at: '2026-11-23T22:00:00.123456+00:00',
   oldest_event_at: '2026-11-01T19:42:00+00:00',
@@ -108,6 +121,8 @@ const mapAnswer = (over: Record<string, unknown> = {}) => ({
   allowed_window: 0,
   day_start: null,
   blocked_since_day_start: null,
+  blocked_since_day_start_partial: false,
+  floors: ['flagged_window', 'totals.phishing.flagged'],
   feed: [
     feedEntry(),
     feedEntry({
@@ -117,9 +132,11 @@ const mapAnswer = (over: Record<string, unknown> = {}) => ({
       country: 'PT',
       city: 'Example Harbour',
       events: 1,
+      at_least: true,
       organizations: 3,
     }),
   ],
+  flagged_feed: [FLAGGED_ENTRY],
   late_sources: [],
   tallies: [],
   flood_rows: [],
@@ -182,6 +199,19 @@ describe('the read', () => {
     ]);
     expect(result.ok && result.view?.scope).toBe('whole');
     expect(h.reportError).not.toHaveBeenCalled();
+  });
+
+  it("on the day the clocks go back, the whole window starts at the viewer's midnight, up to 26 hours", async () => {
+    // Midnight was 25 hours ago: the window starts there so the day is counted.
+    await readPlatformSecurityMap({ scope: 'whole', dayStart: '2026-11-22T21:00:00.000Z' }, NOW);
+    // 24 hours ago or less, or more than 26 (less a minute for the two clocks): the database's default.
+    await readPlatformSecurityMap({ scope: 'whole', dayStart: '2026-11-22T22:00:00.000Z' }, NOW);
+    await readPlatformSecurityMap({ scope: 'whole', dayStart: '2026-11-22T20:00:00.000Z' }, NOW);
+    expect(stub.rpcCalls.map((c) => (c.args as { p_from: unknown }).p_from)).toEqual([
+      '2026-11-22T21:00:00.000Z',
+      null,
+      null,
+    ]);
   });
 
   it('the last ten minutes: a start ten minutes back, the end left to the database, never a day start', async () => {
@@ -400,9 +430,9 @@ describe("the zod schema and core's plain reader are the same contract", () => {
       false,
     ],
     [
-      'tallies past 200',
+      'tallies past 300',
       mapAnswer({
-        tallies: Array.from({ length: 201 }, () => ({
+        tallies: Array.from({ length: 301 }, () => ({
           reason: 'too_many_forms_to_count',
           source: 'api',
           category: 'bots',
@@ -493,6 +523,106 @@ describe("the zod schema and core's plain reader are the same contract", () => {
       false,
     ],
     ['a time that is no time', mapAnswer({ generated_at: 'yesterday' }), false],
+    [
+      'a window refused as longer than 26 hours',
+      { window: null, refused: 'longer_than_26_hours', generated_at: '2026-11-23T22:00:00+00:00' },
+      true,
+    ],
+    [
+      'a window refused for one minute too full to read',
+      {
+        window: null,
+        refused: 'too_many_events_in_one_minute',
+        generated_at: '2026-11-23T22:00:00+00:00',
+      },
+      true,
+    ],
+    [
+      'the old word for a window too long',
+      { window: null, refused: 'longer_than_48_hours', generated_at: '2026-11-23T22:00:00+00:00' },
+      false,
+    ],
+    [
+      'a shortened window',
+      mapAnswer({
+        window: {
+          from: '2026-11-23T19:00:00+00:00',
+          to: '2026-11-23T22:00:00+00:00',
+          live_from: '2026-11-23T21:50:00+00:00',
+          asked_from: '2026-11-22T22:00:00+00:00',
+        },
+        window_shortened: true,
+        day_start: '2026-11-23T08:00:00+00:00',
+        blocked_since_day_start: 9,
+        blocked_since_day_start_partial: true,
+        floors: ['blocked_since_day_start'],
+      }),
+      true,
+    ],
+    [
+      'a window said to be shortened that was read as asked',
+      mapAnswer({ window_shortened: true }),
+      false,
+    ],
+    [
+      'a window read later than asked and not said to be shortened',
+      mapAnswer({
+        window: {
+          from: '2026-11-23T19:00:00+00:00',
+          to: '2026-11-23T22:00:00+00:00',
+          live_from: '2026-11-23T21:50:00+00:00',
+          asked_from: '2026-11-22T22:00:00+00:00',
+        },
+      }),
+      false,
+    ],
+    [
+      'a partial day count with no count',
+      mapAnswer({ blocked_since_day_start_partial: true }),
+      false,
+    ],
+    ['a floor by an unknown name', mapAnswer({ floors: ['by_country'] }), false],
+    [
+      'floors past 40',
+      mapAnswer({ floors: Array.from({ length: 41 }, () => 'flagged_window') }),
+      false,
+    ],
+    [
+      'a feed entry with no at_least',
+      mapAnswer({ feed: [feedEntry({ at_least: undefined })] }),
+      false,
+    ],
+    ['a blocked entry in the flagged feed', mapAnswer({ flagged_feed: [feedEntry()] }), false],
+    [
+      'a flagged feed past 20',
+      mapAnswer({ flagged_feed: Array.from({ length: 21 }, () => FLAGGED_ENTRY) }),
+      false,
+    ],
+    [
+      'a poll: the live cells only and no groups',
+      mapAnswer({
+        window: {
+          from: '2026-11-23T21:50:00+00:00',
+          to: '2026-11-23T22:00:00+00:00',
+          live_from: '2026-11-23T21:50:00+00:00',
+          asked_from: '2026-11-23T21:50:00+00:00',
+        },
+        short_window: true,
+        timeline: [
+          {
+            bucket_start: '2026-11-23T21:58:00+00:00',
+            bucket_seconds: 60,
+            country: 'US',
+            category: 'password_guessing',
+            outcome: 'blocked',
+            events: 11,
+          },
+        ],
+        by_country: [],
+      }),
+      true,
+    ],
+    ['a poll with a replay cell and groups', mapAnswer({ short_window: true }), false],
     [
       'a window without live_from',
       mapAnswer({ window: { from: '2026-11-22T22:00:00+00:00', to: '2026-11-23T22:00:00+00:00' } }),

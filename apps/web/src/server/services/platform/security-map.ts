@@ -12,11 +12,16 @@ import {
   SECURITY_MAP_MAX_BY_COUNTRY,
   SECURITY_MAP_MAX_COUNTED_ROWS,
   SECURITY_MAP_MAX_FEED,
+  SECURITY_MAP_MAX_FLAGGED_FEED,
+  SECURITY_MAP_MAX_FLOORS,
   SECURITY_MAP_MAX_LATE_SOURCES,
+  SECURITY_MAP_MAX_POLL_TIMELINE,
   SECURITY_MAP_MAX_TIMELINE,
+  SECURITY_MAP_MAX_WINDOW_HOURS,
   SECURITY_MAP_ORGANIZATION_NAME_MAX,
   SECURITY_MAP_POLL_FAILED,
   SECURITY_MAP_REFUSALS,
+  isSecurityMapFloorName,
   readSecurityMapAnswer,
   securityMapViewOf,
   type SecurityMapPollResult,
@@ -43,8 +48,8 @@ import {
  *
  * WHAT LEAVES THIS MODULE is core's view, not the database's document: only
  * what the page draws and says. At the database's caps the document is about
- * 620 KB; the view of the whole window is at most about 80 KB and the view of
- * the last ten minutes at most about 30 KB (security-map.test.ts in core
+ * 770 KB; the view of the whole window is at most about 90 KB and the view of
+ * the last ten minutes at most about 40 KB (security-map.test.ts in core
  * measures both), and far less on any ordinary day. A category the map does
  * not show never leaves the server.
  */
@@ -90,10 +95,28 @@ const byCategory = z
 const countedRow = z
   .object({ reason, source, category, outcome, events: count, rows: count })
   .strict();
+const feedEntry = z
+  .object({
+    minute: time,
+    category,
+    outcome,
+    reason,
+    source,
+    country: country.nullable(),
+    city: text(SECURITY_MAP_CITY_MAX).nullable(),
+    events: count,
+    at_least: z.boolean(),
+    organization_id: uuid.nullable(),
+    organization_name: text(SECURITY_MAP_ORGANIZATION_NAME_MAX).nullable(),
+    organizations: count,
+  })
+  .strict();
 
 const readWindow = z
   .object({
-    window: z.object({ from: time, to: time, live_from: time }).strict(),
+    window: z.object({ from: time, to: time, live_from: time, asked_from: time }).strict(),
+    window_shortened: z.boolean(),
+    short_window: z.boolean(),
     refused: z.null(),
     generated_at: time,
     oldest_event_at: time.nullable(),
@@ -123,45 +146,55 @@ const readWindow = z
     allowed_window: count,
     day_start: time.nullable(),
     blocked_since_day_start: count.nullable(),
-    feed: z
-      .array(
-        z
-          .object({
-            minute: time,
-            category,
-            outcome,
-            reason,
-            source,
-            country: country.nullable(),
-            city: text(SECURITY_MAP_CITY_MAX).nullable(),
-            events: count,
-            organization_id: uuid.nullable(),
-            organization_name: text(SECURITY_MAP_ORGANIZATION_NAME_MAX).nullable(),
-            organizations: count,
-          })
-          .strict(),
-      )
-      .max(SECURITY_MAP_MAX_FEED),
+    blocked_since_day_start_partial: z.boolean(),
+    floors: z
+      .array(z.string().refine((name) => isSecurityMapFloorName(name)))
+      .max(SECURITY_MAP_MAX_FLOORS),
+    feed: z.array(feedEntry).max(SECURITY_MAP_MAX_FEED),
+    flagged_feed: z
+      .array(feedEntry.refine((entry) => entry.outcome === 'flagged'))
+      .max(SECURITY_MAP_MAX_FLAGGED_FEED),
     late_sources: z
       .array(z.object({ source, category, outcome, events: count }).strict())
       .max(SECURITY_MAP_MAX_LATE_SOURCES),
     tallies: z.array(countedRow).max(SECURITY_MAP_MAX_COUNTED_ROWS),
     flood_rows: z.array(countedRow).max(SECURITY_MAP_MAX_COUNTED_ROWS),
   })
-  .strict();
+  .strict()
+  .superRefine((answer, ctx) => {
+    const issue = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    const from = Date.parse(answer.window.from);
+    const asked = Date.parse(answer.window.asked_from);
+    if (answer.window_shortened !== from > asked)
+      issue('window_shortened', 'not as the window says');
+    if (from < asked) issue('window', 'read from before the start asked for');
+    if (answer.blocked_since_day_start_partial && answer.blocked_since_day_start === null) {
+      issue('blocked_since_day_start_partial', 'beside no count');
+    }
+    // A poll: the live cells only, and no groups by country.
+    if (answer.short_window) {
+      if (answer.timeline.length > SECURITY_MAP_MAX_POLL_TIMELINE) issue('timeline', 'past a poll');
+      if (answer.timeline.some((cell) => cell.bucket_seconds !== 60)) issue('timeline', 'replay');
+      if (answer.by_country.length > 0 || answer.by_country_truncated) issue('by_country', 'poll');
+    }
+  });
 
 /** A window the database would not read: exactly three keys. */
 const refusedWindow = z
   .object({ window: z.null(), refused: z.enum(SECURITY_MAP_REFUSALS), generated_at: time })
   .strict();
 
-/** The contract's two shapes: the nineteen keys, or the three of a refused window. */
+/** The contract's two shapes (VERSION 2): the twenty-four keys, or the three of a refused window. */
 export const platformSecurityMapSchema = z.union([readWindow, refusedWindow]);
 
 /* ─────────────────────────────── the read ─────────────────────────────── */
 
 export interface PlatformSecurityMapRead {
-  /** The whole window (the last 24 hours), or the last ten minutes. */
+  /**
+   * The whole window (the last 24 hours, or from the viewer's midnight on a
+   * day whose midnight is more than 24 hours ago), or the last ten minutes.
+   */
   scope: 'whole' | 'recent';
   /**
    * The instant the viewer's day began, as an ISO time, for the day's count.
@@ -171,6 +204,27 @@ export interface PlatformSecurityMapRead {
 }
 
 const FN = 'platform_security_map';
+
+/** The whole window's usual length, and the margin kept under the database's longest window. */
+const WHOLE_WINDOW_MS = 24 * 60 * 60_000;
+const LONGEST_WINDOW_MARGIN_MS = 60_000;
+
+/**
+ * Where the whole window starts: null (the database's default, 24 hours
+ * before now) on every day but one. On the day the viewer's clocks go back,
+ * their midnight is more than 24 hours before the day's last hour; then the
+ * window starts at that midnight, so the day's count can still be counted
+ * (up to 26 hours is read; a minute is kept in hand for the clocks of the two
+ * machines). A day start that is not a time, or later, changes nothing.
+ */
+export function securityMapWholeWindowStart(dayStart: string | null, now: number): string | null {
+  if (dayStart === null) return null;
+  const at = Date.parse(dayStart);
+  if (!Number.isFinite(at)) return null;
+  const longest = SECURITY_MAP_MAX_WINDOW_HOURS * 60 * 60_000 - LONGEST_WINDOW_MARGIN_MS;
+  if (now - at <= WHOLE_WINDOW_MS || now - at > longest) return null;
+  return new Date(at).toISOString();
+}
 
 /**
  * One read of the map. Never throws, and never answers the gate's refusal:
@@ -197,7 +251,11 @@ export async function readPlatformSecurityMap(
             p_to: null,
             p_day_start: null,
           }
-        : { p_from: null, p_to: null, p_day_start: input.dayStart };
+        : {
+            p_from: securityMapWholeWindowStart(input.dayStart, now),
+            p_to: null,
+            p_day_start: input.dayStart,
+          };
     const { data, error } = (await createAdminClient()
       .rpc('platform_security_map', args)
       .abortSignal(AbortSignal.timeout(SECURITY_MAP_READ_BUDGET_MS))) as {
