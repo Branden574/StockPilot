@@ -335,7 +335,7 @@ describe('a read that fails is "could not check", reported once, and never throw
   it('an answer of another shape: where it differs is reported, and no value from the answer', async () => {
     answer = {
       data: mapAnswer({
-        feed: [feedEntry({ source_address: '203.0.113.9', city: 'Example Falls' })],
+        feed: [feedEntry({ source_address: 'MARKER-NOT-TO-BE-LOGGED', city: 'Example Falls' })],
       }),
       error: null,
     };
@@ -347,7 +347,7 @@ describe('a read that fails is "could not check", reported once, and never throw
       'platform_security_map answered a shape this build does not know (feed.0: unrecognized_keys)',
     );
     const logged = JSON.stringify(h.reportError.mock.calls) + (report?.message ?? '');
-    expect(logged).not.toContain('203.0.113.9');
+    expect(logged).not.toContain('MARKER-NOT-TO-BE-LOGGED');
     expect(logged).not.toContain('Example Falls');
   });
 

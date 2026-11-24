@@ -536,7 +536,7 @@ describe("readSecurityMapAnswer: the contract's shape and nothing else", () => {
       ],
       [
         'a feed entry with an extra key',
-        answer({ feed: [{ ...entry(), ip: '203.0.113.9' } as never] }),
+        answer({ feed: [{ ...entry(), ip: 'MARKER-NOT-AN-ADDRESS' } as never] }),
       ],
       ['a feed past 60', answer({ feed: Array.from({ length: 61 }, () => entry()) })],
       [
