@@ -173,6 +173,16 @@ $$;
 create function pg_temp.mins(p text) returns text language sql stable as $$
   select (extract(epoch from (p::timestamptz - c.t0)) / 60)::integer::text from pg_temp.clock c;
 $$;
+-- The row ceiling's start for the window m(0) to m(120), as minutes after
+-- T0, or the SQLSTATE of the error it raised: a wrong ceiling then fails
+-- its test instead of stopping the file.
+create function pg_temp.read_from_at(p_rows integer) returns text language plpgsql stable as $$
+begin
+  return pg_temp.mins(public._security_map_read_from(pg_temp.m(0), pg_temp.m(120), p_rows)::text);
+exception when others then
+  return 'raised ' || sqlstate;
+end;
+$$;
 create function pg_temp.timeline_lines(p jsonb) returns text[] language sql stable as $$
   select coalesce(array_agg(pg_temp.mins(e ->> 'bucket_start') || '|' || (e ->> 'bucket_seconds') || '|'
                             || (e ->> 'country') || '|' || (e ->> 'category') || '|' || (e ->> 'outcome') || '|'
@@ -508,9 +518,9 @@ select is(
 -- newest first: m119, m118, m118, m115 (a tally: a row like any other), ...
 -- the oldest at m0. Asked for at most n rows it gives the start to read.
 select is(
-  (select array_agg(pg_temp.mins(public._security_map_read_from(pg_temp.m(0), pg_temp.m(120), n)::text)::int order by o)
+  (select array_agg(pg_temp.read_from_at(n) order by o)
      from unnest(array[1000, 34, 33, 3, 1, 0]) with ordinality as x(n, o)),
-  array[0, 0, 1, 116, 119, 120],
+  array['0', '0', '1', '116', '119', '120'],
   '0478/18: the row ceiling: the window as asked while it holds at most n rows (34 of 34); else the minute after the minute of the row that comes after the newest n (33: m1; 3: m116; 1: m119), at the window''s end when the newest minute alone holds more (0)');
 
 -- ── 3. Who may call ─────────────────────────────────────────────────────────
