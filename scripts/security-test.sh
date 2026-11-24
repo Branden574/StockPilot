@@ -2663,14 +2663,18 @@ WEB_TESTS=(
   # or without a sample, and a failing sample changes neither. The recorder
   # has its own buffer (at most 50, merged, counts capped), never throws and
   # is never waited on, drops a batch on 55P03 or a missing writer, and logs
-  # one count line of numbers only after every call. Every made-up scanner
-  # path comes out of the scrub as it was sent (probe-paths). The new files
-  # carry the "Security invariant" marker.
+  # one count line of numbers only after every call. Its flush is on the
+  # security events' delay and never starts after their flush, so a probe
+  # request is held no longer with its sample than with its event alone
+  # (review 3B S5; event-samples.hold runs both real recorders). Every
+  # made-up scanner path comes out of the scrub as it was sent
+  # (probe-paths). The new files carry the "Security invariant" marker.
   src/lib/security/probe-paths.test.ts
   src/lib/security/probe-match.test.ts
   src/lib/security/probe-sample.test.ts
   'src/app/api/security/probe/[kind]/route.test.ts'
   src/server/security/event-samples.test.ts
+  src/server/security/event-samples.hold.test.ts
 
   # What was asked for, on the platform console (part 5, stage 3b): the read
   # is imported by the panel's Server Action alone, which asks the console's
