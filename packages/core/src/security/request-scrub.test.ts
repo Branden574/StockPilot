@@ -612,6 +612,13 @@ describe('the key rule also reads a value split at decoded separators', () => {
     expect(scrubRequestSample(query)).toBe(out);
     expect(scrubRequestSample(out)).toBe(out);
   });
+  it('a value with no key is measured whole, as sent: an encoded `&` inside does not shorten it', () => {
+    const half = 'ab-'.repeat(20);
+    const bare = `${half}%26${half}`;
+    expect(half.length).toBeLessThan(SAMPLE_BARE_VALUE_MAX);
+    expect(scrubRequestSample(bare)).toBe('<removed>');
+    expect(scrubRequestSample(`q=1&${bare}`)).toBe('q=1&<removed>');
+  });
   it.each([
     ['/x%3Btoken%3Dxyz/.env', '/x%3Btoken%3D<removed>/.env'],
     ['/a%2Fb%3Bsig%3Dxyz/.git/config', '/a%2Fb%3Bsig%3D<removed>/.git/config'],
