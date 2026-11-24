@@ -240,15 +240,19 @@ export function SecurityMapClient({
             )}
           </div>
           <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-1 p-3 text-[12.5px] leading-snug sm:p-4">
-            {stopWords ? (
-              <p
-                data-testid="security-map-stop"
-                className="max-w-3xl font-medium"
-                style={{ color: PANEL.stockpilot, textShadow: OVER_PANEL }}
-              >
-                {stopWords}
-              </p>
-            ) : null}
+            {/* Always there, so a screen reader is told when the map stops and why
+                (review S9): "Not updating since ...", "Sign in again". Polite. */}
+            <div role="status" data-testid="security-map-stop-status">
+              {stopWords ? (
+                <p
+                  data-testid="security-map-stop"
+                  className="max-w-3xl font-medium"
+                  style={{ color: PANEL.stockpilot, textShadow: OVER_PANEL }}
+                >
+                  {stopWords}
+                </p>
+              ) : null}
+            </div>
             <p
               data-testid="security-map-mode"
               className="max-w-3xl"

@@ -910,9 +910,22 @@ describe('the flagged list beside the map', () => {
 });
 
 describe('when the page stops', () => {
+  it('the stop words are announced: "Not updating since" and "Sign in again" land in a polite status region that was there before', async () => {
+    mount(async () => SECURITY_MAP_POLL_FAILED);
+    const region = screen.getByRole('status');
+    expect(region.textContent).toBe('');
+    await advance(30_000);
+    await advance(60_000);
+    expect(screen.getByRole('status')).toBe(region);
+    expect(within(region).getByTestId('security-map-stop').textContent).toMatch(
+      /^Not updating since /,
+    );
+    expect(region.getAttribute('aria-live')).toBeNull();
+  });
+
   it('after two failed reads: "Not updating since HH:MM" and nothing moves', async () => {
     mount(async () => SECURITY_MAP_POLL_FAILED);
-    await advance(0);
+    await advance(30_000);
     expect(screen.queryByTestId('security-map-stop')).toBeNull();
     expect(lastGlobe().timing).toBe('replay');
     await advance(60_000);
@@ -1050,9 +1063,16 @@ describe('the feed', () => {
     expect(link).toHaveAttribute('data-prefetch', 'false');
   });
 
-  it('is not a live region: an update is never announced', () => {
+  it('is not a live region: an update is never announced; the stop words are the one status region on the page', () => {
     mount(async () => wholeRead());
     expect(document.querySelector('[aria-live]')).toBeNull();
-    expect(document.querySelector('[role="status"], [role="alert"], [role="log"]')).toBeNull();
+    expect(document.querySelectorAll('[role="status"], [role="alert"], [role="log"]')).toHaveLength(
+      1,
+    );
+    const region = screen.getByRole('status');
+    expect(region).toHaveAttribute('data-testid', 'security-map-stop-status');
+    // Nothing is moving that has stopped: the region is there, and says nothing.
+    expect(region.textContent).toBe('');
+    expect(region.contains(screen.getByText(SECURITY_MAP_WORDS.feedTitle))).toBe(false);
   });
 });
