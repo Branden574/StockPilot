@@ -66,6 +66,10 @@ const REVIEWED: Record<string, string> = {
     "closes safeFetch's per-request connection pool once the response is in hand; nothing to deliver",
   'lib/exports/export-images.ts: reader.cancel':
     'cancels an oversized image stream the request already aborted; nothing to deliver',
+  'lib/storage-object-prefix.ts: reader.cancel':
+    "stops a storage body read the step is done with; never awaited, since on a body Next's fetch keeps a copy of the cancel may never settle (lab walk 5), and the step aborts its own request; nothing to deliver",
+  'lib/storage-object-prefix.ts: res.body.cancel':
+    "drops a storage body the step will not read; never awaited, for the same reason, and the step aborts its own request; nothing to deliver",
   'lib/supabase/url-length-guard.ts: report':
     "the guard's injected reporter: the server clients pass the server reportError, which keeps itself alive (url-length-guard.server.ts, pinned in url-length-guard.wiring.test.ts); the browser client passes the core one, with no response to outlive",
 };
