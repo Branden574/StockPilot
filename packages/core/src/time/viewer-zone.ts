@@ -92,19 +92,66 @@ export function clockWords(hour: number, minute: number, clock: ClockStyle = '24
   return `${hour % 12 === 0 ? 12 : hour % 12}:${mm} ${hour < 12 ? 'AM' : 'PM'}`;
 }
 
-/** The instant the day holding `at` began in `zone` (its midnight, or the first instant after a gap there). */
+const HOUR_MS = 60 * 60 * 1000;
+
+/** A calendar date as one number, so two days compare: 2027-03-14 is 20270314. */
+const dayNumber = (p: { year: number; month: number; day: number }): number =>
+  p.year * 10_000 + p.month * 100 + p.day;
+
+/**
+ * The instant the day holding `at` began in `zone`: the first instant that
+ * reads as that calendar day there. Most days that is its midnight. On a day
+ * whose clocks went forward over midnight (in 2027: America/Havana on 14
+ * March, Atlantic/Azores on 28 March, America/Santiago on 5 September, and
+ * Cairo and Beirut east of UTC) there is no midnight: the day began with the
+ * change, at 01:00 on the clock, and that instant is the answer, never one in
+ * the day before. On a day whose clocks went back over midnight, the first
+ * midnight. So the answer always moves on from one day to the next (review
+ * M1, 2026-11-24: the earlier lenient answer of 23:00 the day before held the
+ * attack map's next midnight still for a day).
+ */
 export function dayStartInZone(at: Date | number, zone: string): number {
-  const p = zonedParts(at, zone);
-  const wall = { year: p.year, month: p.month, day: p.day, hour: 0, minute: 0 };
-  return (
-    wallClockToInstant(wall, zone) ??
-    // A zone whose clocks skipped midnight that day: the non-strict answer.
-    wallClockToInstant(wall, zone, { strict: false }) ??
-    Number.NaN
+  const ms = at instanceof Date ? at.getTime() : at;
+  const p = zonedParts(ms, zone);
+  const day = dayNumber(p);
+  // The day's midnight, worked out as if it exists: the answer when it reads
+  // as this day, the millisecond before it as an earlier one, and it is not
+  // after `at`. One look on almost every day.
+  const midnight = wallClockToInstant(
+    { year: p.year, month: p.month, day: p.day, hour: 0, minute: 0 },
+    zone,
+    { strict: false },
   );
+  if (
+    midnight !== null &&
+    midnight <= ms &&
+    dayNumber(zonedParts(midnight, zone)) === day &&
+    dayNumber(zonedParts(midnight - 1, zone)) < day
+  ) {
+    return midnight;
+  }
+  // Otherwise the clocks changed over midnight: back from `at` an hour at a
+  // time to an instant of an earlier day, then halve that hour to the
+  // millisecond for the first instant of this one.
+  let inDay = ms;
+  let before = ms - HOUR_MS;
+  for (let steps = 0; dayNumber(zonedParts(before, zone)) >= day; steps += 1) {
+    if (steps >= 48) return Number.NaN;
+    inDay = before;
+    before -= HOUR_MS;
+  }
+  while (inDay - before > 1) {
+    const mid = Math.floor((before + inDay) / 2);
+    if (dayNumber(zonedParts(mid, zone)) >= day) inDay = mid;
+    else before = mid;
+  }
+  return inDay;
 }
 
-/** The instant the next day begins in `zone`, after the day that began at `dayStart`. */
+/**
+ * The instant the next day begins in `zone` (its first instant, as
+ * dayStartInZone), after the day holding `dayStart`: always later than it.
+ */
 export function nextDayStartInZone(dayStart: Date | number, zone: string): number {
   const p = zonedParts(dayStart, zone);
   const next = new Date(Date.UTC(p.year, p.month - 1, p.day + 1));

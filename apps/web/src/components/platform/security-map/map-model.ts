@@ -437,7 +437,11 @@ export interface PollClock {
    * read started (the coordinator's change of 2026-11-24).
    */
   totalsBehind: boolean;
-  /** When the last read of the whole window was sent (the page's clock), or null. */
+  /**
+   * When the page last sent a read of the whole window (the page's clock), or
+   * null before its first. Every whole read after that first waits until
+   * SECURITY_MAP_EARLY_WHOLE_GAP_MS after it, whatever asks (review M1).
+   */
   lastWholeStartAt: number | null;
 }
 
@@ -459,12 +463,23 @@ export interface PollStep {
  * whole window the next waits 2, 4, 8, then 10 minutes from that attempt
  * (review S2), and neither the midnight nor the replay hurries it. When the
  * kept lists hold entries newer than the totals (`totalsBehind`), the whole
- * window is read early, but never sooner than 45 seconds after the last
- * whole read was sent, and never against the back-off: so a quiet page reads
- * nothing more, and a busy one at most one whole read per 45 seconds. In
- * between, the last ten minutes every 30 seconds, against the last good
- * whole read or alone when there is none. After any failed read the wait
- * grows (30, 60, then 120 seconds) and nothing is sent sooner.
+ * window is read early, and never against the back-off: so a quiet page
+ * reads nothing more. In between, the last ten minutes every 30 seconds,
+ * against the last good whole read or alone when there is none. After any
+ * failed read the wait grows (30, 60, then 120 seconds) and nothing is sent
+ * sooner.
+ *
+ * THE FLOOR (review M1, 2026-11-24): once the page has sent a whole read,
+ * the next one, whatever asks for it (the 5-minute rhythm, the early read,
+ * the viewer's midnight, the replay's turn, a tab shown again, the day not
+ * yet read), is never sent sooner than 45 seconds after that one was sent.
+ * So however wrong a due time is (a midnight that never moves on, say), the
+ * page sends at most one whole read per 45 seconds, and a read of the last
+ * ten minutes goes in between whenever its 30 seconds come first. The two
+ * reads of the whole window on open are not
+ * under it: the server's, which the page never sends, and the page's own
+ * first, right after it mounts (QUESTIONS Q22), sent while
+ * `lastWholeStartAt` is still null; from that send on, every whole read is.
  */
 export function nextPoll(clock: PollClock, now: number): PollStep {
   const afterLast =
@@ -480,14 +495,12 @@ export function nextPoll(clock: PollClock, now: number): PollStep {
   } else {
     const every = clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
     wholeDue = clock.dayEndsAt === null ? every : Math.min(every, clock.dayEndsAt);
-    // New events past the totals: the whole window early, at most one start per gap.
-    if (clock.totalsBehind) {
-      const floor =
-        clock.lastWholeStartAt === null
-          ? now
-          : clock.lastWholeStartAt + SECURITY_MAP_EARLY_WHOLE_GAP_MS;
-      wholeDue = Math.min(wholeDue, Math.max(now, floor));
-    }
+    // New events past the totals: the whole window early, as soon as the floor allows.
+    if (clock.totalsBehind) wholeDue = Math.min(wholeDue, now);
+  }
+  // Every whole read after the page's first: at most one start per gap.
+  if (clock.lastWholeStartAt !== null) {
+    wholeDue = Math.max(wholeDue, clock.lastWholeStartAt + SECURITY_MAP_EARLY_WHOLE_GAP_MS);
   }
   const wholeAt = Math.max(wholeDue, clock.failures > 0 ? afterLast : -Infinity);
   return wholeAt <= afterLast
@@ -514,21 +527,32 @@ export function replayWantsWhole(
   return lastWholeAt === null || now - lastWholeAt > REPLAY_REREAD_AFTER_MS;
 }
 
+const HOUR_MS = 60 * 60 * 1000;
+
 /**
- * The viewer's next midnight after the day that began at `dayStart`, or null
- * for no time: in `zone` (the zone the page's times are in) when given, else
- * the browser's own.
+ * The viewer's next midnight after the day that holds `dayStart` (the start
+ * of the day the newest whole read counted), or null for no time: in `zone`
+ * (the zone the page's times are in) when given, else the browser's own. It
+ * is always strictly later than `dayStart`: should a zone's rules ever answer
+ * one that is not (review M1: the day start never moving on), the answer is
+ * looked for again an hour on, and on, until it is; none within two days is
+ * no time.
  */
 export function nextLocalMidnight(dayStart: string | null, zone?: string): number | null {
   const at = dayStart === null ? NaN : Date.parse(dayStart);
   if (!Number.isFinite(at)) return null;
-  if (zone !== undefined) {
-    const next = nextDayStartInZone(at, zone);
-    return Number.isFinite(next) ? next : null;
+  const nextAfter = (from: number): number => {
+    if (zone !== undefined) return nextDayStartInZone(from, zone);
+    const next = new Date(from);
+    next.setHours(24, 0, 0, 0);
+    return next.getTime();
+  };
+  let next = nextAfter(at);
+  for (let probe = at, steps = 0; Number.isFinite(next) && next <= at && steps < 48; steps += 1) {
+    probe += HOUR_MS;
+    next = nextAfter(probe);
   }
-  const next = new Date(at);
-  next.setHours(24, 0, 0, 0);
-  return next.getTime();
+  return Number.isFinite(next) && next > at ? next : null;
 }
 
 /**

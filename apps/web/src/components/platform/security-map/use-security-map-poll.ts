@@ -59,6 +59,13 @@ import { localDayStart, nextLocalMidnight, nextPoll, replayWantsWhole } from './
  * per 45 seconds. Until it lands the page says the totals are being counted
  * again (security-map-client.tsx).
  *
+ * THAT 45-SECOND FLOOR HOLDS FOR EVERY WHOLE READ AFTER THE ISLAND'S FIRST
+ * (review M1): the 5-minute one, the midnight, the replay's turn, a tab shown
+ * again (map-model.ts nextPoll). The island's first is the read right after
+ * it mounts (Q22), or, when the server's read failed, its try 2 minutes on:
+ * `wholeStartedAt` is null until it is sent, and is never cleared while the
+ * island is mounted.
+ *
  * The plan is worked out with the kept flagged list as well: its flagged
  * sign-in alerts are drawn (owner's decision of 2026-11-24).
  */

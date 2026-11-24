@@ -1711,9 +1711,11 @@ export function securityMapFlaggedReasonWords(reason: string): string {
 export const SECURITY_MAP_RECENT_POLL_MS = 30_000;
 export const SECURITY_MAP_WHOLE_POLL_MS = 5 * 60_000;
 /**
- * The shortest gap between the starts of two reads of the whole window when
- * a poll brought events newer than the totals (the coordinator's change of
- * 2026-11-24): an early read is never sooner than this after the last one began.
+ * The shortest gap between the starts of two reads of the whole window the
+ * page sends, whatever asks for one: the early read when a poll brought
+ * events newer than the totals (the coordinator's change of 2026-11-24), the
+ * 5-minute read, the viewer's midnight, the replay's turn, a tab shown again
+ * (review M1, 2026-11-24).
  */
 export const SECURITY_MAP_EARLY_WHOLE_GAP_MS = 45_000;
 /** After this many failed reads in a row the page says it is not updating, and the play stops. */

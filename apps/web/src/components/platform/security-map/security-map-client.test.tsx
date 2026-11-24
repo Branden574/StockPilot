@@ -434,8 +434,12 @@ describe('the reads', () => {
     await advance(0);
     expect(wholeReads).toBe(1);
     expect(today()).toBe('9');
-    // The read at midnight fails.
+    // Midnight: a read of the last ten minutes lands, the day has turned, nothing counts the new one yet.
     await advance(30_000);
+    expect(wholeReads).toBe(1);
+    expect(today()).toBe('Not counted yet');
+    // The read for the new day, 45 seconds after the last whole read began (review M1), fails.
+    await advance(15_000);
     expect(wholeReads).toBe(2);
     expect(today()).toBe('Not counted yet');
   });

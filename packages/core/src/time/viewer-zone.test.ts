@@ -10,14 +10,17 @@ import {
   zoneLongWords,
   zoneShortName,
 } from './viewer-zone';
+import { zonedParts } from './zoned-wall-clock';
 
 /**
  * THE VIEWER'S ZONE. Pinned: a zone is the viewer's only when this runtime
  * accepts it (anything else is none, never a guessed default); a time names
  * its zone's short name at that very instant, so the same wall clock on the
  * night the clocks go back reads PDT then PST; a day starts at the zone's own
- * midnight, and the day the clocks go back is 25 hours long. Made-up instants;
- * America/Los_Angeles, and Europe/Berlin east of UTC.
+ * midnight, and the day the clocks go back is 25 hours long; a day whose
+ * clocks skip midnight starts at the change, and in every zone every day of
+ * 2027 starts at its first instant, later than the day before (review M1).
+ * Made-up instants; America/Los_Angeles, and Europe/Berlin east of UTC.
  */
 
 const LA = 'America/Los_Angeles';
@@ -114,4 +117,72 @@ describe("a day starts at the zone's own midnight", () => {
       '2026-11-23T23:00:00.000Z',
     );
   });
+
+  // Review M1 (2026-11-24): where the clocks go forward over midnight there is
+  // no midnight, and the lenient answer was 23:00 the day before, so "the next
+  // midnight" never moved on.
+  it('a day whose clocks skip midnight starts at the change, 01:00 on the clock, never in the day before', () => {
+    for (const [zone, evening, start, after] of [
+      // Havana: 14 March 2027, 00:00 CST is 01:00 CDT.
+      [
+        'America/Havana',
+        '2027-03-14T04:30:00Z',
+        '2027-03-14T05:00:00.000Z',
+        '2027-03-15T04:00:00.000Z',
+      ],
+      // The Azores: 28 March 2027, 00:00 -01 is 01:00 +00.
+      [
+        'Atlantic/Azores',
+        '2027-03-28T00:30:00Z',
+        '2027-03-28T01:00:00.000Z',
+        '2027-03-29T00:00:00.000Z',
+      ],
+      // Santiago: 5 September 2027, 00:00 -04 is 01:00 -03.
+      [
+        'America/Santiago',
+        '2027-09-05T03:30:00Z',
+        '2027-09-05T04:00:00.000Z',
+        '2027-09-06T03:00:00.000Z',
+      ],
+    ] as const) {
+      // The evening before (23:30 on the clock): its next day starts at the change.
+      const next = nextDayStartInZone(dayStartInZone(Date.parse(evening), zone), zone);
+      expect(iso(next), zone).toBe(start);
+      // Taken at the change, or later that day, the day start is the change itself...
+      expect(iso(dayStartInZone(next, zone)), zone).toBe(start);
+      expect(iso(dayStartInZone(next + 20 * 3_600_000, zone)), zone).toBe(start);
+      // ...and the day after starts at its own midnight: a day of 23 hours.
+      expect(iso(nextDayStartInZone(next, zone)), zone).toBe(after);
+      expect((Date.parse(after) - next) / 3_600_000, zone).toBe(23);
+    }
+  });
+
+  it('every zone this runtime knows, every day of 2027: each day starts at its first instant, strictly later than the day before', () => {
+    const zones = Intl.supportedValuesOf('timeZone');
+    expect(zones.length).toBeGreaterThan(300);
+    expect(zones).toEqual(expect.arrayContaining(['America/Havana', 'America/Santiago']));
+    const dateOf = (ms: number, zone: string) => {
+      const p = zonedParts(ms, zone);
+      return Date.UTC(p.year, p.month - 1, p.day);
+    };
+    const DAY = 86_400_000;
+    const faults: string[] = [];
+    for (const zone of zones) {
+      let start = dayStartInZone(Date.UTC(2027, 0, 1, 12), zone);
+      for (let day = 0; day < 365 && faults.length < 5; day += 1) {
+        const next = nextDayStartInZone(start, zone);
+        const late = dayStartInZone(next - 1, zone);
+        const ok =
+          next > start &&
+          // The next day starts on the next calendar date, at its first instant...
+          dateOf(next, zone) === dateOf(start, zone) + DAY &&
+          dateOf(next - 1, zone) === dateOf(start, zone) &&
+          // ...and the day start taken in the day's last millisecond is the day's own.
+          late === start;
+        if (!ok) faults.push(`${zone} after ${iso(start)}: next ${iso(next)}, late ${iso(late)}`);
+        start = next;
+      }
+    }
+    expect(faults).toEqual([]);
+  }, 60_000);
 });

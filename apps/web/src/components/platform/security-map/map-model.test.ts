@@ -1,12 +1,14 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   SECURITY_EVENT_CATEGORIES,
   SECURITY_MAP_EARLY_WHOLE_GAP_MS,
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
+  dayStartInZone,
   securityMapArcOf,
+  zonedParts,
   type SecurityMapFeedRow,
   type SecurityMapPlan,
   type SecurityMapWholeRead,
@@ -352,7 +354,11 @@ describe('the line for places with no point', () => {
 
 describe('when to read', () => {
   const T = 1_000_000;
-  /** All well: the server's first read at T, no midnight in sight and no replay just begun. */
+  /**
+   * All well: the server's first read at T, no midnight in sight and no
+   * replay just begun. The page sent no whole read of its own yet (the
+   * server's is not one it sent), so no start is on record.
+   */
   const WELL = {
     lastPollAt: T,
     lastWholeAt: T,
@@ -363,7 +369,7 @@ describe('when to read', () => {
     wholeWanted: false,
     dayUnread: false,
     totalsBehind: false,
-    lastWholeStartAt: T - 200,
+    lastWholeStartAt: null,
   } as const;
 
   it("right after the page opens the whole window is read again at once, with the viewer's day (Q22)", () => {
@@ -573,6 +579,193 @@ describe('when to read', () => {
     expect(start.getDate()).toBe(23);
     expect([start.getHours(), start.getMinutes(), start.getSeconds()]).toEqual([0, 0, 0]);
     expect(localDayStart(now)).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/);
+  });
+
+  /* ── review M1 (2026-11-24): the floor on every whole read, and the midnight that never moved on ── */
+
+  it("every whole read after the page's first waits until 45 s after the last one was sent, whatever asks for it", () => {
+    // The page sent a whole read 1 s before T; it came back at T.
+    const sent = { ...WELL, lastWholeStartAt: T - 1_000 };
+    const floor = T - 1_000 + SECURITY_MAP_EARLY_WHOLE_GAP_MS;
+    const asks = {
+      'a midnight already past': { dayEndsAt: T - 60_000 },
+      'the 5-minute read long overdue, as when a tab is shown again': {
+        lastWholeAt: T - 3_600_000,
+      },
+      'events newer than the totals': { totalsBehind: true },
+      "the replay's turn": { wholeWanted: true },
+      'the day not read yet': { dayUnread: true },
+    } as const;
+    for (const [why, ask] of Object.entries(asks)) {
+      // The last ten minutes first, 30 seconds on; the whole window no sooner than the floor.
+      expect(nextPoll({ ...sent, ...ask }, T), why).toEqual({ scope: 'recent', at: T + 30_000 });
+      expect(nextPoll({ ...sent, ...ask, lastPollAt: T + 30_000 }, T + 30_000), why).toEqual({
+        scope: 'whole',
+        at: floor,
+      });
+      // At the floor, at once.
+      const step = nextPoll({ ...sent, ...ask, lastPollAt: T + 30_000 }, floor + 5);
+      expect(step.scope, why).toBe('whole');
+      expect(step.at, why).toBeGreaterThanOrEqual(floor);
+      expect(step.at, why).toBeLessThanOrEqual(floor + 5);
+    }
+    // The page's own first whole read (right after it mounts, Q22) has no start before it: at once.
+    expect(nextPoll({ ...WELL, dayUnread: true }, T + 5)).toEqual({ scope: 'whole', at: T + 5 });
+    // A failed whole read's back-off is longer than the floor and is kept.
+    expect(nextPoll({ ...sent, wholeFailures: 1, lastPollAt: T + 100_000 }, T + 100_000)).toEqual({
+      scope: 'whole',
+      at: T + 120_000,
+    });
+  });
+
+  /**
+   * The island's poll on the page's clock with the pure rules only, as
+   * use-security-map-poll.ts keeps its state: every answer good, `latency` ms
+   * after it was sent; when `busy`, every read of the last ten minutes brings
+   * events newer than the totals; a whole read comes back with the day start
+   * it was sent with, and the next midnight is worked out from that. Opened at
+   * `from` with the server's read. No replay. Every send, until `to`.
+   */
+  function simulateDay(zone: string, from: number, to: number, busy: boolean, latency = 300) {
+    let clock: Parameters<typeof nextPoll>[0] = {
+      ...WELL,
+      lastPollAt: from,
+      lastWholeAt: from,
+      lastWholeTryAt: from,
+      dayUnread: true,
+    };
+    let counted: string | null = null;
+    const sends: { scope: 'whole' | 'recent'; at: number; dayStart: string | null }[] = [];
+    let now = from;
+    while (now < to && sends.length < 20_000) {
+      const dayEndsAt = counted === null ? null : nextLocalMidnight(counted, zone);
+      const step = nextPoll({ ...clock, dayEndsAt }, now);
+      const at = Math.max(step.at, now);
+      const dayStart = step.scope === 'whole' ? localDayStart(new Date(at), zone) : null;
+      sends.push({ scope: step.scope, at, dayStart });
+      now = at + latency;
+      if (step.scope === 'whole') {
+        counted = dayStart;
+        clock = {
+          ...clock,
+          lastPollAt: now,
+          lastWholeAt: now,
+          lastWholeTryAt: now,
+          dayUnread: false,
+          totalsBehind: false,
+          lastWholeStartAt: at,
+        };
+      } else {
+        clock = { ...clock, lastPollAt: now, totalsBehind: clock.totalsBehind || busy };
+      }
+    }
+    return sends;
+  }
+
+  const dateIn = (ms: number, zone: string) => {
+    const p = zonedParts(ms, zone);
+    return Date.UTC(p.year, p.month - 1, p.day);
+  };
+
+  it.each([
+    // Havana: 00:00 CST on 14 March 2027 is 01:00 CDT. Open from 17:00 on the 13th to 06:00 on the 15th.
+    ['America/Havana', '2027-03-13T22:00:00Z', '2027-03-15T10:00:00Z', '2027-03-14T05:00:00.000Z'],
+    // Santiago: 00:00 -04 on 5 September 2027 is 01:00 -03. From 17:00 on the 4th to 06:00 on the 6th.
+    [
+      'America/Santiago',
+      '2027-09-04T21:00:00Z',
+      '2027-09-06T09:00:00Z',
+      '2027-09-05T04:00:00.000Z',
+    ],
+  ])(
+    'a day and a half open in %s across the night the clocks skip midnight: no two whole reads under 45 s apart, the last ten minutes read between them, each day read from its first instant',
+    (zone, fromIso, toIso, change) => {
+      const from = Date.parse(fromIso);
+      const to = Date.parse(toIso);
+      for (const busy of [false, true]) {
+        const sends = simulateDay(zone, from, to, busy);
+        const label = `${zone}, ${busy ? 'a stream of new events' : 'quiet'}`;
+        expect(sends[sends.length - 1]!.at, label).toBeGreaterThanOrEqual(to - 60_000);
+        const wholes = sends.filter((s) => s.scope === 'whole');
+        const gaps = wholes.slice(1).map((s, i) => s.at - wholes[i]!.at);
+        expect(Math.min(...gaps), label).toBeGreaterThanOrEqual(SECURITY_MAP_EARLY_WHOLE_GAP_MS);
+        // The short poll goes on: never two whole reads in a row.
+        const inRow = sends.findIndex(
+          (s, i) => i > 0 && s.scope === 'whole' && sends[i - 1]!.scope === 'whole',
+        );
+        expect(inRow, label).toBe(-1);
+        // How many an hour: the 5-minute rhythm and a midnight when quiet; at most 80 under a stream.
+        const perHour = new Map<number, number>();
+        for (const s of wholes) {
+          const hour = Math.floor((s.at - from) / 3_600_000);
+          perHour.set(hour, (perHour.get(hour) ?? 0) + 1);
+        }
+        expect(Math.max(...perHour.values()), label).toBeLessThanOrEqual(busy ? 80 : 14);
+        // Every whole read carries the first instant of the day it was sent in, there.
+        for (const s of wholes) {
+          const start = Date.parse(s.dayStart!);
+          expect(start, label).toBeLessThanOrEqual(s.at);
+          expect(dateIn(start, zone), label).toBe(dateIn(s.at, zone));
+          expect(dateIn(start - 1, zone), label).toBeLessThan(dateIn(s.at, zone));
+        }
+        // The day the clocks skip midnight is read from the change itself, 01:00 on the clock.
+        expect(
+          wholes.some((s) => s.dayStart === change),
+          label,
+        ).toBe(true);
+      }
+    },
+  );
+
+  it('every zone this runtime knows, every day of 2027: the next midnight is later than now, at the day start and on its evening', () => {
+    const faults: string[] = [];
+    for (const zone of Intl.supportedValuesOf('timeZone')) {
+      let start = dayStartInZone(Date.UTC(2027, 0, 1, 12), zone);
+      for (let day = 0; day < 365 && faults.length < 5; day += 1) {
+        const next = nextLocalMidnight(new Date(start).toISOString(), zone);
+        // The day's last millisecond: its next midnight is the same one, still later than it.
+        const evening = (next ?? Number.NaN) - 1;
+        const after = Number.isFinite(evening)
+          ? nextLocalMidnight(new Date(evening).toISOString(), zone)
+          : null;
+        if (next === null || !(next > start) || after !== next || !(after > evening)) {
+          faults.push(
+            `${zone} from ${new Date(start).toISOString()}: next ${next}, after ${after}`,
+          );
+          break;
+        }
+        start = next;
+      }
+    }
+    expect(faults).toEqual([]);
+  }, 60_000);
+
+  it('should a zone ever answer a next midnight that is not later, the answer is looked for again an hour on, and on', async () => {
+    // The fault the review found, made on purpose: the "next" day start answered as that same day's start.
+    let fault: 'same day' | 'never later' = 'same day';
+    vi.resetModules();
+    vi.doMock('@stockpilot/core', async (importOriginal) => {
+      const core = await importOriginal<typeof import('@stockpilot/core')>();
+      return {
+        ...core,
+        nextDayStartInZone: (at: Date | number, zone: string) =>
+          fault === 'same day' ? core.dayStartInZone(at, zone) : 0,
+      };
+    });
+    try {
+      const faulty = await import('./map-model');
+      // 00:00 CST on 13 March 2027 in Havana: the first answer an hour on that is later is the 14th's start.
+      const start = '2027-03-13T05:00:00.000Z';
+      expect(new Date(faulty.nextLocalMidnight(start, 'America/Havana')!).toISOString()).toBe(
+        '2027-03-14T05:00:00.000Z',
+      );
+      // A rule that never answers a later one: no time, never a midnight at or before the day start.
+      fault = 'never later';
+      expect(faulty.nextLocalMidnight(start, 'America/Havana')).toBeNull();
+    } finally {
+      vi.doUnmock('@stockpilot/core');
+      vi.resetModules();
+    }
   });
 });
 
