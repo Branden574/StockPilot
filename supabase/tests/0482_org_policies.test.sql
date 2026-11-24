@@ -38,7 +38,7 @@
 
 begin;
 
-select plan(105);
+select plan(113);
 
 set local timezone = 'UTC';
 
@@ -1360,6 +1360,98 @@ select is(
 update public.org_policy_reminders set last_reminded_at = now() - interval '2 days' where round_version_id = pg_temp.id('p3v3');
 select is((select jsonb_array_length(v -> 'claimed') from (select pg_temp.claim(10) v) x), 0,
   '0482/105: and the round''s first automatic reminder waits for its 3 days');
+
+-- ── 11. The rest of the rules, each where only it decides ────────────────────
+-- A policy never published (P7) and a draft of the published P5.
+select pg_temp.keep('p7', (pg_temp.save(:adminC, :orgC, null, 'other', 'C draft', 'Draft words.') ->> 'policy_id')::uuid);
+select pg_temp.save(:adminC, :orgC, pg_temp.id('p5'), 'data_handling', 'C data', 'Changed words.');
+select is(
+  pg_temp.try_as('postgres', null, format(
+    'insert into public.org_policies (organization_id, kind, title, current_version) values (%L, ''other'', ''T'', 1)', :orgC)) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'update public.org_policies set last_remind_now_at = now() where id = %L', pg_temp.id('p7'))) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'update public.org_policy_versions set published_by = %L where policy_id = %L and published_at is null', :adminC, pg_temp.id('p5'))) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'update public.org_policy_versions set published_at = now(), published_by = %L where policy_id = %L and published_at is null',
+    :adminC, pg_temp.id('p5'))) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'update public.org_policy_versions set version_number = 2, needs_acknowledgement = false, acknowledgement_round = 2, '
+    'published_at = now(), published_by = %L where policy_id = %L and published_at is null', :adminC, pg_temp.id('p5'))) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'update public.org_policy_reminders set sent_count = 7 where round_version_id = %L and user_id = %L', pg_temp.id('p3v1'), :ownerC)),
+  '23514:org_policies_current_version 23514:org_policies_remind_now 23514:org_policy_versions_publisher '
+  '23514:org_policy_versions_published 23514:org_policy_versions_round 23514:org_policy_reminders_sent',
+  '0482/106: the tables'' own checks hold against their owner: a draft names no version and no Remind now, a draft no publisher, a version is published with its number, a correction never opens its own round, at most 6 automatic reminders');
+select is(
+  pg_temp.err(pg_temp.ack(:memberC, pg_temp.ver(pg_temp.id('p5'), 1), 'web', 'aal1',
+                          upper((select text_hash from public.org_policy_versions where id = pg_temp.ver(pg_temp.id('p5'), 1))))) || ' ' ||
+  pg_temp.err(pg_temp.pub(:adminC, pg_temp.id('p5'), 'new_version', upper(pg_temp.draft_hash(pg_temp.id('p5'))))),
+  '22023|policy_hash_invalid 22023|policy_hash_invalid',
+  '0482/107: a hash in capital letters is not a hash: the acknowledgement and the publish refuse it');
+select is(
+  (pg_temp.txt(:actasC, pg_temp.id('p5')) ->> 'owed') || ' ' || (pg_temp.txt(:memberC, pg_temp.id('p5')) ->> 'owed') || ' ' ||
+  pg_temp.err(pg_temp.rows_of(:managerC, 'org_policy_acknowledgement_record', pg_temp.id('p3'))) || ' ' ||
+  pg_temp.err(pg_temp.rows_of(:viewerC, 'org_policy_acknowledgement_record', pg_temp.id('p3'))),
+  'false true 42501|policy_admins_only 42501|policy_admins_only',
+  '0482/108: the words never say owed to an act-as seat (a current member is owed them); a manager or a viewer cannot read the record');
+
+-- P5's round moved back 40 days (its guard off for that one statement); a support seat not accepted in C.
+alter table public.org_policy_versions disable trigger org_policy_versions_guard;
+update public.org_policy_versions set published_at = now() - interval '40 days' where id = pg_temp.ver(pg_temp.id('p5'), 1);
+alter table public.org_policy_versions enable trigger org_policy_versions_guard;
+insert into auth.users (id, email, raw_user_meta_data) values
+  ('a0482000-0000-0000-0000-0000000000eb', 'policy-seat-pending-c@test.local', '{"full_name": "Policy Seat Pending C"}'::jsonb);
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:orgC, 'a0482000-0000-0000-0000-0000000000eb', 'owner', null, now() + interval '1 hour');
+select is(
+  (select string_agg((e ->> 'user_id') || '=' ||
+            case (e ->> 'owed_since')::timestamptz when now() - interval '2 days' then 'joined'
+                                                    when now() - interval '40 days' then 'round' else e ->> 'owed_since' end,
+            ' ' order by e ->> 'user_id')
+     from jsonb_array_elements(pg_temp.fn1(:adminC, 'org_policy_status', pg_temp.id('p5')) -> 'not_acknowledged') e
+    where e ->> 'user_id' in ('a0482000-0000-0000-0000-0000000000e3', 'a0482000-0000-0000-0000-0000000000e6')) || ' ' ||
+  (select count(*) from jsonb_array_elements(pg_temp.fn1(:adminC, 'org_policy_status', pg_temp.id('p5')) -> 'invited') e
+    where e ->> 'email' = 'policy-seat-pending-c@test.local'),
+  'a0482000-0000-0000-0000-0000000000e3=round a0482000-0000-0000-0000-0000000000e6=joined 0',
+  '0482/109: a member is owed a round from its publish or from their joining, whichever is later; a support seat not accepted is not listed as invited');
+
+-- A retirement of yesterday (its guard off for that one statement), retired again.
+alter table public.org_policies disable trigger org_policies_guard;
+update public.org_policies set retired_at = now() - interval '1 day' where id = pg_temp.id('p4');
+alter table public.org_policies enable trigger org_policies_guard;
+insert into answers values ('rt2', pg_temp.fn1(:adminC, 'org_policy_retire', pg_temp.id('p4')));
+select is(
+  (select (v ->> 'already') || '|' || ((v ->> 'retired_at')::timestamptz = now() - interval '1 day')::text from answers where k = 'rt2'),
+  'true|true',
+  '0482/110: retiring a retired policy again answers the first retirement''s time');
+
+-- viewerC had a Remind now of P5's round 60 hours ago; the others of C are owed its first reminder.
+insert into public.org_policy_reminders (organization_id, policy_id, round_version_id, user_id, sent_count, last_sent_at, manual_count, last_reminded_at)
+values (:orgC, pg_temp.id('p5'), pg_temp.ver(pg_temp.id('p5'), 1), :viewerC, 0, null, 1, now() - interval '60 hours');
+insert into answers values ('c5', pg_temp.claim(6));
+select is(
+  (select pg_temp.users_of(v -> 'claimed') || ' ' || (v ->> 'more') from answers where k = 'c5'),
+  'a0482000-0000-0000-0000-0000000000e0,a0482000-0000-0000-0000-0000000000e1,a0482000-0000-0000-0000-0000000000e2,'
+  'a0482000-0000-0000-0000-0000000000e3,a0482000-0000-0000-0000-0000000000e5,a0482000-0000-0000-0000-0000000000e7 false',
+  '0482/111: exactly six were due and six were claimed (more is false): never viewerC, reminded 60 hours ago (3 days must pass), nor lateC2 (joined 2 days ago)');
+
+update public.org_policies set last_remind_now_at = now() - interval '13 hours' where id = pg_temp.id('p5');
+insert into answers values ('rn13', pg_temp.fn1(:adminC, 'org_policy_remind_now', pg_temp.id('p5')));
+select is(
+  (select (v ->> 'reminded') || '|' || (v ->> 'reason') || '|' || ((v ->> 'next_allowed_at')::timestamptz = now() + interval '11 hours')::text
+     from answers where k = 'rn13'),
+  'false|too_soon|true',
+  '0482/112: Remind now 13 hours after the last one is too soon, and allowed 24 hours after it');
+update public.org_policies set last_remind_now_at = now() - interval '25 hours' where id = pg_temp.id('p5');
+insert into answers values ('rn25', pg_temp.fn1(:adminC, 'org_policy_remind_now', pg_temp.id('p5')));
+select is(
+  (select v ->> 'reminded' from answers where k = 'rn25') || ' ' ||
+  (select string_agg(right(r.user_id::text, 2) || ':' || r.sent_count || '/' || r.manual_count, ' ' order by r.user_id)
+     from public.org_policy_reminders r where r.round_version_id = pg_temp.ver(pg_temp.id('p5'), 1)) || ' ' ||
+  ((select last_remind_now_at from public.org_policies where id = pg_temp.id('p5')) = now())::text,
+  'true e0:1/1 e1:1/1 e2:1/1 e3:1/1 e4:0/2 e5:1/1 e6:0/1 e7:1/1 true',
+  '0482/113: 25 hours after, Remind now reaches every current member owed the round and counts it on each one''s row (automatic/Remind now)');
 
 select * from finish();
 rollback;
