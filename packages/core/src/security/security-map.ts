@@ -1294,16 +1294,24 @@ export function readSecurityMapPollResult(raw: unknown): SecurityMapPollResult {
 /** The view of the whole window, when the page has one. */
 export type SecurityMapWholeRead = SecurityMapView & { whole: SecurityMapWholeView };
 
-/** One arc of the plan: a country, a category, an outcome, a count. */
+/**
+ * One arc of the plan: a country, a category, an outcome, a count. The
+ * category is null for a flagged sign-in alert, drawn from the kept flagged
+ * list (an entry of a kind the map's numbers leave out, which reaches the
+ * browser with no category): the renderers give it the one neutral look and
+ * no kind's name.
+ */
 export interface SecurityMapArc {
   /** Stable for a country, category and outcome, so a renderer can keep an arc across reads. */
   key: string;
   country: string;
-  category: SecurityEventCategory;
+  category: SecurityEventCategory | null;
   outcome: SecurityMapDrawnOutcome;
   events: number;
   /** Stroke width in the map's own units: by the count, on a log scale. */
   width: number;
+  /** A sign-in alert arc's count holds a floor ("at least"): one of its entries said so. */
+  atLeast?: boolean;
 }
 
 export const SECURITY_MAP_ARC_MIN_WIDTH = 1;
@@ -1363,12 +1371,89 @@ export interface SecurityMapPlan {
 /** How long one hour of the replay stays on the map. */
 export const SECURITY_MAP_REPLAY_STEP_MS = 2500;
 
+const MINUTE_MS = 60_000;
+
+/**
+ * The flagged sign-in alerts of the kept flagged list as arcs, one per
+ * country (owner's decision of 2026-11-24: they are drawn, not only listed).
+ * Only an entry of a kind the map's numbers leave out (it reaches the
+ * browser with no category), with a country, and not a count past a cap.
+ * Nothing new leaves the server for them: the list already carries the
+ * minute, the count, the country and the city. The arc has no category and
+ * so no kind's name; its count says "at least" when an entry's did.
+ */
+export function securityMapSignInAlertArcs(
+  rows: readonly SecurityMapFlaggedRow[],
+): SecurityMapArc[] {
+  const byCountry = new Map<string, { events: number; atLeast: boolean }>();
+  for (const [, , events, atLeast, category, reason, country] of rows) {
+    if (category !== null || country === null || isSecurityMapFloodReason(reason)) continue;
+    const held = byCountry.get(country);
+    if (held) {
+      held.events += events;
+      held.atLeast ||= atLeast;
+    } else byCountry.set(country, { events, atLeast });
+  }
+  return [...byCountry.entries()]
+    .sort((a, b) => b[1].events - a[1].events || (a[0] < b[0] ? -1 : 1))
+    .map(([country, { events, atLeast }]) => ({
+      key: `${country}:alert:flagged`,
+      country,
+      category: null,
+      outcome: 'flagged' as const,
+      events,
+      width: securityMapArcWidth(events),
+      ...(atLeast ? { atLeast: true } : {}),
+    }));
+}
+
+/**
+ * The timeline's arcs and the sign-in alerts' together, the largest first,
+ * at most 40. With no alert the timeline's arcs are kept as they are, in
+ * their own order. An alert arc goes after every timeline arc with as many
+ * events or more, so a tie never pushes a timeline arc out.
+ */
+function withAlertArcs(
+  arcs: readonly SecurityMapArc[],
+  alerts: readonly SecurityMapArc[],
+): { arcs: SecurityMapArc[]; cut: boolean } {
+  if (alerts.length === 0) {
+    return { arcs: arcs.slice(0, SECURITY_MAP_MAX_ARCS), cut: arcs.length > SECURITY_MAP_MAX_ARCS };
+  }
+  const merged = [...arcs];
+  for (const alert of alerts) {
+    let at = merged.findIndex((arc) => arc.events < alert.events);
+    if (at < 0) at = merged.length;
+    merged.splice(at, 0, alert);
+  }
+  return {
+    arcs: merged.slice(0, SECURITY_MAP_MAX_ARCS),
+    cut: merged.length > SECURITY_MAP_MAX_ARCS,
+  };
+}
+
+/** The flagged rows whose minute reaches into [fromMs, toMs). */
+function rowsIn(
+  rows: readonly SecurityMapFlaggedRow[],
+  fromMs: number,
+  toMs: number,
+): SecurityMapFlaggedRow[] {
+  return rows.filter((row) => {
+    const at = Date.parse(row[1]);
+    return at + MINUTE_MS > fromMs && at < toMs;
+  });
+}
+
 /**
  * THE PLAYBACK PLAN. Live when the newest read's last ten minutes hold
  * events (the database leaves the late sources out of those cells, so a row
  * added hours late is never played as if it had just happened); otherwise a
  * replay of the whole window, hour by hour, skipping hours with nothing;
- * otherwise still. Arcs come from the timeline and from nothing else.
+ * otherwise still. Arcs come from the timeline, and from the flagged sign-in
+ * alerts of the kept flagged list (`alerts`, the island's kept list; owner's
+ * decision of 2026-11-24): an alert is live when its minute reaches into the
+ * live window, and in the replay at its hour. The 40-arc cap holds for both
+ * together.
  *
  * `recent` is the newest read of the last ten minutes, or null; it counts
  * only when it is newer than the read of the whole window.
@@ -1376,42 +1461,65 @@ export const SECURITY_MAP_REPLAY_STEP_MS = 2500;
 export function planSecurityMapPlayback(
   whole: SecurityMapWholeRead | null,
   recent: SecurityMapView | null,
+  alerts: readonly SecurityMapFlaggedRow[] = [],
 ): SecurityMapPlan {
   const newest =
     recent && (!whole || Date.parse(recent.generatedAt) >= Date.parse(whole.generatedAt))
       ? recent
       : whole;
-  const live = (newest?.live ?? []).slice(0, SECURITY_MAP_MAX_ARCS).map(securityMapArcOf);
+  const liveFromMs = newest ? Date.parse(newest.liveFrom) : Number.NaN;
+  const liveAlerts = Number.isFinite(liveFromMs)
+    ? securityMapSignInAlertArcs(rowsIn(alerts, liveFromMs, Number.POSITIVE_INFINITY))
+    : [];
+  const liveRows = newest?.live ?? [];
+  const live = withAlertArcs(liveRows.map(securityMapArcOf), liveAlerts);
   const liveUndrawn = newest?.liveUndrawn ?? false;
-  if (live.length > 0) {
+  if (live.arcs.length > 0) {
     return {
       mode: 'live',
-      live,
+      live: live.arcs,
       steps: [],
-      picture: live,
-      cut: newest?.liveCut ?? false,
+      picture: live.arcs,
+      cut: (newest?.liveCut ?? false) || live.cut,
       liveUndrawn,
     };
   }
-  const steps: SecurityMapReplayStep[] = (whole?.whole.steps ?? []).map(([fromMs, rows]) => ({
-    fromMs,
-    toMs: fromMs + SECURITY_MAP_STEP_MS,
-    arcs: rows.slice(0, SECURITY_MAP_MAX_ARCS).map(securityMapArcOf),
-  }));
-  if (whole && steps.length > 0) {
+  if (!whole) return { mode: 'still', live: [], steps: [], picture: [], cut: false, liveUndrawn };
+  const hours = new Map<number, readonly SecurityMapArcRow[]>(whole.whole.steps);
+  for (const row of alerts) {
+    const at = Date.parse(row[1]);
+    if (!Number.isFinite(at)) continue;
+    const hour = Math.floor(at / SECURITY_MAP_STEP_MS) * SECURITY_MAP_STEP_MS;
+    if (!hours.has(hour) && securityMapSignInAlertArcs([row]).length > 0) hours.set(hour, []);
+  }
+  let cut = whole.whole.drawingCut;
+  const steps: SecurityMapReplayStep[] = [...hours.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([fromMs, rows]) => {
+      const toMs = fromMs + SECURITY_MAP_STEP_MS;
+      const step = withAlertArcs(
+        rows.map(securityMapArcOf),
+        securityMapSignInAlertArcs(rowsIn(alerts, fromMs, toMs)),
+      );
+      cut ||= step.cut;
+      return { fromMs, toMs, arcs: step.arcs };
+    });
+  if (steps.length > 0) {
+    const picture = withAlertArcs(
+      whole.whole.still.map(securityMapArcOf),
+      securityMapSignInAlertArcs(alerts),
+    );
     return {
       mode: 'replay',
       live: [],
       steps,
-      picture: whole.whole.still.slice(0, SECURITY_MAP_MAX_ARCS).map(securityMapArcOf),
-      cut: whole.whole.drawingCut,
+      picture: picture.arcs,
+      cut: cut || picture.cut,
       liveUndrawn,
     };
   }
   return { mode: 'still', live: [], steps: [], picture: [], cut: false, liveUndrawn };
 }
-
-const MINUTE_MS = 60_000;
 
 /** Newest first: the latest minute, inside a minute the largest count, then by key. */
 function feedOrder(a: SecurityMapKeptRow, b: SecurityMapKeptRow): number {
@@ -1454,6 +1562,59 @@ export function securityMapMergeFeed<R extends SecurityMapKeptRow>(
   const inWindow = [...byKey.values()].filter((row) => Date.parse(row[1]) + MINUTE_MS > fromMs);
   inWindow.sort(feedOrder);
   return { rows: inWindow.slice(0, max), cut: inWindow.length > max };
+}
+
+/**
+ * Whether entries or live cells hold something the last good read of the
+ * whole window had not counted: an entry whose minute starts at or after the
+ * end of the window that read covered (its `to`), or one whose minute
+ * straddles that end with more events than the whole read's own lists gave
+ * it (or that they did not hold). False with no whole read: there are no
+ * totals to be behind.
+ *
+ * A live cell carries no minute of its own (the view sums the last ten
+ * minutes by country, kind and outcome), so `recent`, a poll's read of its
+ * own last ten minutes, is set beside the whole read's: both windows are ten
+ * minutes long and the poll's ends later, so a count in the poll that is
+ * larger than the whole read's for the same country, kind and outcome can
+ * only come from events after the whole read's end. When the whole read's
+ * live list was cut (more than 40, or a cut timeline) a missing or smaller
+ * count proves nothing, and live cells are not looked at.
+ *
+ * Used twice (the coordinator's change of 2026-11-24): on a poll's own
+ * entries, to read the whole window early (map-model nextPoll keeps every
+ * other rule), and on the kept lists, so the page never says "nothing" while
+ * its feed lists something newer than the totals.
+ */
+export function securityMapNewerThanTotals(
+  whole: SecurityMapWholeRead | null,
+  rows: readonly SecurityMapKeptRow[],
+  recent: SecurityMapView | null = null,
+): boolean {
+  if (!whole) return false;
+  const toMs = Date.parse(whole.to);
+  if (!Number.isFinite(toMs)) return false;
+  if (recent && !whole.liveCut && Date.parse(recent.to) > toMs) {
+    const live = new Map<string, number>();
+    for (const [country, category, outcome, events] of whole.live) {
+      live.set(`${country}:${category}:${outcome}`, events);
+    }
+    const grew = recent.live.some(
+      ([country, category, outcome, events]) =>
+        events > (live.get(`${country}:${category}:${outcome}`) ?? 0),
+    );
+    if (grew) return true;
+  }
+  const counted = new Map<string, number>();
+  for (const row of [...whole.feed, ...whole.flaggedFeed]) {
+    counted.set(row[0], Math.max(counted.get(row[0]) ?? 0, row[2]));
+  }
+  return rows.some((row) => {
+    const at = Date.parse(row[1]);
+    if (!Number.isFinite(at)) return false;
+    if (at >= toMs) return true;
+    return at + MINUTE_MS > toMs && (counted.get(row[0]) ?? -1) < row[2];
+  });
 }
 
 /**
@@ -1523,6 +1684,12 @@ export function securityMapFlaggedReasonWords(reason: string): string {
 /** The last ten minutes are read this often; the whole window this often (review S8). */
 export const SECURITY_MAP_RECENT_POLL_MS = 30_000;
 export const SECURITY_MAP_WHOLE_POLL_MS = 5 * 60_000;
+/**
+ * The shortest gap between the starts of two reads of the whole window when
+ * a poll brought events newer than the totals (the coordinator's change of
+ * 2026-11-24): an early read is never sooner than this after the last one began.
+ */
+export const SECURITY_MAP_EARLY_WHOLE_GAP_MS = 45_000;
 /** After this many failed reads in a row the page says it is not updating, and the play stops. */
 export const SECURITY_MAP_FAILED_POLLS_BEFORE_STOP = 2;
 const BACK_OFF_MAX_MS = 120_000;
@@ -1972,19 +2139,23 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
   const window = securityMapWindowWords(whole.from, whole.to);
   const notes: string[] = [];
 
-  if (w.notDrawnSignInAlerts > 0 || w.notDrawnOther > 0) {
-    const parts: string[] = [];
-    if (w.notDrawnSignInAlerts > 0) {
-      const count = securityMapCountWords(w.notDrawnSignInAlerts, w.notDrawnSignInAlertsFloor);
-      parts.push(`${count} flagged sign-in ${plural(w.notDrawnSignInAlerts, 'alert', 'alerts')}`);
-    }
-    if (w.notDrawnOther > 0) {
-      parts.push(
-        `${num(w.notDrawnOther)} other ${plural(w.notDrawnOther, 'event', 'events')} of a kind this map does not show`,
-      );
-    }
-    const they = w.notDrawnSignInAlerts + w.notDrawnOther === 1 ? 'It is' : 'They are';
-    notes.push(`Not drawn: ${parts.join(' and ')}. ${they} on the Security page.`);
+  if (w.notDrawnSignInAlerts > 0) {
+    // Drawn since 2026-11-24 from the flagged list (its newest entries), and
+    // still in no number by kind: this line says both, and where all of them are.
+    const count = securityMapCountWords(w.notDrawnSignInAlerts, w.notDrawnSignInAlertsFloor);
+    const one = w.notDrawnSignInAlerts === 1;
+    notes.push(
+      `${count.charAt(0).toUpperCase()}${count.slice(1)} flagged sign-in ${one ? 'alert is' : 'alerts are'} not in the numbers by kind. ${
+        one ? 'It is drawn' : 'The newest are drawn'
+      } with a grey mark, from the flagged list, and ${one ? 'it is' : 'every one is'} on the Security page.`,
+    );
+  }
+  if (w.notDrawnOther > 0) {
+    notes.push(
+      `Not drawn: ${num(w.notDrawnOther)} ${plural(w.notDrawnOther, 'event', 'events')} of a kind this map does not show. ${
+        w.notDrawnOther === 1 ? 'It is' : 'They are'
+      } on the Security page.`,
+    );
   }
   if (w.noPlace > 0) {
     const floor = shownFloor(whole, 'no_place', DRAWN);
@@ -2047,9 +2218,17 @@ export function securityMapTallyWords(reason: string, counted: number | null): s
   }
 }
 
-/** The words where the map and the table have nothing to show. Null when they have. */
-export function securityMapEmptyWords(whole: SecurityMapWholeRead | null): string | null {
-  if (!whole) return null;
+/**
+ * The words where the map and the table have nothing to show. Null when they
+ * have, and null while the kept lists hold entries newer than the totals
+ * (`behind`, securityMapNewerThanTotals): the totals are being counted again
+ * then, and "nothing" would contradict the feed beside it.
+ */
+export function securityMapEmptyWords(
+  whole: SecurityMapWholeRead | null,
+  behind = false,
+): string | null {
+  if (!whole || behind) return null;
   const w = whole.whole;
   const window = securityMapWindowWords(whole.from, whole.to);
   if (w.oldestEventAt === null) return 'No security events have been recorded yet.';
@@ -2257,7 +2436,7 @@ export const SECURITY_MAP_WORDS = {
   flaggedFeedNote:
     'The newest 20 flagged entries of the window read, so a flood of blocked ones never hides them. Times in UTC.',
   flaggedFeedSplit:
-    'Flagged sign-in alerts are listed here, with a grey mark, and are not drawn on the map.',
+    'Flagged sign-in alerts are listed here and drawn on the map with a grey mark. They are not in the numbers by kind.',
   flaggedFeedEmpty: 'Nothing was flagged.',
   flaggedFeedMore: 'Only the newest are listed: this window holds more flagged events than these.',
   flaggedFeedNoneListed: 'None listed, though this window holds flagged events.',
@@ -2296,6 +2475,12 @@ export const SECURITY_MAP_WORDS = {
   legendBlocked: 'Blocked',
   legendFlagged: 'Flagged, not blocked',
   legendCounts: 'Numbers on the globe: events in this play',
+  legendSignInAlert: 'Flagged sign-in alert',
+  legendSignInAlertHelp:
+    'Drawn from the flagged list, with a grey mark and a dashed line. Not in the numbers by kind.',
+  recounting:
+    'New events arrived, so the totals and the table are being counted again. The numbers above are as of the time below until then.',
+  tableRecounting: 'Being counted again: new events arrived.',
   cutLive:
     'More happened in the last 10 minutes than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
   cutReplay:
