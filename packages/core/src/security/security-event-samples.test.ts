@@ -272,9 +272,12 @@ describe('the words', () => {
     );
   });
   it('the fixed line and the empty line, as the brief has them', () => {
+    // Review 3B S7: the line says the text is the sender's, and "the path",
+    // never "the address" (the cards' word for a network address).
     expect(W.removed).toBe(
-      "Only the address and the query string of a request the site refused. A request body is never kept. Anything that looked like an email address, an id, a long value, a secret or a parameter the site's own routing uses was removed.",
+      "Only the path and the query string of a request the site refused. A request body is never kept. Anything that looked like an email address, an id, a long value, a secret or a parameter the site's own routing uses was removed. The text shown is what the sender of the request typed, not something StockPilot wrote or ran. Do not visit, call or write to anything it names.",
     );
+    expect(W.removed).not.toMatch(/\baddress and\b/);
     expect(W.none).toBe('No sample was kept for this entry.');
     expect(W.title).toBe('What was asked for');
     expect(W.sent).toBe('What was sent');

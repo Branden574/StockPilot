@@ -280,9 +280,13 @@ export const SECURITY_EVENT_SAMPLES_WORDS = {
   tooOld: 'What was asked for is read for the last 7 days only, and this entry is older.',
   noneWhy:
     'A sample is kept only for a request that matched a scanner rule, and only since samples began to be kept.',
-  /** The fixed line under every list. */
+  /**
+   * The fixed line under every list. It says the text is the sender's, not
+   * StockPilot's (review 3B S7: up to 200 characters of a stranger's words
+   * are shown in the console).
+   */
   removed:
-    "Only the address and the query string of a request the site refused. A request body is never kept. Anything that looked like an email address, an id, a long value, a secret or a parameter the site's own routing uses was removed.",
+    "Only the path and the query string of a request the site refused. A request body is never kept. Anything that looked like an email address, an id, a long value, a secret or a parameter the site's own routing uses was removed. The text shown is what the sender of the request typed, not something StockPilot wrote or ran. Do not visit, call or write to anything it names.",
   pairsTruncated: 'More variations were asked for than are shown.',
   /** The window, under the title. */
   hourWindow: (from: string, to: string): string => `In the hour from ${from} to ${to}.`,
