@@ -329,8 +329,8 @@ describe('the flush', () => {
       }
       expect(h.rpc).toHaveBeenCalledTimes(3);
       const missing = warn.mock.calls
-        .map((c) => String(c[0]))
-        .filter((l) => l.includes('security.event_samples_missing'));
+        .map((c: unknown[]) => String(c[0]))
+        .filter((l: string) => l.includes('security.event_samples_missing'));
       expect(missing).toEqual([
         JSON.stringify({ tag: 'security.event_samples_missing', code, rows: 1 }),
       ]);
