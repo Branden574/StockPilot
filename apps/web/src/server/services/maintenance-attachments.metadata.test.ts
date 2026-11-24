@@ -80,6 +80,9 @@ vi.mock('@/lib/image-reencode', async (importOriginal) => {
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
 
+import { recordSecurityEvent } from '@/server/security/events';
+import { expectOneRefusal, HTML_PAGE, withArchiveAfter } from '@/test/upload-fixtures';
+
 import { MaintenanceAttachmentsService } from './maintenance-attachments';
 
 const ORG = '0a0a0a0a-0000-4000-8000-000000000001';
@@ -1253,5 +1256,66 @@ describe('a refusal never deletes the files of a photo another finalize recorded
     const { svc, looks } = setup();
     await svc.finalize(REQ, finalizeArgs('jpeg'));
     expect(looks()).toBe(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Security invariant (part 6, stage 6a): the finalize's sniff, declared type
+// and a whole-file look for a file hidden after the picture are the one
+// upload check's. A refusal answers invalid_image as before, deletes the
+// upload and the thumbnail name (unless the "is it recorded" look fails,
+// which deletes nothing, as before), records nothing in the table, tells the
+// uploader, and records exactly ONE malware / blocked event in the
+// organization with no path. The size, pixel and re-encode refusals above
+// are this path's own and record no security event.
+describe('the upload check (part 6)', () => {
+  const record = vi.mocked(recordSecurityEvent);
+  beforeEach(() => {
+    record.mockImplementation(async () => undefined);
+  });
+
+  it('a clean photo: stored and recorded as before, and no event', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    const { svc, inserted } = setup();
+    await svc.finalize(REQ, finalizeArgs('jpeg'));
+    expect(inserted).toHaveLength(1);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a web page declared as a JPEG', async () => HTML_PAGE, 'jpeg' as const, 'upload_wrong_type'],
+    ['a PNG declared as a JPEG', async () => phonePhoto('png'), 'jpeg' as const, 'upload_wrong_type'],
+    ['a real photo with an archive after it', async () => withArchiveAfter(await phonePhoto('jpeg')), 'jpeg' as const, 'upload_hidden_file'],
+  ])('%s: invalid_image, both names deleted, nothing recorded, the uploader told, one event', async (_what, make, kind, reason) => {
+    const path = `${stem}.${EXT[kind]}`;
+    bucket.put(path, await make(), MIME[kind]);
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
+    const { svc, inserted } = setup();
+    await expect(svc.finalize(REQ, finalizeArgs(kind))).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'invalid_image',
+    });
+    expect(bucket.objects.has(path)).toBe(false);
+    expect(bucket.objects.has(THUMB)).toBe(false);
+    expect(inserted).toHaveLength(0);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ event: 'photo_rejected' }));
+    expectOneRefusal(record, { reason, organizationId: ORG }, [path, FILE, 'leak.']);
+  });
+
+  it('a refusal when the "is it recorded" look fails: one event, and nothing deleted (as before)', async () => {
+    bucket.put(`${stem}.jpg`, HTML_PAGE, 'image/jpeg');
+    const { svc } = setup({ lookFailsFrom: 2 });
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({ message: 'invalid_image' });
+    expect(bucket.objects.has(`${stem}.jpg`)).toBe(true);
+    expectOneRefusal(record, { reason: 'upload_wrong_type', organizationId: ORG });
+  });
+
+  it('a recorder that fails: still refused, still deleted, still nothing recorded', async () => {
+    record.mockRejectedValue(new Error('recorder down'));
+    bucket.put(`${stem}.jpg`, HTML_PAGE, 'image/jpeg');
+    const { svc, inserted } = setup();
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({ message: 'invalid_image' });
+    expect(bucket.objects.has(`${stem}.jpg`)).toBe(false);
+    expect(inserted).toHaveLength(0);
   });
 });
