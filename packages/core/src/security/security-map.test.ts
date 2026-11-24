@@ -12,7 +12,6 @@ import {
   SECURITY_MAP_FAILED_POLLS_BEFORE_STOP,
   SECURITY_MAP_FLOOD_REASONS,
   SECURITY_MAP_FOLDED_REASONS,
-  SECURITY_MAP_FOLDED_REASON_KINDS,
   SECURITY_MAP_HEALTH_AT_START,
   SECURITY_MAP_LATE_SOURCES,
   SECURITY_MAP_MAX_ARCS,
@@ -20,8 +19,10 @@ import {
   SECURITY_MAP_POLL_FAILED,
   SECURITY_MAP_POLL_REFUSED,
   SECURITY_MAP_REFUSALS,
+  SECURITY_MAP_ROWS_PER_SIGN_IN,
   SECURITY_MAP_STEP_MS,
   SECURITY_MAP_TALLY_REASONS,
+  isSecurityMapFloorName,
   isSecurityMapFloodReason,
   isSecurityMapFoldedReason,
   isSecurityMapLateSource,
@@ -34,13 +35,14 @@ import {
   securityMapArcWidth,
   securityMapAsOfWords,
   securityMapClock,
-  securityMapCountIsFloor,
   securityMapCountWords,
   securityMapCounters,
   securityMapEmptyWords,
   securityMapFeedOf,
   securityMapFeedWords,
+  securityMapFlaggedFeedOf,
   securityMapHealthAfter,
+  securityMapIsFloor,
   securityMapLegend,
   securityMapLegendHelp,
   securityMapModeWords,
@@ -48,6 +50,7 @@ import {
   securityMapNotes,
   securityMapOutcomeWords,
   securityMapRefusedWindowWords,
+  securityMapShortenedWords,
   securityMapShownCategories,
   securityMapStopReason,
   securityMapStopWords,
@@ -58,6 +61,7 @@ import {
   type SecurityMapAnswer,
   type SecurityMapCategoryCounts,
   type SecurityMapFeedEntry,
+  type SecurityMapFeedRow,
   type SecurityMapTimelineCell,
   type SecurityMapView,
   type SecurityMapWholeRead,
@@ -95,10 +99,14 @@ const counts = (
 const FROM = '2026-11-22T22:00:00+00:00';
 const TO = '2026-11-23T22:00:00+00:00';
 const LIVE_FROM = '2026-11-23T21:50:00+00:00';
+/** The start a shortened window is read from: three hours before its end, on a whole minute. */
+const TO_MINUS_3H = '2026-11-23T19:00:00+00:00';
 
 function answer(over: Partial<SecurityMapAnswer> = {}): SecurityMapAnswer {
   return {
-    window: { from: FROM, to: TO, live_from: LIVE_FROM },
+    window: { from: FROM, to: TO, live_from: LIVE_FROM, asked_from: FROM },
+    window_shortened: false,
+    short_window: false,
     refused: null,
     generated_at: '2026-11-23T22:00:00.123456+00:00',
     oldest_event_at: '2026-11-01T19:42:00+00:00',
@@ -113,7 +121,10 @@ function answer(over: Partial<SecurityMapAnswer> = {}): SecurityMapAnswer {
     allowed_window: 0,
     day_start: null,
     blocked_since_day_start: null,
+    blocked_since_day_start_partial: false,
+    floors: [],
     feed: [],
+    flagged_feed: [],
     late_sources: [],
     tallies: [],
     flood_rows: [],
@@ -146,6 +157,7 @@ const entry = (over: Partial<SecurityMapFeedEntry> = {}): SecurityMapFeedEntry =
   country: 'US',
   city: 'Example Falls',
   events: 11,
+  at_least: false,
   organization_id: null,
   organization_name: null,
   organizations: 0,
@@ -154,11 +166,40 @@ const entry = (over: Partial<SecurityMapFeedEntry> = {}): SecurityMapFeedEntry =
 
 const whole = (over: Partial<SecurityMapAnswer> = {}): SecurityMapWholeRead =>
   securityMapViewOf(answer(over), 'whole') as SecurityMapWholeRead;
+/** A poll: the last ten minutes, as the database answers a short window (no 600-second cells, no groups). */
 const recent = (over: Partial<SecurityMapAnswer> = {}): SecurityMapView =>
   securityMapViewOf(
-    answer({ window: { from: LIVE_FROM, to: TO, live_from: LIVE_FROM }, ...over }),
+    answer({
+      window: { from: LIVE_FROM, to: TO, live_from: LIVE_FROM, asked_from: LIVE_FROM },
+      short_window: true,
+      ...over,
+      timeline: (over.timeline ?? []).filter((c) => c.bucket_seconds === 60),
+      by_country: [],
+    }),
     'recent',
   );
+
+/** A flagged entry of a shown kind. */
+const FLAGGED = entry({
+  minute: '2026-11-23T21:57:00+00:00',
+  outcome: 'flagged',
+  reason: 'sign_in_alerts_held',
+  events: 2,
+});
+
+/** A flagged sign-in held back after too many alerts, folded across two organizations. */
+const GB_HELD = entry({
+  minute: '2026-11-23T03:20:00+00:00',
+  outcome: 'flagged',
+  reason: 'sign_in_alerts_held',
+  country: 'GB',
+  city: 'Example Borough',
+  events: 4,
+  at_least: true,
+  organization_id: 'a0478000-0000-4000-8000-000000000001',
+  organization_name: 'Example Academy',
+  organizations: 1,
+});
 
 /** A busy window: three countries, a flagged kind, a hidden kind, and a live minute. */
 const busy = (): Partial<SecurityMapAnswer> => ({
@@ -190,6 +231,7 @@ const busy = (): Partial<SecurityMapAnswer> => ({
   blocked_window: 193,
   flagged_window: 7,
   allowed_window: 2,
+  floors: ['flagged_window', 'totals.password_guessing.flagged', 'totals.phishing.flagged'],
   feed: [
     entry(),
     entry({
@@ -200,19 +242,24 @@ const busy = (): Partial<SecurityMapAnswer> => ({
       country: 'PT',
       city: 'Example Harbour',
       events: 1,
+      at_least: true,
       organizations: 3,
     }),
+    GB_HELD,
+  ],
+  flagged_feed: [
     entry({
-      minute: '2026-11-23T03:20:00+00:00',
+      minute: '2026-11-23T21:59:00+00:00',
+      category: 'phishing',
       outcome: 'flagged',
-      reason: 'sign_in_alerts_held',
-      country: 'GB',
-      city: 'Example Borough',
-      events: 4,
-      organization_id: 'a0478000-0000-4000-8000-000000000001',
-      organization_name: 'Example Academy',
-      organizations: 1,
+      reason: 'sign_in_new_country',
+      country: 'PT',
+      city: 'Example Harbour',
+      events: 1,
+      at_least: true,
+      organizations: 3,
     }),
+    GB_HELD,
   ],
   late_sources: [{ source: 'api', category: 'password_guessing', outcome: 'blocked', events: 5 }],
   tallies: [
@@ -254,40 +301,51 @@ describe("the four lists are the contract's, to the letter", () => {
       'sign_in_not_me',
       'sign_in_alerts_held',
     ]);
-    expect(SECURITY_MAP_TALLY_REASONS).toEqual(['too_many_forms_to_count']);
-    expect(SECURITY_MAP_FLOOD_REASONS).toEqual(['over_minute_cap', 'over_buffer_cap']);
+    expect(SECURITY_MAP_TALLY_REASONS).toEqual([
+      'too_many_forms_to_count',
+      'unrecorded_server_form_password',
+      'unrecorded_server_form_code',
+    ]);
+    expect(SECURITY_MAP_FLOOD_REASONS).toEqual([
+      'over_minute_cap',
+      'over_buffer_cap',
+      'auth_log_over_cap',
+    ]);
     expect(SECURITY_MAP_LATE_SOURCES).toEqual(['phone', 'api']);
+    expect(SECURITY_MAP_ROWS_PER_SIGN_IN).toBe(5);
   });
 
-  it('every folded reason has the category and outcome it is written with, and no other reason has', () => {
-    expect(Object.keys(SECURITY_MAP_FOLDED_REASON_KINDS).sort()).toEqual(
-      [...SECURITY_MAP_FOLDED_REASONS].sort(),
-    );
-    // The fixture's own rows agree with the map.
-    for (const row of SECURITY_MAP_FIXTURE_ROWS) {
-      if (!isSecurityMapFoldedReason(row.reason)) continue;
-      const kinds = SECURITY_MAP_FOLDED_REASON_KINDS as Record<string, readonly string[]>;
-      expect(kinds[row.reason]).toEqual([row.category, row.outcome]);
-    }
+  it('no reason is in two lists', () => {
+    const all = [
+      ...SECURITY_MAP_FOLDED_REASONS,
+      ...SECURITY_MAP_TALLY_REASONS,
+      ...SECURITY_MAP_FLOOD_REASONS,
+    ];
+    expect(new Set(all).size).toBe(all.length);
   });
 });
 
 /**
  * The database's counting, written out plainly with core's lists, for the
  * shared fixture only: a folded reason's rows of one minute, category,
- * outcome, reason, source, country and city are one event, counted as the
- * largest of them; a tally is in no total; a row past a cap has no place.
+ * outcome, reason, source, country and city are one unit, counted as the
+ * larger of its largest row and a fifth of its rows' sum, rounded up (the
+ * rule of 5), and a floor when it is made of two rows or more; a tally is in
+ * no total; a row past a cap has no place.
  */
 function countFixture(rows: readonly SecurityMapFixtureRow[]) {
   interface Unit extends SecurityMapFixtureRow {
     kind: 'event' | 'tally' | 'flood';
+    rows: number[];
+    atLeast: boolean;
   }
   const folded = new Map<string, Unit>();
   const units: Unit[] = [];
   for (const row of rows) {
-    if (isSecurityMapTallyReason(row.reason)) units.push({ ...row, kind: 'tally' });
+    const plain = { ...row, rows: [row.count], atLeast: false };
+    if (isSecurityMapTallyReason(row.reason)) units.push({ ...plain, kind: 'tally' });
     else if (isSecurityMapFloodReason(row.reason)) {
-      units.push({ ...row, country: null, city: null, kind: 'flood' });
+      units.push({ ...plain, country: null, city: null, kind: 'flood' });
     } else if (isSecurityMapFoldedReason(row.reason)) {
       const key = [
         row.minute,
@@ -299,13 +357,20 @@ function countFixture(rows: readonly SecurityMapFixtureRow[]) {
         row.city,
       ].join('|');
       const held = folded.get(key);
-      if (held) held.count = Math.max(held.count, row.count);
-      else {
-        const unit: Unit = { ...row, kind: 'event' };
+      if (held) {
+        held.rows.push(row.count);
+        const sum = held.rows.reduce((s, n) => s + n, 0);
+        held.count = Math.max(
+          Math.max(...held.rows),
+          Math.ceil(sum / SECURITY_MAP_ROWS_PER_SIGN_IN),
+        );
+        held.atLeast = true;
+      } else {
+        const unit: Unit = { ...plain, kind: 'event' };
         folded.set(key, unit);
         units.push(unit);
       }
-    } else units.push({ ...row, kind: 'event' });
+    } else units.push({ ...plain, kind: 'event' });
   }
   const counted = units.filter((u) => u.kind !== 'tally');
   const sum = (list: Unit[]) => list.reduce((s, u) => s + u.count, 0);
@@ -321,7 +386,9 @@ function countFixture(rows: readonly SecurityMapFixtureRow[]) {
     ),
   ]
     .map(([key, events]) => [...key.split('|'), events])
-    .sort((a, b) => (b[3] as number) - (a[3] as number));
+    .sort(
+      (a, b) => (b[3] as number) - (a[3] as number) || String(a[0]).localeCompare(String(b[0])),
+    );
   const listed = (kind: 'tally' | 'flood') =>
     [
       ...grouped(
@@ -337,7 +404,36 @@ function countFixture(rows: readonly SecurityMapFixtureRow[]) {
         ).length,
       ])
       .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const floorOf = (list: Unit[], name: string) => (list.some((u) => u.atLeast) ? [name] : []);
+  const floors = [
+    ...['blocked', 'flagged', 'allowed'].flatMap((o) =>
+      floorOf(
+        counted.filter((u) => u.outcome === o),
+        `${o}_window`,
+      ),
+    ),
+    ...SECURITY_EVENT_CATEGORIES.flatMap((c) =>
+      ['blocked', 'flagged', 'allowed'].flatMap((o) => [
+        ...floorOf(
+          counted.filter((u) => u.category === c && u.outcome === o),
+          `totals.${c}.${o}`,
+        ),
+        ...floorOf(
+          counted.filter((u) => u.category === c && u.outcome === o && u.country === null),
+          `no_place.${c}.${o}`,
+        ),
+      ]),
+    ),
+  ].sort();
+  const late = [
+    ...grouped(
+      counted.filter((u) => isSecurityMapLateSource(u.source)),
+      (u) => `${u.source}|${u.category}|${u.outcome}`,
+    ),
+  ].map(([key, events]) => [...key.split('|'), events]);
   return {
+    floors,
+    late_sources: late,
     blocked_window: sum(counted.filter((u) => u.outcome === 'blocked')),
     flagged_window: sum(counted.filter((u) => u.outcome === 'flagged')),
     allowed_window: sum(counted.filter((u) => u.outcome === 'allowed')),
@@ -355,7 +451,7 @@ function countFixture(rows: readonly SecurityMapFixtureRow[]) {
 }
 
 describe("the shared fixture: core's lists give the database's numbers", () => {
-  it('the fold and tally lists: three reasons folded, the tally in no total, both floods counted with no place', () => {
+  it("the fold, tally and flood lists and the rule of 5: the database's numbers, floors included", () => {
     const got = countFixture(SECURITY_MAP_FIXTURE_ROWS);
     const want = SECURITY_MAP_FIXTURE_EXPECTED;
     expect(got.blocked_window).toBe(want.blocked_window);
@@ -366,19 +462,18 @@ describe("the shared fixture: core's lists give the database's numbers", () => {
     expect(got.by_country).toEqual(want.by_country);
     expect(got.tallies).toEqual(want.tallies);
     expect(got.flood_rows).toEqual(want.flood_rows);
+    expect(got.late_sources).toEqual(want.late_sources);
+    expect(got.floors).toEqual([...want.floors].sort());
+    for (const name of got.floors) expect(isSecurityMapFloorName(name), name).toBe(true);
   });
 
   it('the numbers the rules exist to avoid are the plain sums', () => {
     const flagged = SECURITY_MAP_FIXTURE_ROWS.filter((r) => r.outcome === 'flagged');
     const sum = (rows: readonly SecurityMapFixtureRow[]) => rows.reduce((s, r) => s + r.count, 0);
-    // The tally added to the folded count: what "flagged" would say with the tally in.
-    expect(
-      countFixture(SECURITY_MAP_FIXTURE_ROWS).flagged_window +
-        sum(flagged.filter((r) => isSecurityMapTallyReason(r.reason))),
-    ).toBe(SECURITY_MAP_FIXTURE_EXPECTED.flagged_with_the_tally);
     expect(sum(flagged.filter((r) => !isSecurityMapTallyReason(r.reason)))).toBe(
       SECURITY_MAP_FIXTURE_EXPECTED.flagged_unfolded,
     );
+    expect(sum(flagged)).toBe(SECURITY_MAP_FIXTURE_EXPECTED.flagged_plain_sum);
   });
 
   it('a late source is the phone app or a direct caller, and nothing else', () => {
@@ -404,7 +499,14 @@ describe("readSecurityMapAnswer: the contract's shape and nothing else", () => {
     ).toBe(true);
   });
 
-  it('a window that was refused is exactly three keys and one of four words', () => {
+  it('a window that was refused is exactly three keys and one of five words', () => {
+    expect(SECURITY_MAP_REFUSALS).toEqual([
+      'not_a_time',
+      'to_in_the_future',
+      'from_not_before_to',
+      'longer_than_26_hours',
+      'too_many_events_in_one_minute',
+    ]);
     for (const refused of SECURITY_MAP_REFUSALS) {
       expect(readSecurityMapAnswer({ window: null, refused, generated_at: TO })).toEqual({
         ok: true,
@@ -506,11 +608,108 @@ describe("readSecurityMapAnswer: the contract's shape and nothing else", () => {
         }),
       ],
       ['a time that is no time', answer({ generated_at: 'yesterday' })],
+      [
+        'a feed entry with no at_least',
+        answer({ feed: [{ ...entry(), at_least: undefined } as never] }),
+      ],
+      [
+        'an at_least that is not true or false',
+        answer({ feed: [entry({ at_least: 1 as never })] }),
+      ],
+      [
+        'a flagged feed past 20',
+        answer({ flagged_feed: Array.from({ length: 21 }, () => FLAGGED) }),
+      ],
+      ['a blocked entry in the flagged feed', answer({ flagged_feed: [entry()] })],
+      [
+        'a floor with a name the answer has not',
+        answer({ floors: ['totals.spam.blocked' as never] }),
+      ],
+      ['a floor that is the feed', answer({ floors: ['feed' as never] })],
+      [
+        'floors past 40',
+        answer({ floors: Array.from({ length: 41 }, () => 'flagged_window' as const) }),
+      ],
+      ['floors that are not a list', answer({ floors: 'flagged_window' as never })],
+      [
+        'a window with no start asked for',
+        answer({ window: { from: FROM, to: TO, live_from: LIVE_FROM } as never }),
+      ],
+      [
+        'a window read later than asked but not said to be shortened',
+        answer({ window: { from: TO_MINUS_3H, to: TO, live_from: LIVE_FROM, asked_from: FROM } }),
+      ],
+      ['a window said to be shortened that was read as asked', answer({ window_shortened: true })],
+      [
+        'a window read from before the start asked for',
+        answer({ window: { from: FROM, to: TO, live_from: LIVE_FROM, asked_from: TO_MINUS_3H } }),
+      ],
+      ['a partial day count with no count', answer({ blocked_since_day_start_partial: true })],
+      ['short_window as text', answer({ short_window: 'yes' as never })],
+      [
+        'a replay cell in a poll',
+        answer({ short_window: true, timeline: [cell(FROM, 600, 'US', 'bots', 'blocked', 1)] }),
+      ],
+      [
+        'groups by country in a poll',
+        answer({
+          short_window: true,
+          by_country: [{ country: 'US', category: 'bots', outcome: 'blocked', events: 1 }],
+        }),
+      ],
+      [
+        'a poll that says its groups were cut',
+        answer({ short_window: true, by_country_truncated: true }),
+      ],
+      [
+        'a poll past 1,000 cells',
+        answer({
+          short_window: true,
+          timeline: Array.from({ length: 1001 }, () =>
+            cell(LIVE_FROM, 60, 'US', 'bots', 'blocked', 1),
+          ),
+        }),
+      ],
+      [
+        'tallies past 300',
+        answer({ tallies: Array.from({ length: 301 }, () => busy().tallies![0]!) }),
+      ],
       ['not an object', [answer()]],
       ['nothing', null],
     ];
     for (const [name, raw] of bad) {
       expect(readSecurityMapAnswer(raw).ok, name).toBe(false);
+    }
+  });
+
+  it("reads version 2's parts: a shortened window, a poll, a partial day count, floors and the flagged feed", () => {
+    const shortened = answer({
+      window: { from: TO_MINUS_3H, to: TO, live_from: LIVE_FROM, asked_from: FROM },
+      window_shortened: true,
+      day_start: FROM,
+      blocked_since_day_start: 12,
+      blocked_since_day_start_partial: true,
+      floors: ['blocked_since_day_start', 'no_place.bots.blocked', 'allowed_window'],
+      flagged_feed: [FLAGGED],
+    });
+    expect(readSecurityMapAnswer(shortened).ok).toBe(true);
+    const poll = answer({
+      window: { from: LIVE_FROM, to: TO, live_from: LIVE_FROM, asked_from: LIVE_FROM },
+      short_window: true,
+      timeline: Array.from({ length: 1000 }, () => cell(LIVE_FROM, 60, 'US', 'bots', 'blocked', 1)),
+    });
+    expect(readSecurityMapAnswer(poll).ok).toBe(true);
+    expect(
+      readSecurityMapAnswer(
+        answer({ tallies: Array.from({ length: 300 }, () => busy().tallies![0]!) }),
+      ).ok,
+    ).toBe(true);
+    // Every name a floor can have is read; nothing else is.
+    for (const name of ['totals.malware.allowed', 'no_place.exploit.flagged', 'flagged_window']) {
+      expect(isSecurityMapFloorName(name), name).toBe(true);
+    }
+    for (const name of ['totals', 'totals.bots', 'by_country', 'blocked_today', '']) {
+      expect(isSecurityMapFloorName(name), name).toBe(false);
     }
   });
 
@@ -698,23 +897,71 @@ describe('securityMapViewOf: what leaves the server', () => {
     expect(view.whole.tallyRows).toBe(1);
   });
 
-  it('a read of the last ten minutes carries the live arcs and the feed, and no totals', () => {
+  it('a read of the last ten minutes carries the live arcs and the two feeds, and no totals', () => {
     const r = recent(busy());
     expect(r.whole).toBeNull();
     expect(r.live).toEqual([['US', 0, 0, 7]]);
     expect(r.feed).toHaveLength(2);
+    expect(r.flaggedFeed).toHaveLength(1);
     expect(Object.keys(r).sort()).toEqual([
+      'askedFrom',
       'feed',
+      'flaggedFeed',
       'from',
       'generatedAt',
       'live',
       'liveCut',
       'liveFrom',
       'scope',
+      'shortened',
       'to',
       'v',
       'whole',
     ]);
+  });
+
+  it('the flagged feed: the shown kinds only, flagged only, each with its own "at least"', () => {
+    expect(view.flaggedFeed).toEqual([
+      [
+        '2026-11-23T03:20:00+00:00',
+        0,
+        1,
+        'sign_in_alerts_held',
+        'web',
+        'GB',
+        'Example Borough',
+        4,
+        true,
+        'a0478000-0000-4000-8000-000000000001',
+        'Example Academy',
+        1,
+      ],
+    ]);
+    expect(view.feed.map((row) => row[8])).toEqual([false, true]);
+  });
+
+  it('the floors, the partial day count and the window read are carried as the database gives them', () => {
+    expect(view.whole.floors).toEqual([
+      'flagged_window',
+      'totals.password_guessing.flagged',
+      'totals.phishing.flagged',
+    ]);
+    expect(view.whole.blockedSinceDayStartPartial).toBe(false);
+    expect(view.whole.lateFloor).toBe(false);
+    expect([view.shortened, view.askedFrom, view.from]).toEqual([false, FROM, FROM]);
+    const cut = whole({
+      ...busy(),
+      window: { from: TO_MINUS_3H, to: TO, live_from: LIVE_FROM, asked_from: FROM },
+      window_shortened: true,
+      day_start: FROM,
+      blocked_since_day_start: 9,
+      blocked_since_day_start_partial: true,
+      floors: ['blocked_since_day_start', 'totals.password_guessing.blocked'],
+    });
+    expect([cut.shortened, cut.askedFrom, cut.from]).toEqual([true, FROM, TO_MINUS_3H]);
+    expect(cut.whole.blockedSinceDayStartPartial).toBe(true);
+    // The late line is api password guessing blocked, and that total is a floor.
+    expect(cut.whole.lateFloor).toBe(true);
   });
 });
 
@@ -746,6 +993,7 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
             'PT',
             null,
             1,
+            true,
             null,
             null,
             3,
@@ -753,13 +1001,41 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
         ],
       }),
     ).toBeNull();
+    const phishingFlagged: SecurityMapFeedRow = [
+      '2026-11-23T21:59:00+00:00',
+      phishing,
+      1,
+      'sign_in_new_country',
+      'web',
+      'PT',
+      null,
+      1,
+      true,
+      null,
+      null,
+      3,
+    ];
+    expect(readSecurityMapView({ ...view, flaggedFeed: [phishingFlagged] })).toBeNull();
   });
 
   it('anything else is not a view', () => {
     const view = JSON.parse(JSON.stringify(whole(busy()))) as Record<string, unknown>;
     const w = view.whole as Record<string, unknown>;
     const bad: Array<[string, unknown]> = [
-      ['another version', { ...view, v: 2 }],
+      ['the version before', { ...view, v: 1 }],
+      ['a version after', { ...view, v: 3 }],
+      ['no flagged feed', { ...view, flaggedFeed: undefined }],
+      [
+        'a blocked entry in the flagged feed',
+        { ...view, flaggedFeed: [[...(view.feed as unknown[][])[0]!]] },
+      ],
+      ['shortened as text', { ...view, shortened: 'no' }],
+      ['no start asked for', { ...view, askedFrom: null }],
+      ['a floor by another name', { ...view, whole: { ...w, floors: ['legend'] } }],
+      [
+        'a partial day count as text',
+        { ...view, whole: { ...w, blockedSinceDayStartPartial: 'no' } },
+      ],
       ['an extra key', { ...view, extra: 1 }],
       ['41 live arcs', { ...view, live: Array.from({ length: 41 }, () => ['US', 0, 0, 1]) }],
       ['an arc with no events', { ...view, live: [['US', 0, 0, 0]] }],
@@ -771,11 +1047,23 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       ['a legend of other categories', { ...view, whole: { ...w, legend: [[0, 1, 1]] } }],
       ['an empty step', { ...view, whole: { ...w, steps: [[0, []]] } }],
       [
-        'a feed row of ten parts',
+        'a feed row of the eleven parts of version 1',
         {
           ...view,
           feed: [
-            ['2026-11-23T21:59:00+00:00', 0, 0, 'wrong_password', 'web', 'US', null, 1, null, null],
+            [
+              '2026-11-23T21:59:00+00:00',
+              0,
+              0,
+              'wrong_password',
+              'web',
+              'US',
+              null,
+              1,
+              null,
+              null,
+              0,
+            ],
           ],
         },
       ],
@@ -958,6 +1246,28 @@ describe('the feed of two reads', () => {
     const newer = recent({ generated_at: '2026-11-23T22:00:30+00:00', feed: [fresh, fresh] });
     expect(securityMapFeedOf(full, newer)).toHaveLength(60);
   });
+
+  it('the flagged feed is merged the same way, at most 20, and never from the plain feed', () => {
+    const oldFlag = entry({ ...FLAGGED, minute: '2026-11-23T20:00:00+00:00', events: 1 });
+    const staleFlag = entry({ ...FLAGGED, events: 1 });
+    const freshFlag = entry({ ...FLAGGED, events: 5, at_least: true });
+    const wf = whole({ feed: [stale, old], flagged_feed: [staleFlag, oldFlag] });
+    const rf = recent({
+      generated_at: '2026-11-23T22:00:30+00:00',
+      feed: [fresh],
+      flagged_feed: [freshFlag],
+    });
+    expect(securityMapFlaggedFeedOf(wf, rf).map((row) => [row[0], row[7], row[8]])).toEqual([
+      ['2026-11-23T21:57:00+00:00', 5, true],
+      ['2026-11-23T20:00:00+00:00', 1, false],
+    ]);
+    // A blocked entry of the plain feed is never in it.
+    expect(securityMapFlaggedFeedOf(wf, rf).every((row) => row[2] === 1)).toBe(true);
+    const many = whole({ flagged_feed: Array.from({ length: 20 }, () => oldFlag) });
+    const newer = recent({ generated_at: '2026-11-23T22:00:30+00:00', flagged_feed: [freshFlag] });
+    expect(securityMapFlaggedFeedOf(many, newer)).toHaveLength(20);
+    expect(securityMapFlaggedFeedOf(null, null)).toEqual([]);
+  });
 });
 
 describe('polling and when the play stops', () => {
@@ -1031,21 +1341,88 @@ describe('the words', () => {
     expect(securityMapCountWords(12_345, true)).toBe('at least 12,345');
   });
 
-  it('a floor is a number that can hold a folded sign-in: flagged password guessing and flagged phishing', () => {
-    const floors = SECURITY_EVENT_CATEGORIES.flatMap((category) =>
-      (['blocked', 'flagged', 'allowed'] as const)
-        .filter((outcome) => securityMapCountIsFloor(category, outcome))
-        .map((outcome) => `${category}.${outcome}`),
-    );
-    expect(floors).toEqual(['password_guessing.flagged', 'phishing.flagged']);
+  it('a floor is what the database names in `floors`, and nothing else', () => {
+    const w = whole(busy());
+    expect(securityMapIsFloor(w, 'flagged_window')).toBe(true);
+    expect(securityMapIsFloor(w, 'totals.phishing.flagged')).toBe(true);
+    expect(securityMapIsFloor(w, 'blocked_window')).toBe(false);
+    expect(securityMapIsFloor(w, 'totals.bots.blocked')).toBe(false);
+    // Not guessed from the kind: flagged password guessing is a floor only when the database says so.
+    expect(
+      securityMapIsFloor(whole({ ...busy(), floors: [] }), 'totals.password_guessing.flagged'),
+    ).toBe(false);
+    expect(securityMapIsFloor(null, 'flagged_window')).toBe(false);
   });
 
-  it('the window in words', () => {
+  it('the window in words: as long as the window read, to the minute', () => {
     expect(securityMapWindowWords(FROM, TO)).toBe('last 24 hours');
     expect(securityMapWindowWords('2026-11-23T21:00:00Z', TO)).toBe('last hour');
-    expect(securityMapWindowWords('2026-11-21T22:00:00Z', TO)).toBe('last 48 hours');
-    expect(securityMapWindowWords('2026-11-23T21:50:00Z', TO)).toBe('this window');
+    expect(securityMapWindowWords('2026-11-22T20:00:00Z', TO)).toBe('last 26 hours');
+    expect(securityMapWindowWords('2026-11-23T21:50:00Z', TO)).toBe('last 10 minutes');
+    expect(securityMapWindowWords('2026-11-23T21:59:00Z', TO)).toBe('last minute');
+    expect(securityMapWindowWords('2026-11-23T18:08:00Z', TO)).toBe('last 3 hours 52 minutes');
+    expect(securityMapWindowWords('2026-11-23T20:59:00Z', TO)).toBe('last 1 hour 1 minute');
+    expect(securityMapWindowWords('2026-11-23T21:59:50Z', TO)).toBe('this window');
     expect(securityMapWindowWords('never', TO)).toBe('this window');
+  });
+
+  it('a shortened window: said as the part read, from when, and that the rest is not counted', () => {
+    const cut = whole({
+      ...busy(),
+      window: { from: '2026-11-23T18:08:00+00:00', to: TO, live_from: LIVE_FROM, asked_from: FROM },
+      window_shortened: true,
+    });
+    expect(securityMapShortenedWords(cut, 'UTC')).toBe(
+      'Showing the last 3 hours 52 minutes only, from 18:08, your time: there were too many events to count all of the last 24 hours. Nothing before 18:08 is in these numbers.',
+    );
+    expect(securityMapCounters(cut, true).map((c) => c.label)).toEqual([
+      'Blocked since midnight, your time',
+      'Blocked, last 3 hours 52 minutes',
+      'Flagged, last 3 hours 52 minutes',
+    ]);
+    expect(securityMapShortenedWords(whole(busy()), 'UTC')).toBeNull();
+    expect(securityMapShortenedWords(null)).toBeNull();
+  });
+
+  it("the day's count: a partial count says at least and from when; a day that has turned is not counted yet", () => {
+    const partial = whole({
+      ...busy(),
+      window: { from: '2026-11-23T18:08:00+00:00', to: TO, live_from: LIVE_FROM, asked_from: FROM },
+      window_shortened: true,
+      day_start: '2026-11-23T08:00:00+00:00',
+      blocked_since_day_start: 40,
+      blocked_since_day_start_partial: true,
+      floors: ['blocked_since_day_start'],
+    });
+    expect(securityMapCounters(partial, true, { timeZone: 'UTC' })[0]).toEqual({
+      id: 'blocked_today',
+      label: 'Blocked since midnight, your time',
+      value: 'at least 40',
+      note: 'Counted from 18:08, your time: there were too many events to count the whole day.',
+    });
+    const day = whole({
+      ...busy(),
+      day_start: '2026-11-23T08:00:00+00:00',
+      blocked_since_day_start: 61,
+    });
+    expect(
+      securityMapCounters(day, true, { dayStartNow: '2026-11-23T08:00:00.000Z' })[0]?.value,
+    ).toBe('61');
+    expect(
+      securityMapCounters(day, true, { dayStartNow: '2026-11-24T08:00:00.000Z' })[0]?.value,
+    ).toBe(SECURITY_MAP_NOT_COUNTED_YET);
+    // Every other number a floor names says "at least".
+    const floors = whole({ ...busy(), floors: ['blocked_window', 'totals.exploit.blocked'] });
+    expect(securityMapCounters(floors, true).map((c) => c.value)).toEqual([
+      SECURITY_MAP_COULD_NOT_CHECK,
+      'at least 193',
+      '7',
+    ]);
+    expect(securityMapLegend(floors)[1]?.blocked).toBe('at least 150 blocked');
+    expect(securityMapTableRows(floors)[0]).toMatchObject({
+      country: 'DE',
+      blocked: 'at least 150',
+    });
   });
 
   it('the counters: three labels, the numbers as read, flagged said as flagged', () => {
@@ -1110,7 +1487,7 @@ describe('the words', () => {
   it('the mode in words: live, the replay with its hour, and nothing to play', () => {
     const w = whole(busy());
     expect(securityMapModeWords(planSecurityMapPlayback(w, null), w, 0, 'UTC')).toBe(
-      'Live: the last 10 minutes. Events that are added late (from the phone app and direct callers) are never in the live play.',
+      'Live: the last 10 minutes, without the events from the phone app and direct callers (some of those are added hours late, so they are shown in the replay and the totals instead).',
     );
     const quiet = busy();
     quiet.timeline = quiet.timeline?.filter((c) => c.bucket_seconds === 600);
@@ -1154,9 +1531,15 @@ describe('the words', () => {
     expect(securityMapRefusedWindowWords('to_in_the_future')).toBe(
       'Could not check: the window asked for ends in the future. Nothing was read.',
     );
+    expect(securityMapRefusedWindowWords('longer_than_26_hours')).toBe(
+      'Could not check: the window asked for is longer than 26 hours. Nothing was read.',
+    );
+    expect(securityMapRefusedWindowWords('too_many_events_in_one_minute')).toBe(
+      'Could not check: one minute alone holds more events than can be read. Nothing was read.',
+    );
     for (const refused of SECURITY_MAP_REFUSALS) {
       expect(securityMapRefusedWindowWords(refused)).toMatch(
-        /^Could not check: the window asked for .+\. Nothing was read\.$/,
+        /^Could not check: .+\. Nothing was read\.$/,
       );
     }
   });
@@ -1169,10 +1552,38 @@ describe('the words', () => {
       'Not on the map: 36 events have no country. They are in the totals.',
       '36 events in a flood: place not listed.',
       '2 events were allowed. Allowed events are counted here and never drawn.',
-      'Rows from the phone app and direct callers are added once an hour, up to about seven hours late, with a country only. They are in the totals and the replay, never in the live play. In the last 24 hours: 5 such events so far.',
+      'Events from the phone app and direct callers are left out of the live play: some of them are added up to about seven hours late, with a country only. They are in the totals and the replay. In the last 24 hours: 5 such events so far.',
       "An hour's refused sign-ins could not all be counted: 400 requests were counted. That number is in no total here.",
-      'A flagged sign-in is counted once however many organizations the account is in. Two accounts that sign in from the same place in the same minute also count once, so those numbers say "at least".',
+      'A sign-in is recorded once in each organization of the account, and the record cannot tell one account from another. So it is counted as the fewest sign-ins its rows can stand for, and a number that holds one says "at least".',
     ]);
+    // With no floor, no "at least" and no line about floors.
+    const exact = securityMapNotes(whole({ ...busy(), floors: [] }), 'UTC');
+    expect(exact[0]).toBe('Not drawn: 3 flagged sign-in alerts. They are on the Security page.');
+    expect(exact.some((line) => line.includes('fewest sign-ins'))).toBe(false);
+  });
+
+  it('every count in the notes that holds a floor says "at least"', () => {
+    const notes = securityMapNotes(
+      whole({
+        ...busy(),
+        floors: [
+          'totals.phishing.flagged',
+          'no_place.bots.blocked',
+          'totals.bots.allowed',
+          'totals.password_guessing.blocked',
+        ],
+      }),
+      'UTC',
+    );
+    expect(notes).toContain(
+      'Not on the map: at least 36 events have no country. They are in the totals.',
+    );
+    expect(notes).toContain(
+      'at least 2 events were allowed. Allowed events are counted here and never drawn.',
+    );
+    expect(
+      notes.some((line) => line.endsWith('In the last 24 hours: at least 5 such events so far.')),
+    ).toBe(true);
   });
 
   it('the notes for one of each, for the cuts, and for a young record', () => {
@@ -1200,9 +1611,7 @@ describe('the words', () => {
       }),
       'UTC',
     );
-    expect(one).toContain(
-      'Not drawn: at least 1 flagged sign-in alert. It is on the Security page.',
-    );
+    expect(one).toContain('Not drawn: 1 flagged sign-in alert. It is on the Security page.');
     expect(one).toContain('Not on the map: 1 event has no country. It is in the totals.');
     expect(one).toContain('1 event in a flood: place not listed.');
     expect(one).toContain('1 event was allowed. Allowed events are counted here and never drawn.');
@@ -1223,7 +1632,7 @@ describe('the words', () => {
       whole({ totals: counts({ phishing: { flagged: 2, blocked: 1 }, malware: { blocked: 4 } }) }),
     );
     expect(notes[0]).toBe(
-      'Not drawn: at least 2 flagged sign-in alerts and 5 other events of a kind this map does not show. They are on the Security page.',
+      'Not drawn: 2 flagged sign-in alerts and 5 other events of a kind this map does not show. They are on the Security page.',
     );
   });
 
@@ -1298,6 +1707,7 @@ describe('the words', () => {
       'PT',
       'Example Harbour',
       1,
+      true,
       null,
       null,
       3,
@@ -1313,6 +1723,7 @@ describe('the words', () => {
       'US',
       'Example Falls',
       30,
+      false,
       null,
       null,
       0,
@@ -1328,6 +1739,7 @@ describe('the words', () => {
       'US',
       null,
       1,
+      false,
       'a0478000-0000-4000-8000-000000000001',
       'One',
       1,
@@ -1341,10 +1753,27 @@ describe('the words', () => {
       'US',
       null,
       1,
+      false,
       'a0478000-0000-4000-8000-000000000002',
       'Two',
       1,
     ]);
+    // A folded count is said as the database marks it, not guessed from the reason.
+    const exact = securityMapFeedWords([
+      '2026-11-23T21:59:00+00:00',
+      0,
+      1,
+      'sign_in_alerts_held',
+      'web',
+      'GB',
+      null,
+      4,
+      false,
+      null,
+      null,
+      1,
+    ]);
+    expect(exact.count).toBe('4');
     expect(a.key).not.toBe(b.key);
   });
 
@@ -1357,6 +1786,7 @@ describe('the words', () => {
           { country: 'GB', category: 'password_guessing', outcome: 'blocked', events: 1200 },
           { country: 'GB', category: 'bots', outcome: 'flagged', events: 2 },
         ],
+        floors: ['totals.password_guessing.flagged'],
       }),
     );
     expect(rows.map((r) => [r.country, r.categoryLabel, r.blocked, r.flagged])).toEqual([
@@ -1451,24 +1881,50 @@ describe("the size of what leaves the server, at the database's caps", () => {
           events: 9_999_999,
         }),
       ),
+      flagged_feed: Array.from({ length: 20 }, (_, i) =>
+        entry({
+          minute: '2026-11-23T21:59:00.123456+00:00',
+          outcome: 'flagged',
+          reason: 'x'.repeat(48),
+          city: 'y'.repeat(80),
+          at_least: true,
+          organization_id: `a0478000-0000-4000-8000-${String(i).padStart(12, '1')}`,
+          organization_name: name.repeat(200),
+          organizations: 1,
+          events: 9_999_999,
+        }),
+      ),
+      // Every name a floor can have today: 15 totals, 15 no-place counts, the three window counts, the day.
+      floors: [
+        ...SECURITY_EVENT_CATEGORIES.flatMap((c) =>
+          (['blocked', 'flagged', 'allowed'] as const).flatMap((o) => [
+            `totals.${c}.${o}` as const,
+            `no_place.${c}.${o}` as const,
+          ]),
+        ),
+        'blocked_window',
+        'flagged_window',
+        'allowed_window',
+        'blocked_since_day_start',
+      ],
     });
   };
   const bytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
 
-  it('a read of the whole window stays under 80 KB and a read of the last ten minutes under 30 KB (plain names)', () => {
+  it('a read of the whole window stays under 90 KB and a read of the last ten minutes under 40 KB (plain names)', () => {
     const a = worst('n');
     expect(readSecurityMapAnswer(a).ok).toBe(true);
     const w = securityMapViewOf(a, 'whole');
     const r = securityMapViewOf(a, 'recent');
     expect(readSecurityMapView(JSON.parse(JSON.stringify(w)))).not.toBeNull();
     expect(bytes(a)).toBeGreaterThan(400_000);
-    expect(bytes(w)).toBeLessThan(80_000);
-    expect(bytes(r)).toBeLessThan(30_000);
+    expect(bytes(w)).toBeLessThan(90_000);
+    expect(bytes(r)).toBeLessThan(40_000);
   });
 
-  it('with every organization name 200 characters of four bytes each: under 116 KB and 66 KB', () => {
+  it('with every organization name 200 characters of four bytes each: under 140 KB and 90 KB', () => {
     const a = worst('\u{1F512}');
-    expect(bytes(securityMapViewOf(a, 'whole'))).toBeLessThan(116_000);
-    expect(bytes(securityMapViewOf(a, 'recent'))).toBeLessThan(66_000);
+    expect(bytes(securityMapViewOf(a, 'whole'))).toBeLessThan(140_000);
+    expect(bytes(securityMapViewOf(a, 'recent'))).toBeLessThan(90_000);
   });
 });

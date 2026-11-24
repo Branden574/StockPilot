@@ -38,41 +38,35 @@ import {
 /* ═════════════════════════════ 1. THE LISTS ═════════════════════════════ */
 
 /*
- * Copied from the migration's contract ("The lists"). The database holds the
- * same four lists (its test 0478/13 pins them to the letter) and counts with
- * them; this copy is for the words. security-map.test.ts applies them to the
- * rows of the shared fixture and must get the database's numbers.
+ * Copied from the migration's contract, VERSION 2 ("The lists"). The
+ * database holds the same four lists and the rule of 5 (its tests 0478/13
+ * and 0478/16 pin them to the letter) and counts with them; this copy is for
+ * the words. security-map.test.ts applies them to the rows of the shared
+ * fixture and must get the database's numbers.
  */
 
-/** Recorded once in each organization of one account: platform-wide, one event. */
+/** Recorded once in each organization of one account: platform-wide, one event, counted as a floor. */
 export const SECURITY_MAP_FOLDED_REASONS = [
   'sign_in_new_country',
   'sign_in_not_me',
   'sign_in_alerts_held',
 ] as const;
-/** A count of other rows of the record: in no total; listed apart. */
-export const SECURITY_MAP_TALLY_REASONS = ['too_many_forms_to_count'] as const;
+/** A number that can be a count of other rows of the record: in no total; listed apart. */
+export const SECURITY_MAP_TALLY_REASONS = [
+  'too_many_forms_to_count',
+  'unrecorded_server_form_password',
+  'unrecorded_server_form_code',
+] as const;
 /** Rows that stand for events past a cap: counted, never placed. */
-export const SECURITY_MAP_FLOOD_REASONS = ['over_minute_cap', 'over_buffer_cap'] as const;
+export const SECURITY_MAP_FLOOD_REASONS = [
+  'over_minute_cap',
+  'over_buffer_cap',
+  'auth_log_over_cap',
+] as const;
 /** Sources whose rows can be added up to hours after their minute: never in the 60-second cells. */
 export const SECURITY_MAP_LATE_SOURCES = ['phone', 'api'] as const;
-
-/**
- * The category and outcome each folded reason is always written with
- * (server/security/sign-in-alert-events.ts in the web app). A number that can
- * hold one of them is a floor: two accounts that sign in from the same place
- * in the same minute count once.
- */
-export const SECURITY_MAP_FOLDED_REASON_KINDS: Readonly<
-  Record<
-    (typeof SECURITY_MAP_FOLDED_REASONS)[number],
-    readonly [SecurityEventCategory, SecurityEventOutcome]
-  >
-> = {
-  sign_in_new_country: ['phishing', 'flagged'],
-  sign_in_not_me: ['phishing', 'flagged'],
-  sign_in_alerts_held: ['password_guessing', 'flagged'],
-};
+/** The most rows one sign-in writes of a folded reason (one in each of at most 5 organizations). */
+export const SECURITY_MAP_ROWS_PER_SIGN_IN = 5;
 
 const includes = (list: readonly string[], value: unknown): boolean =>
   typeof value === 'string' && list.includes(value);
@@ -88,17 +82,25 @@ export const isSecurityMapLateSource = (source: unknown): boolean =>
 
 /** The database's caps on each list of the answer. */
 export const SECURITY_MAP_MAX_TIMELINE = 4000;
+/** A poll's timeline: its 60-second cells only. */
+export const SECURITY_MAP_MAX_POLL_TIMELINE = 1000;
 export const SECURITY_MAP_MAX_BY_COUNTRY = 2000;
 export const SECURITY_MAP_MAX_FEED = 60;
+export const SECURITY_MAP_MAX_FLAGGED_FEED = 20;
+export const SECURITY_MAP_MAX_FLOORS = 40;
 export const SECURITY_MAP_MAX_LATE_SOURCES = 30;
-export const SECURITY_MAP_MAX_COUNTED_ROWS = 200;
+export const SECURITY_MAP_MAX_COUNTED_ROWS = 300;
+/** The longest window the database reads, and the window below which a read is a poll. */
+export const SECURITY_MAP_MAX_WINDOW_HOURS = 26;
+export const SECURITY_MAP_SHORT_WINDOW_MS = 30 * 60_000;
 
 /** Why the database would not read a window. It never repeats the argument. */
 export const SECURITY_MAP_REFUSALS = [
   'not_a_time',
   'to_in_the_future',
   'from_not_before_to',
-  'longer_than_48_hours',
+  'longer_than_26_hours',
+  'too_many_events_in_one_minute',
 ] as const;
 export type SecurityMapRefusal = (typeof SECURITY_MAP_REFUSALS)[number];
 
@@ -137,6 +139,8 @@ export interface SecurityMapFeedEntry {
   country: string | null;
   city: string | null;
   events: number;
+  /** The count is a floor (a folded sign-in made of two rows or more): "at least". */
+  at_least: boolean;
   organization_id: string | null;
   organization_name: string | null;
   organizations: number;
@@ -158,9 +162,43 @@ export interface SecurityMapCountedRow {
   rows: number;
 }
 
-/** The nineteen keys, always all of them. */
+/**
+ * The numbers of an answer that can be floors, by name, as `floors` lists
+ * them: each total and each no-place count by category and outcome, the
+ * three window counts and the day's count.
+ */
+export type SecurityMapFloorName =
+  | `totals.${SecurityEventCategory}.${SecurityEventOutcome}`
+  | `no_place.${SecurityEventCategory}.${SecurityEventOutcome}`
+  | 'blocked_window'
+  | 'flagged_window'
+  | 'allowed_window'
+  | 'blocked_since_day_start';
+
+const FLOOR_NAMES: ReadonlySet<string> = new Set([
+  ...['totals', 'no_place'].flatMap((part) =>
+    SECURITY_EVENT_CATEGORIES.flatMap((category) =>
+      (['blocked', 'flagged', 'allowed'] as const).map((o) => `${part}.${category}.${o}`),
+    ),
+  ),
+  'blocked_window',
+  'flagged_window',
+  'allowed_window',
+  'blocked_since_day_start',
+]);
+
+/** Whether `name` is one of the numbers the database can mark as a floor. */
+export const isSecurityMapFloorName = (name: unknown): name is SecurityMapFloorName =>
+  typeof name === 'string' && FLOOR_NAMES.has(name);
+
+/** The twenty-four keys (contract VERSION 2), always all of them. */
 export interface SecurityMapAnswer {
-  window: { from: string; to: string; live_from: string };
+  /** The window READ; `asked_from` is the start asked for (later only when the ceiling moved it). */
+  window: { from: string; to: string; live_from: string; asked_from: string };
+  /** Too many rows to read the whole window: `window.from` was moved later. */
+  window_shortened: boolean;
+  /** The window asked for is shorter than 30 minutes (a poll): no 600-second cells, no by_country. */
+  short_window: boolean;
   refused: null;
   generated_at: string;
   oldest_event_at: string | null;
@@ -175,7 +213,13 @@ export interface SecurityMapAnswer {
   allowed_window: number;
   day_start: string | null;
   blocked_since_day_start: number | null;
+  /** The day began before the start read, so the day's count is counted from `window.from`: a floor. */
+  blocked_since_day_start_partial: boolean;
+  /** The names of this answer's numbers that are floors: the page says "at least" beside them. */
+  floors: SecurityMapFloorName[];
   feed: SecurityMapFeedEntry[];
+  /** The newest flagged entries, so a flood of blocked ones can never push them all off the page. */
+  flagged_feed: SecurityMapFeedEntry[];
   late_sources: SecurityMapLateRow[];
   tallies: SecurityMapCountedRow[];
   flood_rows: SecurityMapCountedRow[];
@@ -268,6 +312,8 @@ const countedRowDiffers = (row: Bag): string | null => {
 
 const ANSWER_KEYS = [
   'window',
+  'window_shortened',
+  'short_window',
   'refused',
   'generated_at',
   'oldest_event_at',
@@ -282,11 +328,53 @@ const ANSWER_KEYS = [
   'allowed_window',
   'day_start',
   'blocked_since_day_start',
+  'blocked_since_day_start_partial',
+  'floors',
   'feed',
+  'flagged_feed',
   'late_sources',
   'tallies',
   'flood_rows',
 ] as const;
+
+const FEED_KEYS = [
+  'minute',
+  'category',
+  'outcome',
+  'reason',
+  'source',
+  'country',
+  'city',
+  'events',
+  'at_least',
+  'organization_id',
+  'organization_name',
+  'organizations',
+] as const;
+
+const feedEntryDiffers = (row: Bag): string | null => {
+  if (!isTime(row.minute)) return 'minute: not a time';
+  if (!isReason(row.reason)) return 'reason: not a reason code';
+  if (!isSecurityEventSource(row.source)) return 'source: not a source';
+  if (row.country !== null && !isCountry(row.country)) {
+    return 'country: not two capital letters';
+  }
+  if (row.city !== null && !textWithin(row.city, SECURITY_MAP_CITY_MAX)) {
+    return 'city: not a short text';
+  }
+  if (typeof row.at_least !== 'boolean') return 'at_least: not a boolean';
+  if (row.organization_id !== null && !isUuid(row.organization_id)) {
+    return 'organization_id: not an id';
+  }
+  if (
+    row.organization_name !== null &&
+    !textWithin(row.organization_name, SECURITY_MAP_ORGANIZATION_NAME_MAX)
+  ) {
+    return 'organization_name: not a short text';
+  }
+  if (!isCount(row.organizations)) return 'organizations: not a count';
+  return kindDiffers(row);
+};
 
 /**
  * The database's answer, read against the contract: exactly its keys, every
@@ -312,10 +400,23 @@ export function readSecurityMapAnswer(raw: unknown): SecurityMapAnswerRead {
 
   const window = raw.window;
   if (!isBag(window)) return no('window: not an object');
-  const windowDiffers = keysDiffer(window, ['from', 'to', 'live_from']);
+  const windowDiffers = keysDiffer(window, ['from', 'to', 'live_from', 'asked_from']);
   if (windowDiffers) return no(`window.${windowDiffers}`);
-  for (const key of ['from', 'to', 'live_from'] as const) {
+  for (const key of ['from', 'to', 'live_from', 'asked_from'] as const) {
     if (!isTime(window[key])) return no(`window.${key}: not a time`);
+  }
+  for (const key of [
+    'window_shortened',
+    'short_window',
+    'blocked_since_day_start_partial',
+  ] as const) {
+    if (typeof raw[key] !== 'boolean') return no(`${key}: not a boolean`);
+  }
+  // Shortened exactly when the start read is later than the start asked for.
+  const moved = Date.parse(window.from as string) > Date.parse(window.asked_from as string);
+  if (raw.window_shortened !== moved) return no('window_shortened: not as the window says');
+  if (Date.parse(window.from as string) < Date.parse(window.asked_from as string)) {
+    return no('window.from: before the start asked for');
   }
 
   if (!isTime(raw.generated_at)) return no('generated_at: not a time');
@@ -331,6 +432,28 @@ export function readSecurityMapAnswer(raw: unknown): SecurityMapAnswerRead {
   }
   if (raw.blocked_since_day_start !== null && !isCount(raw.blocked_since_day_start)) {
     return no('blocked_since_day_start: not a count');
+  }
+  if (raw.blocked_since_day_start_partial === true && raw.blocked_since_day_start === null) {
+    return no('blocked_since_day_start_partial: beside no count');
+  }
+  if (!Array.isArray(raw.floors)) return no('floors: not a list');
+  if (raw.floors.length > SECURITY_MAP_MAX_FLOORS) return no('floors: longer than its cap');
+  for (let i = 0; i < raw.floors.length; i += 1) {
+    if (!isSecurityMapFloorName(raw.floors[i])) return no(`floors.${i}: not a number's name`);
+  }
+  // A poll (a window asked for that is shorter than 30 minutes): the live
+  // cells only, and no groups by country.
+  if (raw.short_window === true) {
+    if (!Array.isArray(raw.timeline) || raw.timeline.length > SECURITY_MAP_MAX_POLL_TIMELINE) {
+      return no('timeline: longer than a poll holds');
+    }
+    if ((raw.timeline as unknown[]).some((c) => isBag(c) && c.bucket_seconds !== 60)) {
+      return no('timeline: a replay cell in a poll');
+    }
+    if (!Array.isArray(raw.by_country) || raw.by_country.length > 0) {
+      return no('by_country: not empty in a poll');
+    }
+    if (raw.by_country_truncated !== false) return no('by_country_truncated: true in a poll');
   }
 
   const lists =
@@ -357,45 +480,13 @@ export function readSecurityMapAnswer(raw: unknown): SecurityMapAnswerRead {
       ['country', 'category', 'outcome', 'events'],
       (row) => (isCountry(row.country) ? kindDiffers(row) : 'country: not two capital letters'),
     ) ??
+    readList(raw.feed, 'feed', SECURITY_MAP_MAX_FEED, FEED_KEYS, feedEntryDiffers) ??
     readList(
-      raw.feed,
-      'feed',
-      SECURITY_MAP_MAX_FEED,
-      [
-        'minute',
-        'category',
-        'outcome',
-        'reason',
-        'source',
-        'country',
-        'city',
-        'events',
-        'organization_id',
-        'organization_name',
-        'organizations',
-      ],
-      (row) => {
-        if (!isTime(row.minute)) return 'minute: not a time';
-        if (!isReason(row.reason)) return 'reason: not a reason code';
-        if (!isSecurityEventSource(row.source)) return 'source: not a source';
-        if (row.country !== null && !isCountry(row.country)) {
-          return 'country: not two capital letters';
-        }
-        if (row.city !== null && !textWithin(row.city, SECURITY_MAP_CITY_MAX)) {
-          return 'city: not a short text';
-        }
-        if (row.organization_id !== null && !isUuid(row.organization_id)) {
-          return 'organization_id: not an id';
-        }
-        if (
-          row.organization_name !== null &&
-          !textWithin(row.organization_name, SECURITY_MAP_ORGANIZATION_NAME_MAX)
-        ) {
-          return 'organization_name: not a short text';
-        }
-        if (!isCount(row.organizations)) return 'organizations: not a count';
-        return kindDiffers(row);
-      },
+      raw.flagged_feed,
+      'flagged_feed',
+      SECURITY_MAP_MAX_FLAGGED_FEED,
+      FEED_KEYS,
+      (row) => feedEntryDiffers(row) ?? (row.outcome === 'flagged' ? null : 'outcome: not flagged'),
     ) ??
     readList(
       raw.late_sources,
@@ -535,6 +626,8 @@ export type SecurityMapFeedRow = readonly [
   country: string | null,
   city: string | null,
   events: number,
+  /** The count is a floor: "at least". */
+  atLeast: boolean,
   organizationId: string | null,
   organizationName: string | null,
   organizations: number,
@@ -566,6 +659,12 @@ export interface SecurityMapWholeView {
   allowed: number;
   dayStart: string | null;
   blockedSinceDayStart: number | null;
+  /** The day began before the start read: the day's count is counted from `from`, a floor. */
+  blockedSinceDayStartPartial: boolean;
+  /** The answer's numbers that are floors, by name: the words say "at least" beside them. */
+  floors: readonly SecurityMapFloorName[];
+  /** The late sources' events hold a floor. */
+  lateFloor: boolean;
   legend: readonly SecurityMapLegendRow[];
   /** Blocked and flagged events of the shown categories that have no country. */
   noPlace: number;
@@ -583,17 +682,24 @@ export interface SecurityMapWholeView {
 
 /** What leaves the server. `whole` is null for a read of the last ten minutes. */
 export interface SecurityMapView {
-  v: 1;
+  v: 2;
   scope: 'whole' | 'recent';
+  /** The window READ. */
   from: string;
   to: string;
   liveFrom: string;
+  /** The start asked for: earlier than `from` only when the window was shortened. */
+  askedFrom: string;
+  /** Too many events to read the whole window: only the part from `from` was read. */
+  shortened: boolean;
   generatedAt: string;
   /** The last ten minutes, one per country, category and outcome, at most 40. */
   live: readonly SecurityMapArcRow[];
   /** More than 40 were live, or the database cut the timeline. */
   liveCut: boolean;
   feed: readonly SecurityMapFeedRow[];
+  /** The newest flagged entries, at most 20. */
+  flaggedFeed: readonly SecurityMapFeedRow[];
   whole: SecurityMapWholeView | null;
 }
 
@@ -601,8 +707,8 @@ export interface SecurityMapView {
 export const SECURITY_MAP_MAX_ARCS = 40;
 /** One replay step is one hour of the clock (UTC, as the database's buckets are). */
 export const SECURITY_MAP_STEP_MS = 60 * 60 * 1000;
-/** A 48-hour window touches at most this many clock hours. */
-export const SECURITY_MAP_MAX_STEPS = 49;
+/** A 26-hour window touches at most this many clock hours. */
+export const SECURITY_MAP_MAX_STEPS = SECURITY_MAP_MAX_WINDOW_HOURS + 1;
 
 interface KindCount {
   country: string;
@@ -658,8 +764,10 @@ const sumCounts = (
  * A category that is not shown is taken out of every list here (the arcs, the
  * table, the legend, the feed), so nothing downstream can draw it; its events
  * are two numbers for one line of words. `recent` (a read of the last ten
- * minutes) keeps the live arcs and the feed only: its totals are ten minutes'
- * worth and must never stand in for the window's.
+ * minutes, a poll: the database gives it no 10-minute cells and no groups by
+ * country) keeps the live arcs and the two feeds only: its totals are ten
+ * minutes' worth and must never stand in for the window's. Cells of two
+ * answers are never added together (contract VERSION 2, "timeline").
  */
 export function securityMapViewOf(
   answer: SecurityMapAnswer,
@@ -670,31 +778,36 @@ export function securityMapViewOf(
     answer.timeline.filter((cell) => cell.bucket_seconds === 60),
     shown,
   );
-  const feed: SecurityMapFeedRow[] = answer.feed
-    .filter((entry) => shown.includes(entry.category))
-    .map((e) => [
-      e.minute,
-      categoryIndex(e.category),
-      OUTCOMES.indexOf(e.outcome) as 0 | 1 | 2,
-      e.reason,
-      e.source,
-      e.country,
-      e.city,
-      e.events,
-      e.organization_id,
-      e.organization_name,
-      e.organizations,
-    ]);
+  const feedRows = (entries: readonly SecurityMapFeedEntry[]): SecurityMapFeedRow[] =>
+    entries
+      .filter((entry) => shown.includes(entry.category))
+      .map((e) => [
+        e.minute,
+        categoryIndex(e.category),
+        OUTCOMES.indexOf(e.outcome) as 0 | 1 | 2,
+        e.reason,
+        e.source,
+        e.country,
+        e.city,
+        e.events,
+        e.at_least,
+        e.organization_id,
+        e.organization_name,
+        e.organizations,
+      ]);
   const view: SecurityMapView = {
-    v: 1,
+    v: 2,
     scope,
     from: answer.window.from,
     to: answer.window.to,
     liveFrom: answer.window.live_from,
+    askedFrom: answer.window.asked_from,
+    shortened: answer.window_shortened,
     generatedAt: answer.generated_at,
     live: liveRows.slice(0, SECURITY_MAP_MAX_ARCS),
     liveCut: liveRows.length > SECURITY_MAP_MAX_ARCS || answer.timeline_truncated,
-    feed,
+    feed: feedRows(answer.feed),
+    flaggedFeed: feedRows(answer.flagged_feed),
     whole: null,
   };
   if (scope === 'recent') return view;
@@ -738,6 +851,11 @@ export function securityMapViewOf(
     allowed: sumCounts(answer.totals, shown, ['allowed']),
     dayStart: answer.day_start,
     blockedSinceDayStart: answer.blocked_since_day_start,
+    blockedSinceDayStartPartial: answer.blocked_since_day_start_partial,
+    floors: [...answer.floors],
+    lateFloor: answer.late_sources.some((row) =>
+      answer.floors.includes(`totals.${row.category}.${row.outcome}`),
+    ),
     legend: shown.map((category) => [
       categoryIndex(category),
       answer.totals[category].blocked,
@@ -769,9 +887,21 @@ const isArcList = (v: unknown, max: number, shownIndexes: readonly number[]): bo
   Array.isArray(v) && v.length <= max && v.every((row) => isArcRow(row, shownIndexes));
 
 function isFeedRow(v: unknown, shownIndexes: readonly number[]): v is SecurityMapFeedRow {
-  if (!Array.isArray(v) || v.length !== 11) return false;
-  const [minute, category, outcome, reason, source, country, city, events, id, name, orgs] =
-    v as unknown[];
+  if (!Array.isArray(v) || v.length !== 12) return false;
+  const [
+    minute,
+    category,
+    outcome,
+    reason,
+    source,
+    country,
+    city,
+    events,
+    atLeast,
+    id,
+    name,
+    orgs,
+  ] = v as unknown[];
   return (
     isTime(minute) &&
     shownIndexes.includes(category as number) &&
@@ -781,6 +911,7 @@ function isFeedRow(v: unknown, shownIndexes: readonly number[]): v is SecurityMa
     (country === null || isCountry(country)) &&
     (city === null || textWithin(city, SECURITY_MAP_CITY_MAX)) &&
     isCount(events) &&
+    typeof atLeast === 'boolean' &&
     (id === null || isUuid(id)) &&
     (name === null || textWithin(name, SECURITY_MAP_ORGANIZATION_NAME_MAX)) &&
     isCount(orgs)
@@ -799,6 +930,9 @@ const WHOLE_KEYS = [
   'allowed',
   'dayStart',
   'blockedSinceDayStart',
+  'blockedSinceDayStartPartial',
+  'floors',
+  'lateFloor',
   'legend',
   'noPlace',
   'flood',
@@ -825,6 +959,11 @@ function isWholeView(v: unknown, shownIndexes: readonly number[]): v is Security
   ] as const;
   if (!counts.every((key) => isCount(v[key]))) return false;
   if (typeof v.tableCut !== 'boolean' || typeof v.drawingCut !== 'boolean') return false;
+  if (typeof v.blockedSinceDayStartPartial !== 'boolean' || typeof v.lateFloor !== 'boolean') {
+    return false;
+  }
+  if (!Array.isArray(v.floors) || v.floors.length > SECURITY_MAP_MAX_FLOORS) return false;
+  if (!(v.floors as unknown[]).every(isSecurityMapFloorName)) return false;
   if (v.oldestEventAt !== null && !isTime(v.oldestEventAt)) return false;
   if (v.dayStart !== null && !isTime(v.dayStart)) return false;
   if (v.blockedSinceDayStart !== null && !isCount(v.blockedSinceDayStart)) return false;
@@ -864,22 +1003,33 @@ export function readSecurityMapView(
     'from',
     'to',
     'liveFrom',
+    'askedFrom',
+    'shortened',
     'generatedAt',
     'live',
     'liveCut',
     'feed',
+    'flaggedFeed',
     'whole',
   ];
   if (keysDiffer(raw, keys)) return null;
-  if (raw.v !== 1 || (raw.scope !== 'whole' && raw.scope !== 'recent')) return null;
-  if (!isTime(raw.from) || !isTime(raw.to) || !isTime(raw.liveFrom) || !isTime(raw.generatedAt)) {
-    return null;
+  if (raw.v !== 2 || (raw.scope !== 'whole' && raw.scope !== 'recent')) return null;
+  for (const key of ['from', 'to', 'liveFrom', 'askedFrom', 'generatedAt'] as const) {
+    if (!isTime(raw[key])) return null;
   }
-  if (typeof raw.liveCut !== 'boolean') return null;
+  if (typeof raw.liveCut !== 'boolean' || typeof raw.shortened !== 'boolean') return null;
   const shownIndexes = shown.map(categoryIndex);
   if (!isArcList(raw.live, SECURITY_MAP_MAX_ARCS, shownIndexes)) return null;
   if (!Array.isArray(raw.feed) || raw.feed.length > SECURITY_MAP_MAX_FEED) return null;
   if (!(raw.feed as unknown[]).every((row) => isFeedRow(row, shownIndexes))) return null;
+  if (!Array.isArray(raw.flaggedFeed) || raw.flaggedFeed.length > SECURITY_MAP_MAX_FLAGGED_FEED) {
+    return null;
+  }
+  if (
+    !(raw.flaggedFeed as unknown[]).every((row) => isFeedRow(row, shownIndexes) && row[2] === 1)
+  ) {
+    return null;
+  }
   if (raw.scope === 'recent' ? raw.whole !== null : !isWholeView(raw.whole, shownIndexes)) {
     return null;
   }
@@ -1030,22 +1180,41 @@ export function planSecurityMapPlayback(
 }
 
 /**
- * The feed of two reads as one list. Inside the ten minutes the newer read
- * covers, only its entries count (an entry there can change between reads: a
+ * One list of two reads' entries. Inside the minutes the newer read covers,
+ * only its entries count (an entry there can change between reads: a
  * sign-in recorded in one organization and then in two more stops naming the
- * first). Before that, the whole window's entries. Newest first, at most 60.
+ * first, and a folded count can grow). Before that, the whole window's
+ * entries. Newest first, at most `max`. Entries are never added together.
  */
+function feedOfTwoReads(
+  whole: SecurityMapWholeRead | null,
+  recent: SecurityMapView | null,
+  pick: (view: SecurityMapView) => readonly SecurityMapFeedRow[],
+  max: number,
+): SecurityMapFeedRow[] {
+  if (!whole) return recent ? [...pick(recent)] : [];
+  if (!recent || Date.parse(recent.generatedAt) < Date.parse(whole.generatedAt)) {
+    return [...pick(whole)];
+  }
+  const from = Date.parse(recent.from);
+  const older = pick(whole).filter((row) => Date.parse(row[0]) < from);
+  return [...pick(recent), ...older].slice(0, max);
+}
+
+/** The feed of the two reads: newest first, at most 60. */
 export function securityMapFeedOf(
   whole: SecurityMapWholeRead | null,
   recent: SecurityMapView | null,
 ): SecurityMapFeedRow[] {
-  if (!whole) return recent ? [...recent.feed] : [];
-  if (!recent || Date.parse(recent.generatedAt) < Date.parse(whole.generatedAt)) {
-    return [...whole.feed];
-  }
-  const from = Date.parse(recent.from);
-  const older = whole.feed.filter((row) => Date.parse(row[0]) < from);
-  return [...recent.feed, ...older].slice(0, SECURITY_MAP_MAX_FEED);
+  return feedOfTwoReads(whole, recent, (view) => view.feed, SECURITY_MAP_MAX_FEED);
+}
+
+/** The flagged feed of the two reads: the newest flagged entries, at most 20. */
+export function securityMapFlaggedFeedOf(
+  whole: SecurityMapWholeRead | null,
+  recent: SecurityMapView | null,
+): SecurityMapFeedRow[] {
+  return feedOfTwoReads(whole, recent, (view) => view.flaggedFeed, SECURITY_MAP_MAX_FLAGGED_FEED);
 }
 
 /* ───────────────────── polling, and when the play stops ───────────────────── */
@@ -1127,17 +1296,16 @@ const num = (n: number): string => n.toLocaleString('en-US');
 const plural = (n: number, one: string, many: string): string => (n === 1 ? one : many);
 
 /**
- * Whether a number for this category and outcome can hold a folded sign-in.
- * Such a number is a floor (the database's fold counts two accounts that
- * signed in from the same place in the same minute once).
+ * Whether the database marked the named number of this read as a floor (it
+ * holds a folded sign-in, counted as the fewest sign-ins its rows can stand
+ * for). The words say "at least" beside it. With no read, nothing is a floor:
+ * the number itself is "Could not check".
  */
-export function securityMapCountIsFloor(
-  category: SecurityEventCategory,
-  outcome: SecurityEventOutcome,
+export function securityMapIsFloor(
+  whole: SecurityMapWholeRead | null,
+  name: SecurityMapFloorName,
 ): boolean {
-  return Object.values(SECURITY_MAP_FOLDED_REASON_KINDS).some(
-    ([c, o]) => c === category && o === outcome,
-  );
+  return whole?.whole.floors.includes(name) ?? false;
 }
 
 /** A count in words: "7", or "at least 7" for a floor that counted something. Zero is zero. */
@@ -1145,18 +1313,22 @@ export function securityMapCountWords(count: number, floor: boolean): string {
   return floor && count > 0 ? `at least ${num(count)}` : num(count);
 }
 
-/** Whether the window's flagged sum is a floor: it adds up every category's flagged events. */
-const FLAGGED_SUM_IS_FLOOR = SECURITY_EVENT_CATEGORIES.some((category) =>
-  securityMapCountIsFloor(category, 'flagged'),
-);
-
-/** "last 24 hours" for a whole number of hours, "this window" otherwise. */
+/**
+ * A window's length in words, counted to the nearest minute: "last 24
+ * hours", "last hour", "last 3 hours 52 minutes", "last 52 minutes". A
+ * window the ceiling shortened is said as long as it is, never as the window
+ * that was asked for.
+ */
 export function securityMapWindowWords(from: string, to: string): string {
-  const hours = (Date.parse(to) - Date.parse(from)) / SECURITY_MAP_STEP_MS;
-  const whole = Math.round(hours);
-  if (!Number.isFinite(hours) || whole < 1 || Math.abs(hours - whole) > 1 / 60)
-    return 'this window';
-  return whole === 1 ? 'last hour' : `last ${whole} hours`;
+  const minutes = Math.round((Date.parse(to) - Date.parse(from)) / 60_000);
+  if (!Number.isFinite(minutes) || minutes < 1) return 'this window';
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  const h = hours === 0 ? '' : hours === 1 ? 'hour' : `${hours} hours`;
+  const m = rest === 0 ? '' : rest === 1 ? '1 minute' : `${rest} minutes`;
+  if (h && m) return `last ${hours === 1 ? '1 hour' : h} ${m}`;
+  if (h) return `last ${h}`;
+  return rest === 1 ? 'last minute' : `last ${m}`;
 }
 
 export interface SecurityMapCounter {
@@ -1174,34 +1346,60 @@ export const SECURITY_MAP_NOT_COUNTED_YET = 'Not counted yet';
  * The three counters. With no read of the whole window every one says "Could
  * not check". The day's count needs the viewer's own midnight, which only the
  * browser knows: before the first read that carried it, "Not counted yet";
- * when it was asked for and the database gave none, "Could not check". Never
- * a zero in a number's place.
+ * when it was asked for and the database gave none, "Could not check"; when
+ * the viewer's day has turned since that read (`dayStartNow` is a later
+ * midnight), "Not counted yet" again until the new day is read. Never a zero
+ * in a number's place. A number the database marked as a floor says
+ * "at least"; a day's count that the ceiling cut short says from when it
+ * counts.
  */
 export function securityMapCounters(
   whole: SecurityMapWholeRead | null,
   dayStartAsked: boolean,
+  options: { dayStartNow?: string | null; timeZone?: string } = {},
 ): SecurityMapCounter[] {
   const window = whole ? securityMapWindowWords(whole.from, whole.to) : 'last 24 hours';
   const w = whole?.whole ?? null;
+  const dayTurned =
+    w !== null &&
+    w.dayStart !== null &&
+    options.dayStartNow != null &&
+    Date.parse(options.dayStartNow) !== Date.parse(w.dayStart);
   const today =
     w === null
       ? SECURITY_MAP_COULD_NOT_CHECK
-      : w.blockedSinceDayStart !== null
-        ? num(w.blockedSinceDayStart)
-        : dayStartAsked
-          ? SECURITY_MAP_COULD_NOT_CHECK
-          : SECURITY_MAP_NOT_COUNTED_YET;
+      : dayTurned
+        ? SECURITY_MAP_NOT_COUNTED_YET
+        : w.blockedSinceDayStart !== null
+          ? securityMapCountWords(
+              w.blockedSinceDayStart,
+              w.blockedSinceDayStartPartial || securityMapIsFloor(whole, 'blocked_since_day_start'),
+            )
+          : dayStartAsked
+            ? SECURITY_MAP_COULD_NOT_CHECK
+            : SECURITY_MAP_NOT_COUNTED_YET;
+  const partial =
+    whole !== null &&
+    w !== null &&
+    !dayTurned &&
+    w.blockedSinceDayStart !== null &&
+    w.blockedSinceDayStartPartial;
   return [
     {
       id: 'blocked_today',
       label: 'Blocked since midnight, your time',
       value: today,
-      note: null,
+      note: partial
+        ? `Counted from ${securityMapClock(whole.from, options.timeZone)}, your time: there were too many events to count the whole day.`
+        : null,
     },
     {
       id: 'blocked_window',
       label: `Blocked, ${window}`,
-      value: w === null ? SECURITY_MAP_COULD_NOT_CHECK : num(w.blocked),
+      value:
+        w === null
+          ? SECURITY_MAP_COULD_NOT_CHECK
+          : securityMapCountWords(w.blocked, securityMapIsFloor(whole, 'blocked_window')),
       note: null,
     },
     {
@@ -1210,7 +1408,7 @@ export function securityMapCounters(
       value:
         w === null
           ? SECURITY_MAP_COULD_NOT_CHECK
-          : securityMapCountWords(w.flagged, FLAGGED_SUM_IS_FLOOR),
+          : securityMapCountWords(w.flagged, securityMapIsFloor(whole, 'flagged_window')),
       note: SECURITY_MAP_FLAGGED_NOT_BLOCKED,
     },
   ];
@@ -1241,9 +1439,11 @@ export function securityMapLegend(
     return {
       category,
       label: securityEventCategoryLabel(category),
-      blocked: row ? `${num(row[1])} blocked` : SECURITY_MAP_COULD_NOT_CHECK,
+      blocked: row
+        ? `${securityMapCountWords(row[1], securityMapIsFloor(whole, `totals.${category}.blocked`))} blocked`
+        : SECURITY_MAP_COULD_NOT_CHECK,
       flagged: row
-        ? `${securityMapCountWords(row[2], securityMapCountIsFloor(category, 'flagged'))} ${SECURITY_MAP_FLAGGED_NOT_BLOCKED}`
+        ? `${securityMapCountWords(row[2], securityMapIsFloor(whole, `totals.${category}.flagged`))} ${SECURITY_MAP_FLAGGED_NOT_BLOCKED}`
         : SECURITY_MAP_COULD_NOT_CHECK,
       help: securityMapLegendHelp(category),
     };
@@ -1286,7 +1486,7 @@ export function securityMapModeWords(
   timeZone?: string,
 ): string {
   if (plan.mode === 'live') {
-    return 'Live: the last 10 minutes. Events that are added late (from the phone app and direct callers) are never in the live play.';
+    return 'Live: the last 10 minutes, without the events from the phone app and direct callers (some of those are added hours late, so they are shown in the replay and the totals instead).';
   }
   const window = whole ? securityMapWindowWords(whole.from, whole.to) : 'last 24 hours';
   if (plan.mode === 'replay') {
@@ -1329,9 +1529,35 @@ export function securityMapRefusedWindowWords(refused: SecurityMapRefusal): stri
     not_a_time: 'the window asked for is not a time',
     to_in_the_future: 'the window asked for ends in the future',
     from_not_before_to: 'the window asked for ends before it starts',
-    longer_than_48_hours: 'the window asked for is longer than 48 hours',
+    longer_than_26_hours: 'the window asked for is longer than 26 hours',
+    too_many_events_in_one_minute: 'one minute alone holds more events than can be read',
   };
   return `${SECURITY_MAP_COULD_NOT_CHECK}: ${why[refused]}. Nothing was read.`;
+}
+
+/** Whether any shown category's number in `part` for these outcomes is a floor. */
+function shownFloor(
+  whole: SecurityMapWholeRead,
+  part: 'totals' | 'no_place',
+  outcomes: readonly SecurityEventOutcome[],
+  shown: readonly SecurityEventCategory[] = securityMapShownCategories(),
+): boolean {
+  return shown.some((category) =>
+    outcomes.some((outcome) => securityMapIsFloor(whole, `${part}.${category}.${outcome}`)),
+  );
+}
+
+/**
+ * A window the row ceiling shortened, in a sentence: the part read, from
+ * when, and that the rest was not counted. Null for a window read whole.
+ */
+export function securityMapShortenedWords(
+  whole: SecurityMapWholeRead | null,
+  timeZone?: string,
+): string | null {
+  if (!whole || !whole.shortened) return null;
+  const at = securityMapClock(whole.from, timeZone);
+  return `Showing the ${securityMapWindowWords(whole.from, whole.to)} only, from ${at}, your time: there were too many events to count all of the ${securityMapWindowWords(whole.askedFrom, whole.to)}. Nothing before ${at} is in these numbers.`;
 }
 
 /**
@@ -1348,7 +1574,7 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
     if (w.notDrawnSignInAlerts > 0) {
       const count = securityMapCountWords(
         w.notDrawnSignInAlerts,
-        securityMapCountIsFloor('phishing', 'flagged'),
+        securityMapIsFloor(whole, 'totals.phishing.flagged'),
       );
       parts.push(`${count} flagged sign-in ${plural(w.notDrawnSignInAlerts, 'alert', 'alerts')}`);
     }
@@ -1361,8 +1587,9 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
     notes.push(`Not drawn: ${parts.join(' and ')}. ${they} on the Security page.`);
   }
   if (w.noPlace > 0) {
+    const floor = shownFloor(whole, 'no_place', DRAWN);
     notes.push(
-      `Not on the map: ${num(w.noPlace)} ${plural(w.noPlace, 'event has', 'events have')} no country. ${plural(w.noPlace, 'It is', 'They are')} in the totals.`,
+      `Not on the map: ${securityMapCountWords(w.noPlace, floor)} ${plural(w.noPlace, 'event has', 'events have')} no country. ${plural(w.noPlace, 'It is', 'They are')} in the totals.`,
     );
   }
   if (w.flood > 0) {
@@ -1371,13 +1598,14 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
     );
   }
   if (w.allowed > 0) {
+    const floor = shownFloor(whole, 'totals', ['allowed']);
     notes.push(
-      `${num(w.allowed)} ${plural(w.allowed, 'event was', 'events were')} allowed. Allowed events are counted here and never drawn.`,
+      `${securityMapCountWords(w.allowed, floor)} ${plural(w.allowed, 'event was', 'events were')} allowed. Allowed events are counted here and never drawn.`,
     );
   }
   if (w.late > 0) {
     notes.push(
-      `Rows from the phone app and direct callers are added once an hour, up to about seven hours late, with a country only. They are in the totals and the replay, never in the live play. In the ${window}: ${num(w.late)} such ${plural(w.late, 'event', 'events')} so far.`,
+      `Events from the phone app and direct callers are left out of the live play: some of them are added up to about seven hours late, with a country only. They are in the totals and the replay. In the ${window}: ${securityMapCountWords(w.late, w.lateFloor)} such ${plural(w.late, 'event', 'events')} so far.`,
     );
   }
   if (w.tallyRows > 0) {
@@ -1400,9 +1628,9 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
       `The record starts on ${dateWords(w.oldestEventAt, timeZone)}, so the ${window} ${window === 'this window' ? 'is' : 'are'} not all on record.`,
     );
   }
-  if (w.flagged > 0 && FLAGGED_SUM_IS_FLOOR) {
+  if (w.floors.length > 0) {
     notes.push(
-      'A flagged sign-in is counted once however many organizations the account is in. Two accounts that sign in from the same place in the same minute also count once, so those numbers say "at least".',
+      'A sign-in is recorded once in each organization of the account, and the record cannot tell one account from another. So it is counted as the fewest sign-ins its rows can stand for, and a number that holds one says "at least".',
     );
   }
   return notes;
@@ -1469,7 +1697,8 @@ export function securityMapOutcomeWords(outcome: SecurityEventOutcome): string {
 
 /** One feed entry's facts, ready to show. The reason's own words come from securityEventReasonLabel. */
 export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWords {
-  const [minute, c, o, reason, source, country, city, events, id, name, organizations] = row;
+  const [minute, c, o, reason, source, country, city, events, atLeast, id, name, organizations] =
+    row;
   const category = SECURITY_EVENT_CATEGORIES[c] as SecurityEventCategory;
   const outcome = OUTCOMES[o] as SecurityEventOutcome;
   const flood = isSecurityMapFloodReason(reason);
@@ -1485,7 +1714,7 @@ export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWo
     country: flood ? null : country,
     city: flood ? null : city,
     flood,
-    count: securityMapCountWords(events, isSecurityMapFoldedReason(reason)),
+    count: securityMapCountWords(events, atLeast),
     organizationId: id,
     organizationName: name,
     organizationWords:
@@ -1532,8 +1761,14 @@ export function securityMapTableRows(whole: SecurityMapWholeRead): SecurityMapTa
         country: row.country,
         category,
         categoryLabel: securityEventCategoryLabel(category),
-        blocked: num(row.blocked),
-        flagged: securityMapCountWords(row.flagged, securityMapCountIsFloor(category, 'flagged')),
+        blocked: securityMapCountWords(
+          row.blocked,
+          securityMapIsFloor(whole, `totals.${category}.blocked`),
+        ),
+        flagged: securityMapCountWords(
+          row.flagged,
+          securityMapIsFloor(whole, `totals.${category}.flagged`),
+        ),
         total: row.blocked + row.flagged,
       };
     })
@@ -1553,6 +1788,10 @@ export const SECURITY_MAP_WORDS = {
   feedTitle: 'Newest entries',
   feedTimes: 'Times in UTC.',
   feedEmpty: 'No entries to list.',
+  flaggedFeedTitle: 'Flagged, not blocked: the newest',
+  flaggedFeedNote:
+    'The newest 20 flagged entries of the kinds this map shows, so a flood of blocked ones never hides them. Times in UTC.',
+  flaggedFeedEmpty: 'Nothing was flagged.',
   tableTitle: 'By country',
   tableNote:
     'The same numbers as the map, in full. A country is where a request came from, which can be a relay.',
