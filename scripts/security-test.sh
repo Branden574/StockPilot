@@ -1117,6 +1117,37 @@ PGTAP_TESTS=(
   # asked, and an hour that alone holds more is refused. The two-session
   # checks are scripts/db-concurrency/0479_security_event_samples_race.sh.
   supabase/tests/0479_security_event_samples.test.sql
+  # The platform console's security alerts (0480): three tables and nine
+  # functions. The tables have exactly their designed columns (an alert holds
+  # no address, account, path or sample; its subject is NOT NULL, '' for
+  # none), their checks, the alert key (rule, subject, event_key, phase), no
+  # foreign key, no trigger and no policy; the one state row starts with every
+  # switch off and the default thresholds. anon, authenticated and
+  # service_role hold nothing on the tables; service_role EXECUTE on the nine
+  # functions and nothing else; PUBLIC nothing. No body names a gate word, so
+  # if EXECUTE ever reached authenticated INV-25 would name each function
+  # (shown with the grant made inside a savepoint), and even then the second
+  # lock in each body refuses a signed-in member and a signed-out caller.
+  # Every write takes this file's own advisory lock, never the security
+  # events' or the samples'; the reads take none. The inputs count 8 hours of
+  # the record as the map counts it (folded, tallies apart; worked out by hand
+  # for a made-up record), never give a source hash, and say when the row
+  # ceiling cut the window. The claim keeps one row per alert however often
+  # it is claimed (a subject of null and '' the same; the key from the
+  # event's hour, not the run's clock), hands an alert with no result out once
+  # more after 5 minutes and then marks it not_sent; serious flags have their
+  # own 6 pushes an hour, then email only; volume and record alerts 8 a day
+  # together and 4 for one rule and subject; a planned check holds those and
+  # never a serious flag; with both switches off an alert is still recorded.
+  # Every refusal of all nine is a fixed word, never raised. The result, the
+  # heartbeat (missed runs, three failures reported once), the set (ranges,
+  # compare-and-set, a change row for every change), the console's list, the
+  # baseline (the 99th percentile of a week's buckets, worked out by hand),
+  # the purge (400 days, 5,000 a call, change rows kept) and the push
+  # recipients (a confirmed sign-in email, no disabled, banned, deleted, SSO
+  # or anonymous account, at most 20 addresses) each answer as documented. The
+  # two-session checks are scripts/db-concurrency/0480_platform_security_alerts_race.sh.
+  supabase/tests/0480_platform_security_alerts.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
