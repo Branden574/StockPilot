@@ -8,7 +8,7 @@ import { modifyRouteRegex } from 'next/dist/lib/redirect-status';
 import { tryToParsePath } from 'next/dist/lib/try-to-parse-path';
 import { getPathMatch } from 'next/dist/shared/lib/router/utils/path-match';
 import { describe, expect, it, vi } from 'vitest';
-import { SECURITY_PROBE_KINDS } from '@stockpilot/core';
+import { scrubRequestTarget, SECURITY_PROBE_KINDS } from '@stockpilot/core';
 
 import { liquidGlassRollout, marketingRewrites } from '@/components/theme/appearance-flag';
 
@@ -350,6 +350,20 @@ describe('made-up scanner paths are taken by the rule of their kind', () => {
       for (const p of SCANNER_PATHS[kind]) expect(kindOf(p), p).toBe(kind);
     });
   }
+});
+
+describe('the scrub of what was asked for keeps every scanner path as it was sent (part 5, stage 3)', () => {
+  // Three named paths besides the list (the first is in it too).
+  const NAMED = [
+    '/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php',
+    '/wp-content/plugins/wp-file-manager/lib/php/connector.minimal.php',
+    '/_ignition/execute-solution',
+  ];
+  it('all 55 made-up scanner paths and the three named ones', () => {
+    const listed = PROBE_KINDS.flatMap((kind) => SCANNER_PATHS[kind]);
+    expect(listed).toHaveLength(55);
+    for (const p of [...listed, ...NAMED]) expect(scrubRequestTarget(p), p).toBe(p);
+  });
 });
 
 describe('the longest path a server accepts bounds what a rule can cost', () => {
