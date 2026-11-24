@@ -323,6 +323,18 @@ export function userAvatarPathShape(userId: string): RegExp {
 }
 
 /**
+ * `support-attachments` object key: `{userId}/{file}`, the ONLY shape a
+ * support screenshot is minted as, on either platform (web
+ * `${userId}/${crypto.randomUUID()}.${ext}`, phone `${user.id}/${base36}.${ext}`).
+ * Shared by the web action and the phone route (part 6: the phone route had
+ * only a prefix check, the SP-142 hole the web action closed), and checked
+ * before the screenshot is read.
+ */
+export function supportAttachmentPathShape(userId: string): RegExp {
+  return anchored(`${escapeRegExpLiteral(userId)}/${OBJECT_FILENAME_SEGMENT}`);
+}
+
+/**
  * BOUNDARY schema guard for zod `.refine()` on an action/route input.
  *
  * Deliberately weaker than the shape checks above — a schema does not

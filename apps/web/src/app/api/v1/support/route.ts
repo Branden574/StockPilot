@@ -4,7 +4,13 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { createSupportTicket } from '@/server/services/support-tickets';
+import { isValidStoragePath, supportAttachmentPathShape } from '@/lib/storage-path';
+import { ServiceError } from '@/server/services/context';
+import {
+  createSupportTicket,
+  SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE,
+} from '@/server/services/support-tickets';
+import { verifyStoredDocumentOrDelete } from '@/server/services/upload-verification';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -44,8 +50,13 @@ export async function POST(req: NextRequest) {
   const data = parsed.data;
 
   // Attachment must live under the caller's own uid folder (mirror the web
-  // action + the mig 0260 storage INSERT policy).
-  if (data.attachmentPath && !data.attachmentPath.startsWith(`${ctx.userId}/`)) {
+  // action + the mig 0260 storage INSERT policy). A positive SHAPE since
+  // part 6, as the web action has had since SP-142: this was a prefix check,
+  // which `${uid}/../../...` passes, and the screenshot is now READ below.
+  if (
+    data.attachmentPath &&
+    !isValidStoragePath(data.attachmentPath, supportAttachmentPathShape(ctx.userId))
+  ) {
     return NextResponse.json(
       { error: 'invalid_attachment', message: 'Invalid attachment. Please re-attach your screenshot.' },
       { status: 400 },
@@ -60,6 +71,27 @@ export async function POST(req: NextRequest) {
       { error: 'rate_limited', message: 'Too many tickets in the last hour. Please try again later.' },
       { status: 429 },
     );
+  }
+
+  // Part 6: the screenshot's finalize, as on the web. A refusal removes it,
+  // records a security event in this organization, and the ticket is not
+  // sent; the phone shows the sentence.
+  if (data.attachmentPath) {
+    try {
+      await verifyStoredDocumentOrDelete(ctx, 'support-attachments', data.attachmentPath, {
+        unreadableMessage: SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE,
+        headers: req.headers,
+      });
+    } catch (e) {
+      if (e instanceof ServiceError) {
+        return NextResponse.json({ error: 'invalid_attachment', message: e.message }, { status: 400 });
+      }
+      void reportError(e, { tag: 'support-tickets.api-screenshot', organizationId: ctx.organizationId });
+      return NextResponse.json(
+        { error: 'internal_error', message: 'Could not submit your request. Please try again.' },
+        { status: 500 },
+      );
+    }
   }
 
   // Identity from the session (never the client body).

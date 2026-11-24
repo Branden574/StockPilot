@@ -42,7 +42,23 @@ vi.mock('@/lib/rate-limit', () => ({
 const { mockCreate } = vi.hoisted(() => ({
   mockCreate: vi.fn(async (_input: Record<string, unknown>) => ({ id: 'ticket-1' })),
 }));
+// Part 6: a screenshot that passes the shape is read by the upload check
+// before the ticket is sent; here every such object is a real (tiny) PNG.
+// The check's own behaviour on this path is upload-checks.support-paths.test.ts.
+vi.mock('@/lib/storage-object-prefix', () => ({
+  fetchObjectPrefix: vi.fn(async () => {
+    const png = new Uint8Array(26);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(png.buffer).setUint32(16, 2);
+    new DataView(png.buffer).setUint32(20, 3);
+    return { prefix: png, totalSize: png.byteLength };
+  }),
+}));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: vi.fn(() => ({ storage: { from: () => ({ remove: vi.fn() }) } })),
+}));
 vi.mock('@/server/services/support-tickets', () => ({
+  SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE: 'Your screenshot could not be read. Attach it again and send.',
   TICKET_CATEGORIES: ['bug', 'billing', 'account', 'feature', 'other'] as const,
   TICKET_PRIORITIES: ['low', 'normal', 'high', 'urgent'] as const,
   TICKET_STATUSES: ['open', 'in_progress', 'resolved', 'closed'] as const,

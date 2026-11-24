@@ -7,6 +7,7 @@ import {
 } from '@/lib/file-signature';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
 import { createAdminClient } from '@/lib/supabase/admin';
+import type { SecurityEventHeaders } from '@/server/security/events';
 import { checkStoredUpload, type UploadSurface } from '@/server/security/upload-checks';
 
 import { ServiceError, type ServiceContext } from './context';
@@ -61,9 +62,10 @@ const SURFACE_OF_BUCKET: Readonly<Record<DocumentBucket, UploadSurface>> = {
  * for a file to hide.
  */
 export async function verifyStoredDocumentOrDelete(
-  ctx: ServiceContext,
+  ctx: Pick<ServiceContext, 'organizationId'>,
   bucket: DocumentBucket,
   storagePath: string,
+  opts: { unreadableMessage?: string; headers?: SecurityEventHeaders | null } = {},
 ): Promise<SniffedFile> {
   const store = createAdminClient().storage.from(bucket);
 
@@ -78,7 +80,8 @@ export async function verifyStoredDocumentOrDelete(
     accept: uploadKindsForMimes(DOCUMENT_BUCKET_MIME_ALLOWLISTS[bucket]),
     organizationId: ctx.organizationId,
     removeOnRefusal: [storagePath],
-    unreadableMessage: 'This file could not be verified.',
+    unreadableMessage: opts.unreadableMessage ?? 'This file could not be verified.',
+    headers: opts.headers ?? null,
     wrongTypeMessage: 'This file could not be uploaded because it failed our security checks.',
   });
   if (!checked.ok) {

@@ -9,18 +9,17 @@ import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { isValidStoragePath, supportAttachmentPathShape } from '@/lib/storage-path';
+import { ServiceError } from '@/server/services/context';
 import {
-  OBJECT_FILENAME_SEGMENT,
-  escapeRegExpLiteral,
-  isValidStoragePath,
-} from '@/lib/storage-path';
-import {
+  SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE,
   TICKET_CATEGORIES,
   TICKET_PRIORITIES,
   TICKET_STATUSES,
   createSupportTicket,
   updateSupportTicket,
 } from '@/server/services/support-tickets';
+import { verifyStoredDocumentOrDelete } from '@/server/services/upload-verification';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -94,15 +93,16 @@ const dashboardSchema = z.object({
 
 export type DashboardTicketResult = { ok: true } | { ok: false; error: string };
 
-/**
+/*
  * `{userId}/{file}` — the ONLY shape a support screenshot is ever minted as,
  * on either platform:
  *   web    `${userId}/${crypto.randomUUID()}.${ext}`  support-ticket-form.tsx
  *   mobile `${user.id}/${base36x12}.${ext}`           (drawer)/support.tsx
  *
  * Two segments, like `orgLogoPathShape` — a support attachment has no parent
- * entity below the user. Not exported: a `'use server'` module may only export
- * async functions.
+ * entity below the user. The shape lives in lib/storage-path.ts
+ * (supportAttachmentPathShape) since part 6, so the phone route checks the
+ * same shape.
  *
  * WHY A SHAPE AND NOT A PREFIX (SP-142): this gate used to be
  * `attachmentPath.startsWith(`${ctx.userId}/`)`, which is exactly the negative
@@ -119,9 +119,6 @@ export type DashboardTicketResult = { ok: true } | { ok: false; error: string };
  * turned a stored row into a service-role-signed read of another org's
  * object in another bucket. Store only paths that cannot mean that.
  */
-function supportAttachmentPathShape(userId: string): RegExp {
-  return new RegExp(`^${escapeRegExpLiteral(userId)}/${OBJECT_FILENAME_SEGMENT}$`);
-}
 
 /**
  * In-app "Support & feedback" submission. Unlike the public marketing action
@@ -159,6 +156,23 @@ export async function submitDashboardTicketAction(
   const limit = await checkRateLimit(`support:user:${ctx.userId}`, 10, 60 * 60 * 1000, 'closed');
   if (!limit.allowed) {
     return { ok: false, error: 'Too many tickets in the last hour. Please try again later.' };
+  }
+
+  // Part 6: the screenshot's finalize. Nothing had read its bytes (the
+  // bucket's allowed_mime_types only see the browser's Content-Type). The
+  // one upload check reads it; a refusal removes it, records a security
+  // event in this organization, and the ticket is not sent, with a plain
+  // sentence, so the person can attach a real screenshot and send again.
+  if (data.attachmentPath) {
+    try {
+      await verifyStoredDocumentOrDelete(ctx, 'support-attachments', data.attachmentPath, {
+        unreadableMessage: SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE,
+      });
+    } catch (e) {
+      if (e instanceof ServiceError) return { ok: false, error: e.message };
+      void reportError(e, { tag: 'support-tickets.dashboard-screenshot' });
+      return { ok: false, error: 'Could not submit your request. Please try again.' };
+    }
   }
 
   try {
