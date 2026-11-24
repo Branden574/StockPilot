@@ -72,6 +72,26 @@ export function zoneLongWords(at: Date | number, zone: string): string {
   return long && long !== zone ? `${long} (${zone})` : zone;
 }
 
+/**
+ * How a clock is written: '24h' ("23:20"), the app's default, or '12h'
+ * ("11:20 PM"), which the platform console's security pages use (owner,
+ * 2026-11-24). An option of the formatters that write a clock, never a page's
+ * own copy.
+ */
+export type ClockStyle = '24h' | '12h';
+
+/**
+ * A wall clock's hour and minute as words: "23:20" on a 24-hour clock,
+ * "11:20 PM" on a 12-hour one (midnight "12:00 AM", noon "12:00 PM"). Built
+ * from the numbers, not from Intl, so every runtime writes the same plain
+ * space before AM or PM (no hydration difference).
+ */
+export function clockWords(hour: number, minute: number, clock: ClockStyle = '24h'): string {
+  const mm = String(minute).padStart(2, '0');
+  if (clock === '24h') return `${String(hour).padStart(2, '0')}:${mm}`;
+  return `${hour % 12 === 0 ? 12 : hour % 12}:${mm} ${hour < 12 ? 'AM' : 'PM'}`;
+}
+
 /** The instant the day holding `at` began in `zone` (its midnight, or the first instant after a gap there). */
 export function dayStartInZone(at: Date | number, zone: string): number {
   const p = zonedParts(at, zone);
