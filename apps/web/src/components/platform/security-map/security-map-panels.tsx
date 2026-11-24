@@ -260,7 +260,14 @@ export function SecurityMapFeedList({
  * and country only) and how many. No organization and no source here: those
  * are in the feed's own entries under the map.
  */
-export function SecurityMapFlaggedList({ rows }: { rows: readonly SecurityMapFeedRow[] }) {
+export function SecurityMapFlaggedList({
+  rows,
+  words,
+}: {
+  rows: readonly SecurityMapFeedRow[];
+  /** Core's line for what the list leaves out, or why it is empty; null when it says it all. */
+  words: string | null;
+}) {
   const headingId = React.useId();
   return (
     <section
@@ -272,9 +279,7 @@ export function SecurityMapFlaggedList({ rows }: { rows: readonly SecurityMapFee
         {SECURITY_MAP_WORDS.flaggedFeedTitle}
       </h3>
       <p className="text-muted-foreground text-[12px]">{SECURITY_MAP_WORDS.flaggedFeedNote}</p>
-      {rows.length === 0 ? (
-        <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_WORDS.flaggedFeedEmpty}</p>
-      ) : (
+      {rows.length === 0 ? null : (
         <ol className="max-h-[30rem] min-w-0 overflow-y-auto">
           {rows.map((row) => {
             const w = securityMapFeedWords(row);
@@ -304,6 +309,11 @@ export function SecurityMapFlaggedList({ rows }: { rows: readonly SecurityMapFee
           })}
         </ol>
       )}
+      {words ? (
+        <p data-testid="security-map-flagged-words" className="text-muted-foreground text-[12.5px]">
+          {words}
+        </p>
+      ) : null}
     </section>
   );
 }

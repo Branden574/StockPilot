@@ -680,13 +680,81 @@ describe('the flagged list beside the map', () => {
     expect(row.contains(screen.getByTestId('security-map-mode'))).toBe(true);
   });
 
+  const noFlagged = () => {
+    const totals = answer().totals;
+    totals.password_guessing.flagged = 0;
+    return totals;
+  };
+
   it('nothing flagged: one plain line', () => {
-    mount(async () => new Promise(() => {}), wholeRead(answer({ flagged_feed: [] })));
+    mount(
+      async () => new Promise(() => {}),
+      wholeRead(answer({ flagged_feed: [], totals: noFlagged() })),
+    );
     expect(entries()).toHaveLength(0);
     expect(within(list()).getByText(SECURITY_MAP_WORDS.flaggedFeedEmpty)).toBeInTheDocument();
   });
 
-  it("a poll's flagged entries go first; the whole read's own are kept only before the poll's window", async () => {
+  it('none listed while the window holds flagged events of the shown kinds: never "Nothing was flagged"', () => {
+    // The only flagged entry is a Phishing one; password guessing has 3 flagged events, all older.
+    mount(
+      async () => new Promise(() => {}),
+      wholeRead(answer({ flagged_feed: [answer().flagged_feed[1]!] })),
+    );
+    expect(entries()).toHaveLength(0);
+    expect(screen.getByTestId('security-map-flagged-words').textContent).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedNoneShown,
+    );
+    expect(within(list()).queryByText(SECURITY_MAP_WORDS.flaggedFeedEmpty)).toBeNull();
+  });
+
+  it('the newest only, of more: the list says so', () => {
+    const totals = answer().totals;
+    totals.password_guessing.flagged = 9;
+    mount(async () => new Promise(() => {}), wholeRead(answer({ totals })));
+    expect(entries()).toHaveLength(1);
+    expect(screen.getByTestId('security-map-flagged-words').textContent).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedMore,
+    );
+  });
+
+  it('all of them listed: no such words', () => {
+    mount(async () => new Promise(() => {}));
+    expect(screen.queryByTestId('security-map-flagged-words')).toBeNull();
+  });
+
+  it('the whole window not read: "Could not check", never "Nothing was flagged"', () => {
+    mount(async () => new Promise(() => {}), SECURITY_MAP_POLL_FAILED);
+    expect(screen.getByTestId('security-map-flagged-words').textContent).toBe('Could not check.');
+  });
+
+  it('a flagged entry from the whole-window answer is still listed after three polls that do not carry it', async () => {
+    // Inside the polls' ten minutes (21:50:30 on): a poll that does not carry it does not take it away.
+    const inside = { ...answer().flagged_feed[0]!, minute: '2026-11-23T21:55:00+00:00' };
+    const empty = answer({ ...liveAnswer(), feed: [], flagged_feed: [] });
+    const { spy } = mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole'
+          ? dayRead({ flagged_feed: [inside] })(input)
+          : recentRead(empty),
+      wholeRead(answer({ flagged_feed: [inside] })),
+    );
+    await advance(0);
+    for (let i = 0; i < 3; i += 1) await advance(30_000);
+    expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
+      'whole',
+      'recent',
+      'recent',
+      'recent',
+    ]);
+    expect(entries()).toHaveLength(1);
+    expect(entries()[0]!.textContent).toContain('Example Borough, United Kingdom');
+    expect(entries()[0]!.textContent).toContain('21:55 UTC');
+    // The plain feed too: its entry from the whole read is still there.
+    expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
+  });
+
+  it("a poll's flagged entries are merged in, newest first; the whole read's own all stay", async () => {
     const flaggedAt = (minute: string, city: string) =>
       feedEntry({
         minute,
@@ -716,6 +784,7 @@ describe('the flagged list beside the map', () => {
     await advance(30_000);
     expect(entries().map((e) => e.textContent!.match(/Example \w+/)![0])).toEqual([
       'Example Newest',
+      'Example Inside',
       'Example Before',
     ]);
     // The poll's numbers replace none of the whole read's.

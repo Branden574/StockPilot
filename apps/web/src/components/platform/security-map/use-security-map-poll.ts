@@ -4,9 +4,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   SECURITY_MAP_HEALTH_AT_START,
+  SECURITY_MAP_MAX_FEED,
+  SECURITY_MAP_MAX_FLAGGED_FEED,
   planSecurityMapPlayback,
   readSecurityMapPollResult,
   securityMapHealthAfter,
+  securityMapMergeFeed,
+  securityMapWindowStartNow,
+  type SecurityMapFeedRow,
   type SecurityMapHealth,
   type SecurityMapPlan,
   type SecurityMapRefusal,
@@ -23,8 +28,9 @@ import { localDayStart, nextLocalMidnight, nextPoll, replayWantsWhole } from './
  * 30 seconds; the whole window again every 5 minutes, at the viewer's
  * midnight, and when the replay begins on a read more than a minute old
  * (map-model.ts nextPoll). A read of the last ten minutes only adds the
- * newest live arcs and feed entries to the newest whole read; it replaces
- * none of its numbers.
+ * newest live arcs, and merges its feed entries into the two lists kept since
+ * the newest whole read (an entry the poll does not carry stays); it replaces
+ * none of the whole read's numbers or lists.
  *
  * One request at a time; nothing is sent while the tab is hidden, and when it
  * comes back an overdue read is sent at once; after a failed read the wait
@@ -38,6 +44,14 @@ export interface SecurityMapPollState {
   whole: SecurityMapWholeRead | null;
   /** The newest read of the last ten minutes, or null. */
   recent: SecurityMapView | null;
+  /**
+   * The two feeds as kept: the newest whole read's, with every poll since
+   * merged in by entry identity. A new read of the whole window starts them again.
+   */
+  feed: readonly SecurityMapFeedRow[];
+  flaggedFeed: readonly SecurityMapFeedRow[];
+  /** Flagged entries fell off the kept list's end behind newer ones. */
+  flaggedCut: boolean;
   health: SecurityMapHealth;
   /** A whole read that carried the viewer's day start has come back. */
   dayStartAsked: boolean;
@@ -57,6 +71,9 @@ export function initialPollState(initial: unknown, nowMs: number): SecurityMapPo
   const base: SecurityMapPollState = {
     whole: null,
     recent: null,
+    feed: [],
+    flaggedFeed: [],
+    flaggedCut: false,
     health: SECURITY_MAP_HEALTH_AT_START,
     dayStartAsked: false,
     refusedWindow: null,
@@ -86,6 +103,8 @@ export function initialPollState(initial: unknown, nowMs: number): SecurityMapPo
   return {
     ...base,
     whole: read.view as SecurityMapWholeRead,
+    feed: read.view.feed,
+    flaggedFeed: read.view.flaggedFeed,
     health: securityMapHealthAfter(base.health, 'ok', nowMs),
     lastWholeAt: nowMs,
   };
@@ -93,8 +112,10 @@ export function initialPollState(initial: unknown, nowMs: number): SecurityMapPo
 
 /**
  * The state after one read came back. A read of the last ten minutes never
- * replaces the whole window's numbers, table or replay: it only adds the
- * newest live arcs and feed. An answer of the wrong scope is a failed read.
+ * replaces the whole window's numbers, table or replay, nor the feeds kept
+ * from it: it adds the newest live arcs, and its feed entries are merged into
+ * the kept lists. A read of the whole window starts the lists again from its
+ * own. An answer of the wrong scope is a failed read.
  */
 export function pollStateAfter(
   state: SecurityMapPollState,
@@ -127,10 +148,31 @@ export function pollStateAfter(
     return { ...next, health: securityMapHealthAfter(state.health, 'failed', nowMs) };
   }
   const health = securityMapHealthAfter(state.health, 'ok', nowMs);
-  if (scope === 'recent') return { ...next, recent: view, refusedWindow: null, health };
+  if (scope === 'recent') {
+    const fromMs = securityMapWindowStartNow(state.whole, view);
+    const feed = securityMapMergeFeed(state.feed, view.feed, fromMs, SECURITY_MAP_MAX_FEED);
+    const flagged = securityMapMergeFeed(
+      state.flaggedFeed,
+      view.flaggedFeed,
+      fromMs,
+      SECURITY_MAP_MAX_FLAGGED_FEED,
+    );
+    return {
+      ...next,
+      recent: view,
+      feed: feed.rows,
+      flaggedFeed: flagged.rows,
+      flaggedCut: state.flaggedCut || flagged.cut,
+      refusedWindow: null,
+      health,
+    };
+  }
   return {
     ...next,
     whole: view as SecurityMapWholeRead,
+    feed: view.feed,
+    flaggedFeed: view.flaggedFeed,
+    flaggedCut: false,
     refusedWindow: null,
     health,
     lastWholeAt: nowMs,

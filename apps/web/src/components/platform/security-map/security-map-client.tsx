@@ -10,8 +10,7 @@ import {
   securityMapAsOfWords,
   securityMapCounters,
   securityMapEmptyWords,
-  securityMapFeedOf,
-  securityMapFlaggedFeedOf,
+  securityMapFlaggedListWords,
   securityMapLegend,
   securityMapModeWords,
   securityMapNotes,
@@ -152,8 +151,11 @@ export function SecurityMapClient({
   const counters = securityMapCounters(state.whole, state.dayStartAsked, { dayStartNow });
   const shortened = securityMapShortenedWords(state.whole);
   const legend = securityMapLegend(state.whole);
-  const feed = securityMapFeedOf(state.whole, state.recent);
-  const flagged = securityMapFlaggedFeedOf(state.whole, state.recent);
+  const flaggedWords = securityMapFlaggedListWords(
+    state.whole,
+    state.flaggedFeed.length,
+    state.flaggedCut,
+  );
   const notes = state.whole ? securityMapNotes(state.whole) : [];
   const notOnMap = state.whole ? notOnMapWords(state.whole) : null;
   const empty = securityMapEmptyWords(state.whole);
@@ -261,7 +263,7 @@ export function SecurityMapClient({
             ) : null}
           </div>
         </div>
-        <SecurityMapFlaggedList rows={flagged} />
+        <SecurityMapFlaggedList rows={state.flaggedFeed} words={flaggedWords} />
       </div>
 
       {refused ? <p className="text-destructive text-[13px]">{refused}</p> : null}
@@ -271,7 +273,7 @@ export function SecurityMapClient({
       <SecurityMapNotes lines={notOnMap ? [...notes, notOnMap] : notes} />
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-        <SecurityMapFeedList title={SECURITY_MAP_WORDS.feedTitle} rows={feed} />
+        <SecurityMapFeedList title={SECURITY_MAP_WORDS.feedTitle} rows={state.feed} />
         <SecurityMapCountryTable whole={state.whole} />
       </div>
     </div>
