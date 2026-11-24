@@ -16,7 +16,7 @@ import {
 import { checkStoredUpload, type UploadSurface } from '@/server/security/upload-checks';
 
 import { ServiceError, type ServiceContext } from './context';
-import { uploadObjectsStillNamed } from './upload-still-named';
+import { type UploadRecordTable, uploadObjectsStillNamed } from './upload-still-named';
 
 const SURFACE_OF_BUCKET: Readonly<Record<DocumentBucket, UploadSurface>> = {
   'po-attachments': 'po_attachment',
@@ -32,7 +32,7 @@ const MAX_BYTES_OF_BUCKET: Readonly<Record<DocumentBucket, number>> = {
 };
 
 /** The table and column whose rows name an object of each bucket (part 6). */
-const RECORDS_OF_BUCKET: Readonly<Record<DocumentBucket, { table: string; columns: readonly string[] }>> = {
+const RECORDS_OF_BUCKET: Readonly<Record<DocumentBucket, { table: UploadRecordTable; columns: readonly string[] }>> = {
   'po-attachments': { table: 'po_attachments', columns: ['storage_path'] },
   'order-attachments': { table: 'order_request_attachments', columns: ['storage_path'] },
   'support-attachments': { table: 'support_tickets', columns: ['attachment_path'] },

@@ -11,8 +11,18 @@ import { createAdminClient } from '@/lib/supabase/admin';
  * column of the table that holds an object path. Throws on a failed look:
  * the caller keeps the objects (upload-checks.ts removeRefused).
  */
+/** The tables whose rows name an upload's objects. */
+export type UploadRecordTable =
+  | 'item_images'
+  | 'order_request_attachments'
+  | 'organizations'
+  | 'po_attachments'
+  | 'procedure_videos'
+  | 'support_tickets'
+  | 'user_profiles';
+
 export async function uploadObjectsStillNamed(
-  table: string,
+  table: UploadRecordTable,
   columns: readonly string[],
   paths: readonly string[],
 ): Promise<boolean> {

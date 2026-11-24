@@ -463,7 +463,8 @@ describe('the web fixes release (B20a and S45)', () => {
     expect(action).toContain(
       "if (checked.kind === 'png' || checked.kind === 'jpeg' || checked.kind === 'webp') {",
     );
-    expect(action).toContain('await logos.remove([objectPath]);');
+    // Part 6 review: the refused logo is removed unless a record still names it, with its audit line.
+    expect(action).toContain("await removeUnlessNamed(logos, [objectPath], logoStillNamed, 'org_logo', 'too_large', {");
     const decode = source('lib/image-decode.ts');
     for (const kind of ['png', 'jpeg', 'webp']) {
       expect(decode).toContain(`  ${kind}: 50_000_000,`);
