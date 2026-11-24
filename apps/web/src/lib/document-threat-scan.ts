@@ -53,7 +53,7 @@
  * a global find-and-replace of `#xx` would let an innocuous run of text
  * assemble into a marker it never contained.
  */
-import { inflateSync } from 'node:zlib';
+import { constants as zlibConstants, inflateSync } from 'node:zlib';
 
 import type { SniffedFile } from './file-signature';
 
@@ -200,6 +200,9 @@ function spend(budget: ScanBudget, units: number): DocumentThreat | null {
  *    frequent, confusing refusal.
  *  - `/SubmitForm` and `/ImportData` move data rather than execute; they are a
  *    different (and much weaker) concern than the brief's "execution path".
+ *  - The script entry's short name. Three bytes of it turn up by chance in
+ *    compressed data, so it refused honest files in proportion to their size
+ *    (part 6 review); the actions that run a script are listed instead.
  *
  * The bar for this table is: no legitimate purchase order, invoice, packing
  * slip or delivery photo has any business containing it.
@@ -208,10 +211,6 @@ const PDF_ACTIVE_CONTENT: ReadonlyArray<
   readonly [name: string, code: DocumentThreatCode, detail: string]
 > = [
   ['JavaScript', 'pdf_javascript', '/JavaScript action'],
-  // The JS action's script entry. Not an abbreviation anything benign uses as
-  // a name: font subset tags are always six letters plus '+', so `/JS` cannot
-  // be one.
-  ['JS', 'pdf_javascript', '/JS script entry'],
   ['Launch', 'pdf_launch_action', '/Launch action'],
   ['EmbeddedFile', 'pdf_embedded_file', '/EmbeddedFile stream'],
   // The catalog-level name tree. Matched separately because the comparison is
@@ -220,6 +219,8 @@ const PDF_ACTIVE_CONTENT: ReadonlyArray<
   ['RichMedia', 'pdf_rich_media', '/RichMedia annotation'],
   ['Movie', 'pdf_rich_media', '/Movie annotation'],
   ['Sound', 'pdf_rich_media', '/Sound annotation'],
+  // The action that plays a media clip (part 6).
+  ['Rendition', 'pdf_rich_media', '/Rendition action'],
 ];
 
 /**
@@ -370,10 +371,11 @@ function decodePdfNameEscapes(raw: string): string {
  * Streams are located by their `stream` / `endstream` keywords rather than by
  * parsing the cross-reference table, because a PDF built to hide something is
  * exactly the PDF whose xref lies. Keyword scanning sees what is physically in
- * the file. It over-matches — the word "endstream" can occur inside binary
- * data — but an over-match yields a slice that is not Flate, which is the skip
- * case above. Under-matching is the failure mode that would matter, and this
- * does not under-match.
+ * the file. It over-matches (the word "endstream" can occur inside binary
+ * data), and an over-match yields a slice that is not Flate, which is the skip
+ * case above. A stream is read as far as its data goes (a run that ends early
+ * is read up to where it ends, and a stream with no `endstream` up to the end
+ * of the file), and a stream written in hex or ASCII85 text is decoded first.
  */
 function scanFlateStreams(
   data: Uint8Array,
@@ -395,81 +397,235 @@ function scanFlateStreams(
     const late = spend(scanBudget, 0);
     if (late) return late;
 
-    // Skip the EOL the spec requires between `stream` and the data: CRLF or
-    // LF, never a bare CR. Starting one byte late corrupts the zlib header,
-    // the inflate throws Z_DATA_ERROR, and the stream is dropped as "not
-    // Flate" — a scanner reporting clean because it fed itself garbage.
+    // The data starts after the line end that follows the keyword, and any
+    // white space before it is skipped: no Flate, hex or ASCII85 data starts
+    // with a white-space byte, so nothing of a stream is lost by it.
     let start = kw + 'stream'.length;
-    if (text.charCodeAt(start) === 0x0d && text.charCodeAt(start + 1) === 0x0a) start += 2;
-    else if (text.charCodeAt(start) === 0x0a) start += 1;
+    while (start < text.length && PDF_WHITE_SPACE.has(text.charCodeAt(start))) start += 1;
 
     const end = text.indexOf('endstream', start);
-    if (end === -1) {
-      // No `endstream` anywhere after this keyword, so none after any later
-      // one either: nothing more can be inflated. The loop used to step on,
-      // one keyword at a time, each step searching the rest of the document
-      // again for an `endstream` that is not there, which made a file of
-      // keywords cost the square of its size. The verdict is kept exactly:
-      // the keywords still ahead are counted once, and as many as the stream
-      // ceiling refuse the document as they always did.
-      // (The old loop refused at its step MAX_STREAMS_INFLATED, which it
-      // reached when that many keywords, less this step's n, lay ahead.)
+    // No `endstream` after this keyword, so none after any later one either:
+    // this stream is read to the end of the file, and it is the last.
+    const last = end === -1;
+    const stop = last ? data.length : end;
+    searchFrom = stop + 'endstream'.length;
+
+    if (stop > start) {
+      // ═══ THE BUDGET IS A VERDICT BEFORE IT IS A NUMBER ═══
+      //
+      // Once the total inflate budget is spent, any further Flate stream is
+      // content we would not see. Refuse HERE, before touching zlib: passing
+      // `maxOutputLength: 0` to inflateSync throws ERR_OUT_OF_RANGE (Node
+      // requires >= 1), and the previous shape of this loop caught that in the
+      // generic "not Flate" branch below — so a document made of eight
+      // cap-sized streams followed by a /JavaScript stream scanned CLEAN: the
+      // payload was skipped as if it were a JPEG. Reproduced 2026-09-02 against
+      // the real module; the regression test builds exactly that file.
+      if (budget <= 0) {
+        return { code: 'pdf_scan_limit', detail: 'total inflate budget exhausted' };
+      }
+
+      const raw = data.subarray(start, stop);
+      let inflated: Buffer | null = null;
+      const first = inflateBounded(raw, budget);
+      if ('threat' in first) return first.threat;
+      if ('bytes' in first) {
+        inflated = first.bytes;
+      } else {
+        // Not Flate as it stands: a stream written as hex or ASCII85 text
+        // (alone, or before a Flate filter) is decoded, its text scanned, and
+        // what it decodes to inflated in turn.
+        const decoded = decodeTextFilter(text, start, stop);
+        if (decoded && 'threat' in decoded) return decoded.threat;
+        if (decoded) {
+          const cost = spend(scanBudget, (stop - start) + decoded.bytes.byteLength);
+          if (cost) return cost;
+          const hit = findActiveContent(Buffer.from(decoded.bytes).toString('latin1'));
+          if (hit) return { ...hit, detail: `${hit.detail} (inside an encoded stream)` };
+          const second = inflateBounded(decoded.bytes, budget);
+          if ('threat' in second) return second.threat;
+          if ('bytes' in second) inflated = second.bytes;
+        }
+      }
+
+      if (inflated) {
+        budget -= inflated.byteLength;
+        // What this stream cost: its compressed bytes, and what it inflated to,
+        // read by the name scan below.
+        const over = spend(scanBudget, stop - start + inflated.byteLength);
+        if (over) return over;
+        const hit = findActiveContent(inflated.toString('latin1'));
+        if (hit) return { ...hit, detail: `${hit.detail} (inside a compressed stream)` };
+      }
+    }
+
+    if (last) {
+      // The keywords still ahead are counted once (a file of keywords must not
+      // cost the square of its size), and as many as the stream ceiling refuse
+      // the document as they always did.
       const ahead = MAX_STREAMS_INFLATED - n;
       return countKeywordsFrom(text, kw + 'stream'.length, ahead) >= ahead
         ? { code: 'pdf_scan_limit', detail: `more than ${MAX_STREAMS_INFLATED} streams` }
         : null;
     }
-    searchFrom = end + 'endstream'.length;
-    if (end <= start) continue;
+  }
+}
 
-    // ═══ THE BUDGET IS A VERDICT BEFORE IT IS A NUMBER ═══
-    //
-    // Once the total inflate budget is spent, any further Flate stream is
-    // content we would not see. Refuse HERE, before touching zlib: passing
-    // `maxOutputLength: 0` to inflateSync throws ERR_OUT_OF_RANGE (Node
-    // requires >= 1), and the previous shape of this loop caught that in the
-    // generic "not Flate" branch below — so a document made of eight
-    // cap-sized streams followed by a /JavaScript stream scanned CLEAN: the
-    // payload was skipped as if it were a JPEG. Reproduced 2026-09-02 against
-    // the real module; the regression test builds exactly that file.
-    if (budget <= 0) {
-      return { code: 'pdf_scan_limit', detail: 'total inflate budget exhausted' };
-    }
+/** PDF white space: NUL, tab, line feed, form feed, carriage return, space. */
+const PDF_WHITE_SPACE: ReadonlySet<number> = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
 
-    let inflated: Buffer;
-    try {
-      inflated = inflateSync(Buffer.from(data.subarray(start, end)), {
+/**
+ * One bounded inflate. A run that ends early is read up to where it ends
+ * (what a reader would show of it). The two zlib answers that mean "these
+ * bytes are not Flate" are the skip; any other failure means content we did
+ * not see, and is a refusal.
+ */
+function inflateBounded(
+  bytes: Uint8Array,
+  budget: number,
+): { bytes: Buffer } | { skip: true } | { threat: DocumentThreat } {
+  try {
+    return {
+      bytes: inflateSync(Buffer.from(bytes), {
         maxOutputLength: Math.min(MAX_INFLATED_BYTES_PER_STREAM, budget),
-      });
-    } catch (e) {
-      const code = (e as { code?: string }).code;
-      // Only two outcomes mean "these bytes are not a Flate stream we could
-      // read": Z_DATA_ERROR (garbage / a JPEG / a font) and Z_BUF_ERROR (a
-      // truncated deflate run). Both are the honest skip. EVERYTHING else —
-      // ERR_BUFFER_TOO_LARGE (we chose to stop reading), ERR_OUT_OF_RANGE (an
-      // option we should never have produced), or a future zlib code — means
-      // content existed that we did not inspect, and a scanner that shrugs at
-      // its own errors reports clean on what it never looked at. Fail closed.
-      if (code === 'Z_DATA_ERROR' || code === 'Z_BUF_ERROR') {
-        continue; // not Flate — nothing was concealed here
-      }
-      return {
+        finishFlush: zlibConstants.Z_SYNC_FLUSH,
+      }),
+    };
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === 'Z_DATA_ERROR' || code === 'Z_BUF_ERROR') return { skip: true };
+    return {
+      threat: {
         code: 'pdf_scan_limit',
         detail:
           code === 'ERR_BUFFER_TOO_LARGE'
             ? 'a stream larger than we will decompress'
             : `decompression stopped (${code ?? 'unknown error'})`,
-      };
-    }
-
-    budget -= inflated.byteLength;
-    // What this stream cost: its compressed bytes, and what it inflated to,
-    // read by the name scan below.
-    const over = spend(scanBudget, end - start + inflated.byteLength);
-    if (over) return over;
-    const hit = findActiveContent(inflated.toString('latin1'));
-    if (hit) return { ...hit, detail: `${hit.detail} (inside a compressed stream)` };
+      },
+    };
   }
+}
+
+/**
+ * A stream written as ASCIIHexDecode or ASCII85Decode text, decoded; null
+ * when the bytes from `from` are not that (the first character that is not
+ * the filter's alphabet or white space ends the attempt, so binary data costs
+ * one byte). The decoded size is held to the per-stream ceiling.
+ */
+function decodeTextFilter(
+  text: string,
+  from: number,
+  to: number,
+): { bytes: Uint8Array } | { threat: DocumentThreat } | null {
+  const first = text.charCodeAt(from);
+  const isHex = (c: number) => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
+  if (isHex(first)) {
+    const hex = decodeAsciiHex(text, from, to);
+    if (hex) return hex;
+  }
+  // ASCII85's alphabet holds the hex digits too, so a stream that was not
+  // hex is still tried as ASCII85.
+  if ((first >= 0x21 && first <= 0x75) || first === 0x7a) return decodeAscii85(text, from, to);
+  return null;
+}
+
+const TOO_LARGE_DECODED: DocumentThreat = {
+  code: 'pdf_scan_limit',
+  detail: 'a stream larger than we will decompress',
+};
+
+/** A byte buffer that grows as it is written, up to the per-stream ceiling. */
+class DecodedBytes {
+  private buf = new Uint8Array(4096);
+  length = 0;
+  /** False when one more byte would pass the ceiling. */
+  push(byte: number): boolean {
+    if (this.length >= this.buf.length) {
+      if (this.buf.length >= MAX_INFLATED_BYTES_PER_STREAM) return false;
+      const grown = new Uint8Array(Math.min(this.buf.length * 2, MAX_INFLATED_BYTES_PER_STREAM));
+      grown.set(this.buf);
+      this.buf = grown;
+    }
+    this.buf[this.length++] = byte;
+    return true;
+  }
+  bytes(): Uint8Array {
+    return this.buf.subarray(0, this.length);
+  }
+}
+
+/** ASCIIHexDecode: hex digit pairs up to `>`, white space ignored. */
+function decodeAsciiHex(
+  text: string,
+  from: number,
+  to: number,
+): { bytes: Uint8Array } | { threat: DocumentThreat } | null {
+  const out = new DecodedBytes();
+  let high = -1;
+  for (let i = from; i < to; i += 1) {
+    const c = text.charCodeAt(i);
+    if (PDF_WHITE_SPACE.has(c)) continue;
+    if (c === 0x3e /* > */) {
+      if (high >= 0 && !out.push(high << 4)) return { threat: TOO_LARGE_DECODED };
+      return out.length > 0 ? { bytes: out.bytes() } : null;
+    }
+    const v =
+      c >= 0x30 && c <= 0x39 ? c - 0x30 : c >= 0x41 && c <= 0x46 ? c - 0x37 : c >= 0x61 && c <= 0x66 ? c - 0x57 : -1;
+    if (v < 0) return null;
+    if (high < 0) {
+      high = v;
+    } else {
+      if (!out.push((high << 4) | v)) return { threat: TOO_LARGE_DECODED };
+      high = -1;
+    }
+  }
+  return null;
+}
+
+/** ASCII85Decode: an optional `<~`, groups of five up to `~>`, `z` for four zeros, white space ignored. */
+function decodeAscii85(
+  text: string,
+  from: number,
+  to: number,
+): { bytes: Uint8Array } | { threat: DocumentThreat } | null {
+  let i = from;
+  if (text.charCodeAt(i) === 0x3c && text.charCodeAt(i + 1) === 0x7e) i += 2;
+  const out = new DecodedBytes();
+  const group: number[] = [];
+  /** The group's value as `count` bytes (a short group is padded with `u`). */
+  const emit = (count: number): 'ok' | 'not_ascii85' | 'too_large' => {
+    let v = 0;
+    for (let k = 0; k < 5; k += 1) v = v * 85 + (group[k] ?? 84);
+    if (v > 0xffffffff) return 'not_ascii85';
+    for (let k = 0; k < count; k += 1) if (!out.push((v >>> (24 - 8 * k)) & 0xff)) return 'too_large';
+    return 'ok';
+  };
+  for (; i < to; i += 1) {
+    const c = text.charCodeAt(i);
+    if (PDF_WHITE_SPACE.has(c)) continue;
+    if (c === 0x7e /* ~ */) {
+      if (text.charCodeAt(i + 1) !== 0x3e || group.length === 1) return null;
+      if (group.length > 0) {
+        const tail = emit(group.length - 1);
+        if (tail === 'too_large') return { threat: TOO_LARGE_DECODED };
+        if (tail === 'not_ascii85') return null;
+      }
+      return out.length > 0 ? { bytes: out.bytes() } : null;
+    }
+    if (c === 0x7a /* z */ && group.length === 0) {
+      for (let k = 0; k < 4; k += 1) if (!out.push(0)) return { threat: TOO_LARGE_DECODED };
+      continue;
+    }
+    if (c < 0x21 || c > 0x75) return null;
+    group.push(c - 0x21);
+    if (group.length === 5) {
+      const full = emit(4);
+      if (full === 'too_large') return { threat: TOO_LARGE_DECODED };
+      if (full === 'not_ascii85') return null;
+      group.length = 0;
+    }
+  }
+  return null;
 }
 
 /**
