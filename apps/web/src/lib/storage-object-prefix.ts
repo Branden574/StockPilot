@@ -164,6 +164,30 @@ export async function fetchObjectPrefix(
   return head;
 }
 
+/**
+ * The leading window ONLY, never widened (part 6): for a file whose verdict
+ * is its signature and whose size is far beyond any read we would buffer, a
+ * procedure video of up to a gigabyte. `fetchObjectPrefix` widens to the
+ * whole object when an image sniff of the window cannot decide, and an MP4's
+ * leading box is exactly the shape that can ask for that. Null on any
+ * failure, like fetchObjectPrefix.
+ */
+export async function fetchObjectWindow(
+  bucket: PrefixCapableBucket,
+  path: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ObjectPrefix | null> {
+  let signedUrl: string;
+  try {
+    const { data, error } = await bucket.createSignedUrl(path, PREFIX_URL_TTL_SECONDS);
+    if (error || !data?.signedUrl) return null;
+    signedUrl = data.signedUrl;
+  } catch {
+    return null;
+  }
+  return fetchLeadingWindow(signedUrl, fetchImpl);
+}
+
 /** The Range request for the leading window, and the full size from the
  *  response's own headers. Null on any failure. */
 async function fetchLeadingWindow(

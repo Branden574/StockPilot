@@ -47,6 +47,11 @@ const code = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])
 const RECORDER_NAMES = [
   'recordSecurityEvent',
   'flushSecurityEvents',
+  // The upload checks (part 6): each records with the organization it is handed.
+  'checkUploadBytes',
+  'checkUploadPrefix',
+  'checkStoredUpload',
+  'checkStoredUploadSignature',
   'recordSignInBlocked',
   'recordAccountCodeBlocked',
   'recordRefusedSetUpCode',
@@ -164,6 +169,9 @@ describe('the security-events recorder stays out of Server Actions', () => {
   it('the recorder and the helpers are where this guard looks for them', () => {
     expect(read('server/security/events.ts')).toMatch(/export async function recordSecurityEvent\(/);
     expect(read('server/security/events.ts')).toMatch(/export async function flushSecurityEvents\(/);
+    for (const name of ['checkUploadBytes', 'checkUploadPrefix', 'checkStoredUpload', 'checkStoredUploadSignature']) {
+      expect(read('server/security/upload-checks.ts')).toMatch(new RegExp(`export async function ${name}\\(`));
+    }
     expect(read('server/security/account-events.ts')).toMatch(/export function recordSignInBlocked\(/);
     expect(read('server/security/account-events.ts')).toMatch(
       /export function recordAccountCodeBlocked\(/,
