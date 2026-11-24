@@ -183,7 +183,13 @@ export function SecurityResponsePanel({
     setTrail((t) => (t.length > 1 ? t.slice(0, -1) : t));
   };
 
-  const { context, organizationId } = request;
+  const { context } = request;
+  // Exactly one organization, by a real id: its name is a link, and its routes are filled in.
+  const organizationId =
+    request.organizationId !== null && UUID_RE.test(request.organizationId)
+      ? request.organizationId
+      : null;
+  const several = organizationId === null && (request.organizations ?? 0) > 1;
   const facts: Array<[string, string]> = [
     [SECURITY_RESPONSE_WORDS.kind, context.kind],
     [SECURITY_RESPONSE_WORDS.where, context.place],
@@ -300,7 +306,18 @@ export function SecurityResponsePanel({
                     className="text-foreground min-w-0 [overflow-wrap:anywhere]"
                     title={label === SECURITY_RESPONSE_WORDS.when && utc ? utc : undefined}
                   >
-                    {value}
+                    {label === SECURITY_RESPONSE_WORDS.organization && organizationId !== null ? (
+                      // Never prefetched: opening an organization's page writes a viewed_org row to the audit.
+                      <Link
+                        href={`/platform/orgs/${organizationId}`}
+                        prefetch={false}
+                        className={LINK}
+                      >
+                        {value}
+                      </Link>
+                    ) : (
+                      value
+                    )}
                     {label === SECURITY_RESPONSE_WORDS.when && utc ? (
                       <span className="sr-only"> ({utc})</span>
                     ) : null}
@@ -308,6 +325,14 @@ export function SecurityResponsePanel({
                 </React.Fragment>
               ))}
             </dl>
+            {several ? (
+              <p
+                data-testid="security-response-several-organizations"
+                className="text-muted-foreground mt-2 text-[12px] leading-relaxed"
+              >
+                {SECURITY_RESPONSE_WORDS.severalOrganizations(request.organizations ?? 0)}
+              </p>
+            ) : null}
           </div>
         ) : null}
 

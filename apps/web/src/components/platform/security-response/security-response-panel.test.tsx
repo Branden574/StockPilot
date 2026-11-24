@@ -80,6 +80,11 @@ function Panel({
 }
 
 const dialog = () => screen.getByRole('dialog');
+/** The link on the organization's name under "Opened from", or null. */
+const organizationLink = (): HTMLAnchorElement | null => {
+  const dt = [...dialog().querySelectorAll('dt')].find((d) => d.textContent === 'Organization');
+  return dt?.nextElementSibling?.querySelector('a') ?? null;
+};
 const partOrder = () =>
   [...dialog().querySelectorAll('section[data-part]')].map((s) => s.getAttribute('data-part'));
 
@@ -208,6 +213,59 @@ describe('the card in the panel', () => {
     expect(dialog().textContent).toContain('/platform/orgs/<organization id>?tab=users');
     expect(filledRoute('/platform/orgs/<organization id>', 'not-a-uuid')).toBeNull();
     expect(filledRoute('/platform/security', null)).toBe('/platform/security');
+  });
+
+  it('the organization under "Opened from" is a link to its console page when the entry names one, never prefetched', () => {
+    render(<Panel />);
+    const link = organizationLink()!;
+    expect(link).not.toBeNull();
+    expect(link).toHaveAttribute('href', `/platform/orgs/${ORG}`);
+    expect(link).toHaveAttribute('data-prefetch', 'false');
+    expect(link.textContent).toBe('Example Academy');
+    expect(link.closest('dd')?.previousElementSibling?.textContent).toBe('Organization');
+    expect(screen.queryByTestId('security-response-several-organizations')).toBeNull();
+  });
+
+  it('an entry recorded in several organizations: no link, the routes as text, and the panel says how many, not which', () => {
+    render(
+      <Panel
+        req={request({
+          context: { ...request().context, organization: '3 organizations' },
+          organizationId: null,
+          organizations: 3,
+        })}
+      />,
+    );
+    expect(organizationLink()).toBeNull();
+    expect(screen.getByTestId('security-response-several-organizations').textContent).toBe(
+      SECURITY_RESPONSE_WORDS.severalOrganizations(3),
+    );
+    const hrefs = within(dialog())
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs.some((h) => h?.includes('/platform/orgs/'))).toBe(false);
+    expect(dialog().textContent).toContain('/platform/orgs/<organization id>?tab=users');
+  });
+
+  it('an entry with no organization renders no broken link: no link to an organization, and no note', () => {
+    for (const organizationId of [null, 'not-a-uuid', '']) {
+      const { unmount } = render(
+        <Panel
+          req={request({
+            context: { ...request().context, organization: 'No organization' },
+            organizationId,
+            organizations: 0,
+          })}
+        />,
+      );
+      expect(organizationLink(), String(organizationId)).toBeNull();
+      expect(screen.queryByTestId('security-response-several-organizations')).toBeNull();
+      for (const a of within(dialog()).getAllByRole('link')) {
+        const href = a.getAttribute('href') ?? '';
+        expect(href, href).not.toMatch(/\/platform\/orgs\/|null|undefined|organization id|%3C/);
+      }
+      unmount();
+    }
   });
 
   it("a shared step is shown in its own words, once, with the card's lead-in", () => {

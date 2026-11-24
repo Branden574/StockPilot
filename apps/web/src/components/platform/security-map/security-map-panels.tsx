@@ -24,6 +24,7 @@ import {
   type SecurityMapCounter,
   type SecurityMapFeedRow,
   type SecurityMapFlaggedRow,
+  type SecurityMapFlaggedWords,
   type SecurityMapLegendItem,
   type SecurityMapPillKind,
   type SecurityMapWholeRead,
@@ -673,6 +674,7 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
                 organization: w.organizationName ?? w.organizationId ?? w.organizationWords,
               },
               organizationId: w.organizationId,
+              organizations: w.organizations,
             }}
           />
         </div>
@@ -691,6 +693,18 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
       </dl>
     </li>
   );
+}
+
+/** A flagged entry's organization in words: its name (its id when the name did not come), else "3 organizations" or "No organization". */
+function flaggedOrganizationWords(w: SecurityMapFlaggedWords): string {
+  return w.organizationName ?? w.organizationId ?? w.organizationWords ?? 'No organization';
+}
+
+/** The same on the entry's own line, where no label says what it is: "In 3 organizations". */
+function flaggedOrganizationLine(w: SecurityMapFlaggedWords): string {
+  return w.organizationId === null && w.organizations > 1
+    ? `In ${flaggedOrganizationWords(w)}`
+    : flaggedOrganizationWords(w);
 }
 
 /** The flagged rows with the Act now ones first, each group in its own order. */
@@ -914,6 +928,15 @@ export function SecurityMapFlaggedList({
                       <ZonedTime at={w.at} shown={w.time} /> · {w.count}
                     </span>
                   )}
+                  {/* Its organization, as the feed says it (review M1 reversed by the owner,
+                      2026-11-24): the name, "3 organizations", or "No organization". */}
+                  <span
+                    data-flagged-organization=""
+                    className={`${quiet ?? ''} min-w-0 text-[12px] [overflow-wrap:anywhere]`}
+                    style={quietStyle}
+                  >
+                    {flaggedOrganizationLine(w)}
+                  </span>
                   {cardId !== null ? (
                     <span className="mt-1.5 flex">
                       <SecurityResponseButton
@@ -928,9 +951,10 @@ export function SecurityMapFlaggedList({
                             place: placeOf(w),
                             time: w.time,
                             timeUtc: exactUtcOf(w.at),
-                            organization: null,
+                            organization: flaggedOrganizationWords(w),
                           },
-                          organizationId: null,
+                          organizationId: w.organizationId,
+                          organizations: w.organizations,
                         }}
                       />
                     </span>

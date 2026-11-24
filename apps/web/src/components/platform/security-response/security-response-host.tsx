@@ -37,8 +37,16 @@ export interface SecurityResponseRequest {
   /** What the entry was, in its own words: the control's name ends with it. */
   what: string;
   context: SecurityResponseContext;
-  /** The entry's organization, to fill a route's `<organization id>`; never shown. */
+  /**
+   * The entry's organization, when it names exactly one: the link on its name
+   * under "Opened from", and a route's `<organization id>` filled in.
+   */
   organizationId: string | null;
+  /**
+   * How many organizations the entry was recorded in, when the list knows
+   * (the attack map's feeds). More than one: no id, and the panel says so.
+   */
+  organizations?: number;
 }
 
 export interface SecurityResponsePanelProps {

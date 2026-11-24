@@ -679,11 +679,16 @@ export type SecurityMapFeedRow = readonly [
 
 /**
  * One entry of the flagged list as it travels: what the list draws and
- * nothing else. Always flagged, so no outcome; no source and no
- * organization, which the list never shows. The category is its place in
- * SECURITY_EVENT_CATEGORIES when the map shows that kind (its mark's colour),
- * and null for a kind the map does not show (a neutral mark): such a kind's
- * name never leaves the server.
+ * nothing else. Always flagged, so no outcome; no source, which the list never
+ * shows. The category is its place in SECURITY_EVENT_CATEGORIES when the map
+ * shows that kind (its mark's colour), and null for a kind the map does not
+ * show (a neutral mark): such a kind's name never leaves the server.
+ *
+ * The organization travels as on the plain feed (its id for the links, its
+ * name, and how many organizations a sign-in recorded in several names): the
+ * owner reversed review M1 for his console in his own words, 2026-11-24, "its
+ * fine showing org names so I know", because an Act now card asks him to act
+ * in that organization.
  */
 export type SecurityMapFlaggedRow = readonly [
   key: string,
@@ -694,6 +699,9 @@ export type SecurityMapFlaggedRow = readonly [
   reason: string,
   country: string | null,
   city: string | null,
+  organizationId: string | null,
+  organizationName: string | null,
+  organizations: number,
 ];
 
 /**
@@ -935,6 +943,9 @@ export function securityMapViewOf(
       e.reason,
       e.country,
       e.city,
+      e.organization_id,
+      e.organization_name,
+      e.organizations,
     ]);
   // What the last ten minutes hold that the live play cannot draw. Every read
   // looks at its feeds' entries of those minutes; a poll's numbers are of
@@ -1071,6 +1082,12 @@ const isKeptHead = (key: unknown, minute: unknown, events: unknown, atLeast: unk
   isCount(events) &&
   typeof atLeast === 'boolean';
 
+/** An entry's organization: an id or none, a short name or none, and how many organizations it names. */
+const isOrganization = (id: unknown, name: unknown, orgs: unknown): boolean =>
+  (id === null || isUuid(id)) &&
+  (name === null || textWithin(name, SECURITY_MAP_ORGANIZATION_NAME_MAX)) &&
+  isCount(orgs);
+
 const isPlace = (country: unknown, city: unknown): boolean =>
   (country === null || isCountry(country)) &&
   (city === null || textWithin(city, SECURITY_MAP_CITY_MAX));
@@ -1099,21 +1116,21 @@ function isFeedRow(v: unknown, shownIndexes: readonly number[]): v is SecurityMa
     isReason(reason) &&
     includes(SECURITY_EVENT_SOURCES, source) &&
     isPlace(country, city) &&
-    (id === null || isUuid(id)) &&
-    (name === null || textWithin(name, SECURITY_MAP_ORGANIZATION_NAME_MAX)) &&
-    isCount(orgs)
+    isOrganization(id, name, orgs)
   );
 }
 
-/** A flagged list's row: eight parts, a shown kind's place or null, and nothing else. */
+/** A flagged list's row: eleven parts, a shown kind's place or null, the organization as the feed has it, and nothing else. */
 function isFlaggedRow(v: unknown, shownIndexes: readonly number[]): v is SecurityMapFlaggedRow {
-  if (!Array.isArray(v) || v.length !== 8) return false;
-  const [key, minute, events, atLeast, category, reason, country, city] = v as unknown[];
+  if (!Array.isArray(v) || v.length !== 11) return false;
+  const [key, minute, events, atLeast, category, reason, country, city, id, name, orgs] =
+    v as unknown[];
   return (
     isKeptHead(key, minute, events, atLeast) &&
     (category === null || shownIndexes.includes(category as number)) &&
     isReason(reason) &&
-    isPlace(country, city)
+    isPlace(country, city) &&
+    isOrganization(id, name, orgs)
   );
 }
 
@@ -2330,6 +2347,8 @@ export interface SecurityMapFeedWords {
   count: string;
   organizationId: string | null;
   organizationName: string | null;
+  /** How many organizations the entry's events were recorded in (more than one: no id). */
+  organizations: number;
   /** "No organization", "3 organizations", or null when one organization is named. */
   organizationWords: string | null;
 }
@@ -2386,13 +2405,15 @@ export function securityMapFeedWords(
     count: securityMapCountWords(events, atLeast),
     organizationId: id,
     organizationName: name,
-    organizationWords:
-      id !== null
-        ? null
-        : organizations > 1
-          ? `${num(organizations)} organizations`
-          : 'No organization',
+    organizations,
+    organizationWords: organizationWordsOf(id, organizations),
   };
+}
+
+/** An entry with no organization id in words: "3 organizations" (one sign-in in several), else "No organization". */
+function organizationWordsOf(id: string | null, organizations: number): string | null {
+  if (id !== null) return null;
+  return organizations > 1 ? `${num(organizations)} organizations` : 'No organization';
 }
 
 export interface SecurityMapFlaggedWords {
@@ -2412,16 +2433,23 @@ export interface SecurityMapFlaggedWords {
   flood: boolean;
   /** "at least 2" or "11". */
   count: string;
+  /** The organization's id, when the entry names one organization: its links. */
+  organizationId: string | null;
+  organizationName: string | null;
+  /** How many organizations the entry's sign-in was recorded in (more than one: no id). */
+  organizations: number;
+  /** "3 organizations" or "No organization", when there is no id to show; else null. */
+  organizationWords: string | null;
 }
 
-/** One flagged entry's facts, ready to show: time, place, count, and its plain name. Nothing else. */
+/** One flagged entry's facts, ready to show: time, place, count, its plain name, and its organization. */
 export function securityMapFlaggedWords(
   row: SecurityMapFlaggedRow,
   /** The viewer's zone; anything else (an index from .map) is UTC. */
   timeZone?: unknown,
 ): SecurityMapFlaggedWords {
   const zone = usableTimeZone(timeZone) ?? 'UTC';
-  const [key, minute, events, atLeast, c, reason, country, city] = row;
+  const [key, minute, events, atLeast, c, reason, country, city, id, name, organizations] = row;
   const flood = isSecurityMapFloodReason(reason);
   return {
     key,
@@ -2436,6 +2464,10 @@ export function securityMapFlaggedWords(
     city: flood ? null : city,
     flood,
     count: securityMapCountWords(events, atLeast),
+    organizationId: id,
+    organizationName: name,
+    organizations,
+    organizationWords: organizationWordsOf(id, organizations),
   };
 }
 

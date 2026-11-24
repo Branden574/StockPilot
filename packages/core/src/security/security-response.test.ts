@@ -57,7 +57,10 @@ const ALL_TEXT = [
     ...(s.place ? [s.place.way] : []),
   ]),
   ...Object.values(SECURITY_RESPONSE_LEVEL_WORDS),
-  ...Object.values(SECURITY_RESPONSE_WORDS).map((w) => (typeof w === 'function' ? w('x') : w)),
+  // A word made from a value is read with a placeholder in the value's place, so only its own words are checked.
+  ...Object.values(SECURITY_RESPONSE_WORDS).map((w) =>
+    typeof w === 'function' ? (w as unknown as (x: string) => string)('x') : w,
+  ),
 ];
 
 const RECORD_REASONS = Object.keys(SECURITY_EVENT_REASON_LABELS).sort();

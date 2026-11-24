@@ -196,6 +196,9 @@ export const SECURITY_RESPONSE_WORDS = {
   where: 'Where',
   when: 'When',
   organization: 'Organization',
+  /** Under "Opened from", for an entry recorded in several organizations (the record gives a count, not names). */
+  severalOrganizations: (n: number): string =>
+    `Recorded in ${n} organizations. The record says how many, not which, so the steps show the page to open, not a link.`,
   whatThisIs: 'What this is',
   alreadyDid: 'What StockPilot already did',
   doNow: 'What to do now',

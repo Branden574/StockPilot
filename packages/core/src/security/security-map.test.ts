@@ -1042,7 +1042,7 @@ describe('securityMapViewOf: what leaves the server', () => {
       expect(v.flaggedFeed.length).toBeGreaterThan(0);
       for (const row of v.live) expect(row).toHaveLength(4);
       for (const row of v.feed) expect(row).toHaveLength(13);
-      for (const row of v.flaggedFeed) expect(row).toHaveLength(8);
+      for (const row of v.flaggedFeed) expect(row).toHaveLength(11);
       // No object anywhere but the view and its whole part: nothing can ride along inside a row.
       const objects: string[] = [];
       const walk = (value: unknown, at: string): void => {
@@ -1070,7 +1070,7 @@ describe('securityMapViewOf: what leaves the server', () => {
     }
   });
 
-  it('the flagged feed: every kind, the hidden ones too, flagged only, each with its own "at least", and only what the list draws', () => {
+  it('the flagged feed: every kind, the hidden ones too, flagged only, each with its own "at least", its organization as the feed has it, and only what the list draws', () => {
     const [pt, gb] = busy().flagged_feed!;
     expect(view.flaggedFeed).toEqual([
       [
@@ -1082,6 +1082,10 @@ describe('securityMapViewOf: what leaves the server', () => {
         'sign_in_new_country',
         'PT',
         'Example Harbour',
+        // One sign-in recorded in three organizations: no id, no name, the count.
+        null,
+        null,
+        3,
       ],
       [
         securityMapEntryKey(gb!),
@@ -1092,13 +1096,18 @@ describe('securityMapViewOf: what leaves the server', () => {
         'sign_in_alerts_held',
         'GB',
         'Example Borough',
+        'a0478000-0000-4000-8000-000000000001',
+        'Example Academy',
+        1,
       ],
     ]);
-    // No organization and no source: the list draws neither, so neither leaves the server in it.
+    // The organization travels (review M1 reversed by the owner, 2026-11-24: "its fine showing
+    // org names so I know"); the source still does not, nor a hidden kind's name.
     const sent = JSON.stringify(view.flaggedFeed);
-    expect(sent).not.toContain('a0478000-0000-4000-8000-000000000001');
-    expect(sent).not.toContain('Example Academy');
+    expect(sent).toContain('a0478000-0000-4000-8000-000000000001');
+    expect(sent).toContain('Example Academy');
     expect(sent).not.toContain('"web"');
+    expect(sent).not.toMatch(/phishing/i);
     // The plain feed draws them: there they stay.
     expect(view.feed[1]?.slice(10)).toEqual([
       'a0478000-0000-4000-8000-000000000001',
@@ -1234,6 +1243,9 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       'sign_in_new_country',
       'PT',
       null,
+      'a0478000-0000-4000-8000-000000000001',
+      'Example Academy',
+      1,
     ];
     // In the flagged feed a hidden kind is read, with no category: the flagged sign-in alerts are listed.
     expect(readSecurityMapView({ ...view, flaggedFeed: [hiddenFlagged] })).not.toBeNull();
@@ -1244,7 +1256,10 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       ],
       ['a kind that is not one', [...hiddenFlagged.slice(0, 4), 9, ...hiddenFlagged.slice(5)]],
       ['a source beside it', [...hiddenFlagged, 'web']],
-      ['an organization beside it', [...hiddenFlagged, 'a0478000-0000-4000-8000-000000000001']],
+      ['no organization parts', hiddenFlagged.slice(0, 8)],
+      ['an organization id that is no id', [...hiddenFlagged.slice(0, 8), 'x', null, 1]],
+      ['an organization name too long', [...hiddenFlagged.slice(0, 9), 'x'.repeat(201), 1]],
+      ['an organization count that is no count', [...hiddenFlagged.slice(0, 10), -1]],
       ['an outcome in it', [...hiddenFlagged.slice(0, 4), 1, ...hiddenFlagged.slice(4)]],
       ['a key that is not a key', ['<b>', ...hiddenFlagged.slice(1)]],
       ['a key too long to be one', ['a'.repeat(12), ...hiddenFlagged.slice(1)]],
@@ -2362,7 +2377,7 @@ describe('the words', () => {
     );
   });
 
-  it('a flagged entry: time, place, count and its plain name, and nothing else', () => {
+  it('a flagged entry: time, place, count, its plain name and its organization, and nothing else', () => {
     const view = whole(busy());
     const [pt, gb] = view.flaggedFeed.map(securityMapFlaggedWords);
     expect(pt).toEqual({
@@ -2375,11 +2390,19 @@ describe('the words', () => {
       city: 'Example Harbour',
       flood: false,
       count: 'at least 1',
+      organizationId: null,
+      organizationName: null,
+      organizations: 3,
+      organizationWords: '3 organizations',
     });
     expect(gb).toMatchObject({
       category: 'password_guessing',
       what: 'Sign-in alerts held after too many in one day',
       count: 'at least 4',
+      organizationId: 'a0478000-0000-4000-8000-000000000001',
+      organizationName: 'Example Academy',
+      organizations: 1,
+      organizationWords: null,
     });
     const flood = securityMapFlaggedWords([
       'k1',
@@ -2390,7 +2413,11 @@ describe('the words', () => {
       'over_minute_cap',
       'US',
       'Example Falls',
+      null,
+      null,
+      0,
     ]);
+    expect(flood.organizationWords).toBe('No organization');
     expect(flood).toMatchObject({ flood: true, country: null, city: null, count: '7' });
     expect(
       securityMapFlaggedWords([
@@ -2402,6 +2429,9 @@ describe('the words', () => {
         'sign_in_from_the_moon',
         null,
         null,
+        null,
+        null,
+        0,
       ]).what,
     ).toBe(SECURITY_MAP_FLAGGED_UNKNOWN_REASON);
   });

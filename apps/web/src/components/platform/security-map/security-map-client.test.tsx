@@ -9,6 +9,7 @@ import {
   SECURITY_MAP_READ_LIMIT_MS,
   SECURITY_MAP_REPLAY_STEP_MS,
   SECURITY_MAP_WORDS,
+  SECURITY_RESPONSE_WORDS,
   securityEventCategoryLabel,
   securityEventSourceLabel,
   securityMapViewOf,
@@ -813,7 +814,7 @@ describe('the flagged list beside the map', () => {
   const list = () => screen.getByTestId('security-map-flagged');
   const entries = () => [...list().querySelectorAll('[data-flagged-entry]')];
 
-  it('lists the newest flagged entries with the hollow mark, what, city and country, time and count; nothing else', () => {
+  it('lists the newest flagged entries with the hollow mark, what, city and country, time, count and organization; nothing else', () => {
     mount(async () => new Promise(() => {}));
     expect(within(list()).getByText(SECURITY_MAP_WORDS.flaggedFeedTitle)).toBeInTheDocument();
     // Every kind is listed: the password-guessing entry, then the flagged sign-in alert.
@@ -827,8 +828,10 @@ describe('the flagged list beside the map', () => {
     const mark = entry.querySelector('svg path')!;
     expect(mark.getAttribute('fill')).toBe('none');
     expect(mark.getAttribute('stroke')).toBe(CATEGORY_LOOKS.password_guessing.hex);
-    // Where is city and country only: no organization, no source, no link.
-    expect(list().textContent).not.toContain('Example Hidden Academy');
+    // Its organization, as the feed says it (review M1 reversed by the owner, 2026-11-24); no source.
+    const organizations = () =>
+      entries().map((li) => li.querySelector('[data-flagged-organization]')?.textContent);
+    expect(organizations()).toEqual(['Example Hidden Academy', 'No organization']);
     expect(list().textContent).not.toContain(securityEventSourceLabel('api'));
     // No link; the only control on an entry is its "How to respond".
     expect(list().querySelector('a')).toBeNull();
@@ -1704,6 +1707,11 @@ const contextOf = (panel: HTMLElement) =>
     (dt) => [dt.textContent, dt.nextElementSibling?.textContent],
   );
 const respond = (what: string) => screen.getByRole('button', { name: `How to respond: ${what}` });
+/** The link on the organization's name under "Opened from", or null. */
+const organizationLinkOf = (panel: HTMLElement): HTMLAnchorElement | null => {
+  const dt = [...panel.querySelectorAll('dt')].find((d) => d.textContent === 'Organization');
+  return dt?.nextElementSibling?.querySelector('a') ?? null;
+};
 
 describe('how to respond, from the map', () => {
   it("a plain feed entry: its control beside it, with the card's level; the panel shows the entry's own kind, place, time and organization, as plain text", async () => {
@@ -1727,7 +1735,7 @@ describe('how to respond, from the map', () => {
     expect(panel.querySelector('img')).toBeNull();
   });
 
-  it('a flagged entry of a shown kind: its kind, place and time, and no organization (the list shows none)', async () => {
+  it('a flagged entry of a shown kind: its kind, place, time and organization, the name a link to its console page', async () => {
     mount(async () => wholeRead());
     const what = 'Sign-in alerts held after too many in one day';
     const control = respond(what).closest('[data-slot="security-response-control"]') as HTMLElement;
@@ -1738,8 +1746,83 @@ describe('how to respond, from the map', () => {
       ['Kind', 'Password guessing'],
       ['Where', 'Example Borough, United Kingdom'],
       ['When', '9:44 PM UTC'],
+      ['Organization', 'Example Hidden Academy'],
     ]);
-    expect(panel.textContent).not.toContain('Example Hidden Academy');
+    expect(organizationLinkOf(panel)).toHaveAttribute('href', `/platform/orgs/${ORG}`);
+  });
+
+  it("an Act now entry of one organization: its steps' console pages are real links with that organization filled in", async () => {
+    const passkey = (over: Record<string, unknown>) => ({
+      ...answer().flagged_feed[0]!,
+      reason: 'passkey_unexplained_sign_in',
+      ...over,
+    });
+    mount(
+      async () => new Promise(() => {}),
+      wholeRead(
+        answer({
+          flagged_feed: [
+            passkey({ minute: '2026-11-23T21:44:00+00:00' }),
+            passkey({
+              minute: '2026-11-23T21:43:00+00:00',
+              organization_id: null,
+              organization_name: null,
+              organizations: 3,
+            }),
+            passkey({
+              minute: '2026-11-23T21:42:00+00:00',
+              organization_id: null,
+              organization_name: null,
+              organizations: 0,
+            }),
+          ],
+        }),
+      ),
+    );
+    const buttons = screen.getAllByRole('button', {
+      name: 'How to respond: Passkey step passed without a passkey (found by the hourly check)',
+    });
+    expect(buttons).toHaveLength(3);
+    const flaggedEntries = [
+      ...screen.getByTestId('security-map-flagged').querySelectorAll('[data-flagged-entry]'),
+    ];
+    expect(
+      flaggedEntries.map((li) => li.querySelector('[data-flagged-organization]')?.textContent),
+    ).toEqual(['Example Hidden Academy', 'In 3 organizations', 'No organization']);
+    const orgHrefs = (panel: HTMLElement) =>
+      within(panel)
+        .queryAllByRole('link')
+        .map((a) => a.getAttribute('href') ?? '')
+        .filter((h) => h.includes('/platform/orgs/'));
+    // One organization: every console page that needs it is a link with its id.
+    let panel = await openCard(buttons[0]!);
+    expect(panel).toHaveAttribute('data-card', 'passkey-unexplained-sign-in');
+    expect(orgHrefs(panel)).toContain(`/platform/orgs/${ORG}?tab=users`);
+    for (const href of orgHrefs(panel)) expect(href).toMatch(new RegExp(`^/platform/orgs/${ORG}`));
+    expect(panel.textContent).not.toContain('<organization id>');
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    // Several: no link to any organization, the routes as text, and the panel says how many.
+    panel = await openCard(buttons[1]!);
+    expect(contextOf(panel)).toContainEqual(['Organization', '3 organizations']);
+    expect(orgHrefs(panel)).toEqual([]);
+    expect(organizationLinkOf(panel)).toBeNull();
+    expect(panel.textContent).toContain('/platform/orgs/<organization id>?tab=users');
+    expect(within(panel).getByTestId('security-response-several-organizations').textContent).toBe(
+      SECURITY_RESPONSE_WORDS.severalOrganizations(3),
+    );
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    // None: "No organization", and no broken link anywhere.
+    panel = await openCard(buttons[2]!);
+    expect(contextOf(panel)).toContainEqual(['Organization', 'No organization']);
+    expect(organizationLinkOf(panel)).toBeNull();
+    expect(within(panel).queryByTestId('security-response-several-organizations')).toBeNull();
+    for (const a of within(panel).queryAllByRole('link')) {
+      expect(a.getAttribute('href')).not.toMatch(
+        /\/platform\/orgs\/|null|undefined|organization id|%3C/,
+      );
+    }
   });
 
   it('a flagged sign-in alert of a kind the map does not show: its card, and its kind never named, on the control or in the panel', async () => {
@@ -1752,7 +1835,9 @@ describe('how to respond, from the map', () => {
     expect(contextOf(panel)).toEqual([
       ['Where', 'Example Falls, United States'],
       ['When', '9:40 PM UTC'],
+      ['Organization', 'No organization'],
     ]);
+    expect(organizationLinkOf(panel)).toBeNull();
     expect(panel.textContent).not.toMatch(/phishing|malware/i);
   });
 
