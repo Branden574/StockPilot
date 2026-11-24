@@ -45,13 +45,14 @@ vi.mock('next/link', async () => {
 });
 vi.mock('@/components/admin/audit-time', async () => {
   const React = await import('react');
-  return { AuditTime: ({ iso }: { iso: string }) => React.createElement('time', { dateTime: iso }, iso) };
+  return {
+    AuditTime: ({ iso }: { iso: string }) => React.createElement('time', { dateTime: iso }, iso),
+  };
 });
 vi.mock('@/server/services/context', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/server/services/context')>();
-  const { OrganizationRowUnavailableError: Unavailable } = await import(
-    '@/lib/auth/organization-row-unavailable'
-  );
+  const { OrganizationRowUnavailableError: Unavailable } =
+    await import('@/lib/auth/organization-row-unavailable');
   return {
     ServiceError: real.ServiceError,
     // The real gate error, and its real refusal for a policy that was not read.
@@ -163,12 +164,15 @@ beforeEach(() => {
 });
 
 describe('who may see it', () => {
-  it.each(['manager', 'staff', 'viewer'])('a %s is sent to Settings before anything is read', async (role) => {
-    h.role = role;
-    await expect(BlockedActivityPage()).rejects.toThrow('REDIRECT /dashboard/settings');
-    expect(h.constructed).not.toHaveBeenCalled();
-    expect(h.activity).not.toHaveBeenCalled();
-  });
+  it.each(['manager', 'staff', 'viewer'])(
+    'a %s is sent to Settings before anything is read',
+    async (role) => {
+      h.role = role;
+      await expect(BlockedActivityPage()).rejects.toThrow('REDIRECT /dashboard/settings');
+      expect(h.constructed).not.toHaveBeenCalled();
+      expect(h.activity).not.toHaveBeenCalled();
+    },
+  );
 
   describe('the authenticator gate is asked before the role, as the service asks it', () => {
     it.each(['manager', 'staff', 'admin', 'owner'])(
@@ -177,7 +181,9 @@ describe('who may see it', () => {
         h.role = role;
         h.mfaRequired = true;
         h.mfaSatisfied = false;
-        await expect(BlockedActivityPage()).rejects.toThrow(/^REDIRECT \/dashboard\/settings\/security\?enroll=1$/);
+        await expect(BlockedActivityPage()).rejects.toThrow(
+          /^REDIRECT \/dashboard\/settings\/security\?enroll=1$/,
+        );
         expect(h.constructed).not.toHaveBeenCalled();
         expect(h.activity).not.toHaveBeenCalled();
       },
@@ -263,15 +269,44 @@ describe('what an owner or admin sees', () => {
     expect(within(totals).getByText('1,234')).toBeTruthy();
     expect(within(totals).getByText('Exploit attempts')).toBeTruthy();
     expect(within(totals).queryByText('Automated traffic')).toBeNull();
+    expect(within(totals).queryByText('Sign-in alert')).toBeNull();
     expect(within(totals).queryByText('Phishing')).toBeNull();
 
     const rows = screen.getAllByRole('row').slice(1);
-    const cells = rows.map((r) => within(r).getAllByRole('cell').map((c) => c.textContent));
+    const cells = rows.map((r) =>
+      within(r)
+        .getAllByRole('cell')
+        .map((c) => c.textContent),
+    );
     expect(cells).toEqual([
-      ['2026-11-20T10:15:42Z', 'Wrong password at sign-inPassword guessing · Blocked', 'Utrecht, NL', 'Website', '3'],
-      ['2026-11-20T10:14:10Z', 'Wrong authenticator codePassword guessing · Blocked', 'Unknown place', 'Mobile app', '1'],
-      ['2026-11-20T10:13:59Z', 'More events than could be listedPassword guessing · Blocked', '—', 'Website', '4,100'],
-      ['2026-11-20T10:12:01Z', 'Other blocked activityPassword guessing · Blocked', 'CA', 'API', '2'],
+      [
+        '2026-11-20T10:15:42Z',
+        'Wrong password at sign-inPassword guessing · Blocked',
+        'Utrecht, NL',
+        'Website',
+        '3',
+      ],
+      [
+        '2026-11-20T10:14:10Z',
+        'Wrong authenticator codePassword guessing · Blocked',
+        'Unknown place',
+        'Mobile app',
+        '1',
+      ],
+      [
+        '2026-11-20T10:13:59Z',
+        'More events than could be listedPassword guessing · Blocked',
+        '—',
+        'Website',
+        '4,100',
+      ],
+      [
+        '2026-11-20T10:12:01Z',
+        'Other blocked activityPassword guessing · Blocked',
+        'CA',
+        'API',
+        '2',
+      ],
     ]);
   });
 

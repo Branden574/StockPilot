@@ -2585,6 +2585,8 @@ export const SECURITY_MAP_WORDS = {
   recounting:
     'New events arrived, so the totals and the table are being counted again. The numbers above are as of the time below until then.',
   tableRecounting: 'Being counted again: new events arrived.',
+  /** Under the counters while the totals are counted again (lab walk 3, F2); the line under the stage stays. */
+  countersRecounting: 'Counting again: the totals will include the newest entries in a moment.',
   cutLive:
     'More happened in the last 10 minutes than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
   cutReplay:

@@ -27,11 +27,18 @@ export function SecurityResponseButton({
   request,
   tone = 'page',
   showLevel = true,
+  oneLine = false,
 }: {
   request: SecurityResponseRequest;
   tone?: 'page' | 'stage';
   /** The badge beside the control: on every entry; not on a kind of the legend. */
   showLevel?: boolean;
+  /**
+   * The badge and the control on one line, never wrapped (a table's rows, so
+   * every row is the same height whatever its badge says; lab walk 3, F4).
+   * Otherwise the control goes under the badge when the room is short.
+   */
+  oneLine?: boolean;
 }) {
   const host = useSecurityResponseHost();
   if (!host) return null;
@@ -43,7 +50,11 @@ export function SecurityResponseButton({
     <span
       data-slot="security-response-control"
       data-level={level}
-      className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
+      className={
+        oneLine
+          ? 'inline-flex flex-nowrap items-center gap-x-2 whitespace-nowrap'
+          : 'inline-flex flex-wrap items-center gap-x-2 gap-y-1'
+      }
     >
       {showLevel ? <SecurityResponseLevelBadge level={level} tone={tone} /> : null}
       {tone === 'stage' ? (

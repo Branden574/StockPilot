@@ -341,6 +341,17 @@ export function SecurityMapClient({
           ) : null}
 
           <SecurityMapCounters counters={counters} noteAt={state.whole?.from ?? null} />
+          {/* Beside the counters too, when they are behind the feed (lab walk 3, F2):
+              the same condition as the line under the stage, which stays. Always
+              there and its height kept (two lines on a phone), so nothing moves
+              when it fills; polite. */}
+          <p
+            aria-live="polite"
+            data-testid="security-map-counters-recounting"
+            className="text-muted-foreground min-h-8 text-[12px] leading-4 sm:min-h-4"
+          >
+            {behind ? SECURITY_MAP_WORDS.countersRecounting : null}
+          </p>
 
           <div
             ref={stageRef}

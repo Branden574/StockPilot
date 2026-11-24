@@ -194,6 +194,12 @@ describe('security events: a value this build does not know still renders', () =
     expect(securityEventOutcomeLabel('blocked')).toBe('Blocked');
     expect(securityEventSourceLabel('api')).toBe('API');
   });
+
+  it('the category whose code is phishing is named "Sign-in alert", what it holds; the code stays (lab walk 3, F1)', () => {
+    expect(SECURITY_EVENT_CATEGORIES).toContain('phishing');
+    expect(securityEventCategoryLabel('phishing')).toBe('Sign-in alert');
+    expect(SECURITY_EVENT_CATEGORIES.map(securityEventCategoryLabel)).not.toContain('Phishing');
+  });
 });
 
 describe('security events: the place', () => {

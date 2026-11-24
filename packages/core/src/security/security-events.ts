@@ -73,7 +73,8 @@ const CATEGORY_LABELS: Readonly<Record<SecurityEventCategory, string>> = {
   password_guessing: 'Password guessing',
   exploit: 'Exploit attempts',
   bots: 'Automated traffic',
-  phishing: 'Phishing',
+  // The code stays `phishing`; the words are what it holds (see the sign-in alert reasons below).
+  phishing: 'Sign-in alert',
   malware: 'Malware',
 };
 
@@ -147,8 +148,11 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // new devices or countries in a day that further ones are turned away
   // unrecorded (flagged, not blocked: the sign-in itself still happened).
   sign_in_alerts_held: 'Sign-in alerts held after too many in one day',
-  // Phishing: what a sign-in alert flags (part 3). Not refusals: the sign-in
-  // happened, and the alert asks the member whether it was them.
+  // Category `phishing`: what a sign-in alert flags (part 3). Not refusals:
+  // the sign-in happened, and the alert asks the member whether it was them.
+  // The record's code is phishing, but what it holds today is a sign-in alert,
+  // one a person answered or one we flagged, so every page names the category
+  // "Sign-in alert", never "Phishing" (lab walk 3, F1, 2026-11-24).
   sign_in_new_country: 'Sign-in from a new country',
   sign_in_not_me: 'A member said a sign-in was not them',
   // Read from the sign-in service's own log (the phone app and direct

@@ -340,7 +340,8 @@ describe('the table', () => {
     expect(panel).toHaveAttribute('data-card', 'wrong-password');
     expect(facts(panel)).toEqual([
       ['Kind', 'Password guessing'],
-      ['Where', 'Example Falls, US'],
+      // The country's name, as a card opened from the map says it (lab walk 3, F5).
+      ['Where', 'Example Falls, United States'],
       ['When', '20 Nov 2026, 10:15 AM UTC'],
       ['Organization', 'Example School District'],
     ]);
@@ -357,6 +358,90 @@ describe('the table', () => {
       ['When', '20 Nov 2026, 10:15 AM UTC'],
       ['Organization', 'No organization'],
     ]);
+  });
+
+  it('a sign-in alert is named "Sign-in alert": no text on the page or in its card says Phishing or Malware (lab walk 3, F1)', async () => {
+    h.list.mockResolvedValueOnce([
+      row(),
+      row({
+        id: 'e4',
+        category: 'phishing',
+        outcome: 'flagged',
+        reason: 'sign_in_new_country',
+        organizationId: ORG,
+        organizationName: 'Example School District',
+        country: 'IT',
+        city: 'Example Piazza',
+        count: 1,
+      }),
+      row({
+        id: 'e5',
+        category: 'phishing',
+        outcome: 'flagged',
+        reason: 'sign_in_not_me',
+        organizationId: ORG,
+        organizationName: 'Example School District',
+        country: 'PT',
+        city: null,
+        count: 1,
+      }),
+    ]);
+    await renderPage();
+    expect(document.body.textContent).not.toMatch(/phishing|malware/i);
+    const table = screen.getByRole('region', { name: 'Security events' });
+    expect(within(table).getAllByText(/^Sign-in alert · Flagged$/)).toHaveLength(2);
+    const facts = (panel: HTMLElement) =>
+      [...within(panel).getByTestId('security-response-context').querySelectorAll('dt')].map(
+        (dt) => [dt.textContent, dt.nextElementSibling?.textContent],
+      );
+    for (const [what, where] of [
+      // The city, then the country's name, as the map's card says it (F5).
+      ['Sign-in from a new country', 'Example Piazza, Italy'],
+      // No city: the country's name alone, never its code.
+      ['A member said a sign-in was not them', 'Portugal'],
+    ] as const) {
+      fireEvent.click(screen.getByRole('button', { name: `How to respond: ${what}` }));
+      const panel = await screen.findByRole('dialog');
+      expect(panel.textContent, what).not.toMatch(/phishing|malware/i);
+      expect(facts(panel).slice(0, 2), what).toEqual([
+        ['Kind', 'Sign-in alert'],
+        ['Where', where],
+      ]);
+      expect(document.body.textContent, what).not.toMatch(/phishing|malware/i);
+      fireEvent.keyDown(panel, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    }
+  });
+
+  it('each row\'s badge and "How to respond" stay on one line, "Stopped: nothing to do" too, so the rows are of one height (lab walk 3, F4)', async () => {
+    h.list.mockResolvedValueOnce([
+      row(),
+      row({
+        id: 'e2',
+        category: 'password_guessing',
+        reason: 'over_minute_cap',
+        country: null,
+        city: null,
+      }),
+      row({ id: 'e3', category: 'phishing', outcome: 'flagged', reason: 'sign_in_not_me' }),
+    ]);
+    await renderPage();
+    const controls = [...document.querySelectorAll('[data-slot="security-response-control"]')];
+    expect(controls.map((c) => c.getAttribute('data-level'))).toEqual(
+      expect.arrayContaining(['stopped', 'look_today']),
+    );
+    expect(controls).toHaveLength(3);
+    for (const c of controls) {
+      const classes = c.className.split(/\s+/);
+      expect(classes, c.getAttribute('data-level')!).toEqual(
+        expect.arrayContaining(['flex-nowrap', 'whitespace-nowrap']),
+      );
+      expect(classes, c.getAttribute('data-level')!).not.toContain('flex-wrap');
+      // The badge never wraps inside itself.
+      expect(within(c as HTMLElement).getByTestId('security-response-level').className).toContain(
+        'whitespace-nowrap',
+      );
+    }
   });
 
   it('the times are in the zone the viewer chose, named, with the exact UTC in the title and for screen readers; the sections are handed it', async () => {

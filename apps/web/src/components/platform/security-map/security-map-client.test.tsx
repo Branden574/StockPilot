@@ -670,8 +670,8 @@ describe('what is never drawn or listed', () => {
       'bots',
     ]);
     const text = document.body.textContent ?? '';
-    expect(text).not.toContain(securityEventCategoryLabel('phishing'));
-    expect(text).not.toContain(securityEventCategoryLabel('malware'));
+    // Their names: the category labelled "Sign-in alert" since lab walk 3 (F1) is drawn as sign-in alerts.
+    expect(text).not.toMatch(/phishing|malware/i);
     expect(
       screen.getByText(
         'At least 2 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
@@ -1678,7 +1678,12 @@ describe('the feed', () => {
 
   it('is not a live region: an update is never announced; the stop words are the one status region on the page', () => {
     mount(async () => wholeRead());
-    expect(document.querySelector('[aria-live]')).toBeNull();
+    // The one other polite line: "Counting again" beside the counters (lab walk 3, F2), empty now.
+    const live = [...document.querySelectorAll('[aria-live]')];
+    expect(live.map((el) => el.getAttribute('data-testid'))).toEqual([
+      'security-map-counters-recounting',
+    ]);
+    expect(live[0]!.textContent).toBe('');
     expect(document.querySelectorAll('[role="status"], [role="alert"], [role="log"]')).toHaveLength(
       1,
     );
@@ -2115,6 +2120,29 @@ describe("new events past the totals (the coordinator's change, 2026-11-24)", ()
     expect(scopesOf(spy)).toEqual(['whole', 'recent', 'whole']);
     expect(screen.queryByTestId('security-map-recounting')).toBeNull();
     expect(screen.queryByText(/^Nothing was blocked or flagged/)).toBeNull();
+  });
+
+  it('beside the counters as well: a polite line, there from the start and empty, says they are being counted again until the whole read lands (lab walk 3, F2)', async () => {
+    const { poll } = streamPoll();
+    mount(poll);
+    await advance(0);
+    const line = screen.getByTestId('security-map-counters-recounting');
+    expect(line).toHaveAttribute('aria-live', 'polite');
+    expect(line.textContent).toBe('');
+    // Right under the counters, its height kept while empty: the stage does not move when it fills.
+    expect(line.previousElementSibling?.querySelector('[data-counter]')).not.toBeNull();
+    expect(line.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-h-8', 'sm:min-h-4']));
+    // A poll brings an entry newer than the totals: this line and the one under the stage say so.
+    await advance(30_000);
+    expect(screen.getByTestId('security-map-counters-recounting')).toBe(line);
+    expect(line.textContent).toBe(SECURITY_MAP_WORDS.countersRecounting);
+    expect(screen.getByTestId('security-map-recounting').textContent).toBe(
+      SECURITY_MAP_WORDS.recounting,
+    );
+    // The early whole read lands and counts it: empty again, and still there.
+    await advance(15_000);
+    expect(line.isConnected).toBe(true);
+    expect(line.textContent).toBe('');
   });
 });
 

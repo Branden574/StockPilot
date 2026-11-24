@@ -8,6 +8,7 @@ import { PlatformPage } from '@/components/platform/platform-page';
 import { PlatformPasskeysSection } from '@/components/platform/platform-passkeys-section';
 import { PlatformSecurityBriefingSection } from '@/components/platform/platform-security-briefing-section';
 import { PlatformTable } from '@/components/platform/platform-table';
+import { countryName } from '@/components/platform/security-map/map-model';
 import { SecurityResponseButton } from '@/components/platform/security-response/security-response-button';
 import { SecurityResponseHost } from '@/components/platform/security-response/security-response-host';
 import {
@@ -51,6 +52,19 @@ export const metadata: Metadata = { title: 'Security events · Platform' };
 
 /** Rows that count events past a cap: they have a count and no place. */
 const OVER_CAP = new Set(['over_minute_cap', 'over_buffer_cap']);
+
+/**
+ * A row's place on its card, as a card opened from the attack map says it:
+ * the city, then the country's name (the map's own countryName), "Example
+ * Piazza, Italy"; never the two-letter code alone (lab walk 3, F5). The table
+ * keeps its short form.
+ */
+function cardPlaceOf(country: string | null, city: string | null): string {
+  const short = securityEventPlaceLabel(country, city);
+  if (country === null || !/^[A-Z]{2}$/.test(country)) return short;
+  const town = city?.trim() ? city.trim() : null;
+  return town ? `${town}, ${countryName(country)}` : countryName(country);
+}
 
 /**
  * SECURITY EVENTS across the platform: the newest rows of every organization
@@ -205,9 +219,7 @@ async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | nul
           ) : (
             rows.map((r) => {
               const cardId = securityResponseCardIdFor(r.reason);
-              const place = OVER_CAP.has(r.reason)
-                ? null
-                : securityEventPlaceLabel(r.country, r.city);
+              const place = OVER_CAP.has(r.reason) ? null : cardPlaceOf(r.country, r.city);
               return (
                 <TableRow key={r.id}>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
@@ -251,6 +263,8 @@ async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | nul
                   <TableCell className="whitespace-nowrap">
                     {cardId !== null ? (
                       <SecurityResponseButton
+                        // One line on every row, "Stopped: nothing to do" too (lab walk 3, F4).
+                        oneLine
                         request={{
                           cardId,
                           what: securityEventReasonLabel(r.reason),
