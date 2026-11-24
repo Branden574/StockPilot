@@ -90,16 +90,16 @@ describe('security events: the lists the database checks', () => {
 
   it('names the plain words of the four upload refusals (part 6), each under malware', () => {
     expect(securityEventReasonLabel('upload_wrong_type')).toBe(
-      'Upload refused: not the kind of file it said it was',
+      'A file of the wrong kind was refused',
     );
     expect(securityEventReasonLabel('upload_active_content')).toBe(
-      'Upload refused: a script, a macro or a program inside the file',
+      'A file that could run something when opened was refused',
     );
     expect(securityEventReasonLabel('upload_hidden_file')).toBe(
-      'Upload refused: another file hidden inside the file',
+      'A file with another file hidden inside it was refused',
     );
     expect(securityEventReasonLabel('upload_could_not_check')).toBe(
-      'Upload refused: the file could not be checked',
+      'A file that could not be checked was refused',
     );
     expect(securityEventCategoryLabel('malware')).toBe('Malware');
     expect(securityConsoleCategoryLabel('malware')).toBe('Malware');

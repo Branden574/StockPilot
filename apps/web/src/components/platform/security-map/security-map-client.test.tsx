@@ -1791,7 +1791,7 @@ describe('how to respond, from the map', () => {
     expect(item.textContent).toContain('Malware');
     expect(item.textContent).toContain('3 blocked');
     // A file that could not be checked: its own card, Look today.
-    const notChecked = respond('Upload refused: the file could not be checked');
+    const notChecked = respond('A file that could not be checked was refused');
     const control = notChecked.closest('[data-slot="security-response-control"]') as HTMLElement;
     expect(within(control).getByTestId('security-response-level').textContent).toBe('Look today');
     let panel = await openCard(notChecked);
@@ -1800,7 +1800,7 @@ describe('how to respond, from the map', () => {
     fireEvent.keyDown(panel, { key: 'Escape' });
     await advance(0);
     // A file with another file hidden inside it: the refused-file card, Stopped.
-    const hidden = respond('Upload refused: another file hidden inside the file');
+    const hidden = respond('A file with another file hidden inside it was refused');
     expect(
       within(hidden.closest('[data-slot="security-response-control"]') as HTMLElement).getByTestId(
         'security-response-level',
