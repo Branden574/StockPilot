@@ -1805,6 +1805,8 @@ const PHOTO_NOT_DOWNLOADED =
   'The image could not be downloaded from that address. Attach the photo again.';
 const PHOTO_NOT_AN_IMAGE = 'That address did not return an image.';
 const PHOTO_TOO_LARGE = 'That image is too large to read. The limit is 6 MB.';
+const PHOTO_REFUSED =
+  'That image was refused by the upload checks. Attach a fresh copy of the photo in the chat instead.';
 
 /**
  * The address guard's two answers, told apart by type. A failed lookup of the
@@ -1976,14 +1978,18 @@ const identifyFromPhotoTool: ToolExecutor = {
     // first, as on the photo route: the kind is read from the bytes (never
     // the response's content-type), a file hidden after the picture is
     // refused, and a refusal is recorded as a security event in this
-    // organization. The model is handed the kind the bytes are.
+    // organization. The model reads the tool's own fixed words, and is
+    // handed the kind the bytes are.
     const checked = await checkUploadBytes(new Uint8Array(bytes), {
       surface: 'identify_photo',
       accept: ['png', 'jpeg', 'webp', 'avif', 'heic'],
       organizationId: ctx.organizationId,
       wrongTypeMessage: PHOTO_NOT_AN_IMAGE,
     });
-    if (!checked.ok) throw new ToolRefusal(checked.message);
+    if (!checked.ok) {
+      if (checked.family === 'wrong_type') throw new ToolRefusal(PHOTO_NOT_AN_IMAGE);
+      throw new ToolRefusal(PHOTO_REFUSED);
+    }
     mimeType = checked.mime;
 
     const base64 = Buffer.from(bytes).toString('base64');

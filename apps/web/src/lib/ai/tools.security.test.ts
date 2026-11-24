@@ -122,7 +122,6 @@ vi.mock('@/lib/ai/embeddings', () => ({
 vi.mock('@/lib/env', () => ({ env: envMock }));
 vi.mock('./provider', () => ({ resolveAiProvider: () => 'gemini' }));
 
-import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
 import { recordSecurityEvent } from '@/server/security/events';
 import { HTML_PAGE, PNG_WITH_ARCHIVE, TINY_JPEG, TINY_PNG } from '@/test/upload-fixtures';
@@ -709,7 +708,10 @@ describe('S30: identifyFromPhoto fails by type, with a fixed sentence', () => {
     // A picture with an archive after it.
     record.mockClear();
     imageDownloads(PNG_WITH_ARCHIVE, 'image/png');
-    expectRefusal(await identify(), THREAT_MESSAGES.appended_payload);
+    expectRefusal(
+      await identify(),
+      'That image was refused by the upload checks. Attach a fresh copy of the photo in the chat instead.',
+    );
     expect(record.mock.calls[0]![0]).toMatchObject({ reason: 'upload_hidden_file' });
     expect(generateContentMock).not.toHaveBeenCalled();
     // A PNG served as a JPEG reaches the model as a PNG.
