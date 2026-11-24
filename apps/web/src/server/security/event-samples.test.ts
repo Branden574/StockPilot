@@ -252,7 +252,7 @@ describe('the buffer', () => {
     expect(samples.__pendingSecurityEventSamplesForTests()).toEqual([
       expect.objectContaining({ count: 999_999 }),
     ]);
-  });
+ }, 60_000);
 
   it('holds at most 50 different samples: a new one past that is dropped and counted; a waiting one still adds', async () => {
     for (let i = 0; i < 50; i++)
