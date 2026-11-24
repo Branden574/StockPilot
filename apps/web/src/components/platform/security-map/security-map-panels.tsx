@@ -15,6 +15,7 @@ import {
   securityMapTableRows,
   type SecurityMapCounter,
   type SecurityMapFeedRow,
+  type SecurityMapFeedWords,
   type SecurityMapLegendItem,
   type SecurityMapWholeRead,
 } from '@stockpilot/core';
@@ -146,19 +147,20 @@ export function SecurityMapNotes({ lines }: { lines: readonly string[] }) {
   );
 }
 
+/** Where an entry came from: city and country, or why there is no place. Nothing else. */
+function placeOf(w: SecurityMapFeedWords): string {
+  if (w.flood) return SECURITY_MAP_WORDS.placeFlood;
+  if (w.country === null) return SECURITY_MAP_WORDS.placeUnknown;
+  return w.city ? `${w.city}, ${countryName(w.country)}` : countryName(w.country);
+}
+
 /** One entry of the feed: a button that opens its facts (a disclosure, never a live region). */
 function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
   const w = securityMapFeedWords(row);
   const [open, setOpen] = React.useState(false);
   const id = React.useId();
   const look = CATEGORY_LOOKS[w.category];
-  const place = w.flood
-    ? SECURITY_MAP_WORDS.placeFlood
-    : w.country === null
-      ? SECURITY_MAP_WORDS.placeUnknown
-      : w.city
-        ? `${w.city}, ${countryName(w.country)}`
-        : countryName(w.country);
+  const place = placeOf(w);
   const facts: Array<[string, React.ReactNode]> = [
     ['When', w.time],
     ['Kind', w.categoryLabel],
@@ -246,6 +248,61 @@ export function SecurityMapFeedList({
             <FeedEntry key={securityMapFeedWords(row).key} row={row} />
           ))}
         </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The newest flagged entries, beside the map, so a flood of blocked entries
+ * never hides them. Each with the mark a flagged arc starts from (hollow, in
+ * its category's colour), its time, what it was, where it came from (city
+ * and country only) and how many. No organization and no source here: those
+ * are in the feed's own entries under the map.
+ */
+export function SecurityMapFlaggedList({ rows }: { rows: readonly SecurityMapFeedRow[] }) {
+  const headingId = React.useId();
+  return (
+    <section
+      aria-labelledby={headingId}
+      data-testid="security-map-flagged"
+      className="border-border bg-card flex min-w-0 flex-col gap-2 rounded-lg border p-3"
+    >
+      <h3 id={headingId} className="text-foreground text-[13px] font-medium">
+        {SECURITY_MAP_WORDS.flaggedFeedTitle}
+      </h3>
+      <p className="text-muted-foreground text-[12px]">{SECURITY_MAP_WORDS.flaggedFeedNote}</p>
+      {rows.length === 0 ? (
+        <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_WORDS.flaggedFeedEmpty}</p>
+      ) : (
+        <ol className="max-h-[30rem] min-w-0 overflow-y-auto">
+          {rows.map((row) => {
+            const w = securityMapFeedWords(row);
+            const look = CATEGORY_LOOKS[w.category];
+            return (
+              <li
+                key={w.key}
+                data-flagged-entry=""
+                className="border-border flex min-w-0 gap-2 border-b py-2 text-[12.5px] last:border-b-0"
+              >
+                <span className="pt-0.5">
+                  <CategoryMark shape={look.shape} colour={look.hex} hollow />
+                </span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-foreground min-w-0 [overflow-wrap:anywhere]">
+                    {securityEventReasonLabel(w.reason)}
+                  </span>
+                  <span className="text-muted-foreground min-w-0 [overflow-wrap:anywhere]">
+                    {placeOf(w)}
+                  </span>
+                  <span className="text-muted-foreground font-mono text-[12px] tabular-nums">
+                    {w.time} · {w.count}
+                  </span>
+                </span>
+              </li>
+            );
+          })}
+        </ol>
       )}
     </section>
   );

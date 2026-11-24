@@ -11,10 +11,12 @@ import {
   securityMapCounters,
   securityMapEmptyWords,
   securityMapFeedOf,
+  securityMapFlaggedFeedOf,
   securityMapLegend,
   securityMapModeWords,
   securityMapNotes,
   securityMapRefusedWindowWords,
+  securityMapShortenedWords,
   securityMapStopReason,
   securityMapStopWords,
 } from '@stockpilot/core';
@@ -23,6 +25,7 @@ import {
   PANEL,
   drawnArcs,
   focusOf,
+  localDayStart,
   notOnMapWords,
   stageOf,
   viewShown,
@@ -35,6 +38,7 @@ import {
   SecurityMapCounters,
   SecurityMapCountryTable,
   SecurityMapFeedList,
+  SecurityMapFlaggedList,
   SecurityMapLegend,
   SecurityMapNotes,
 } from './security-map-panels';
@@ -142,9 +146,14 @@ export function SecurityMapClient({
   const shown = viewShown(choice, reducedMotion, globe);
   const startedAt = stage.timing === 'replay' ? step.startedAt : liveStartedAt;
 
-  const counters = securityMapCounters(state.whole, state.dayStartAsked);
+  // The viewer's day as of the newest read: once it has turned since the
+  // whole window was counted, the day's counter says so until the new day is read.
+  const dayStartNow = state.lastPollAt === null ? null : localDayStart(new Date(state.lastPollAt));
+  const counters = securityMapCounters(state.whole, state.dayStartAsked, { dayStartNow });
+  const shortened = securityMapShortenedWords(state.whole);
   const legend = securityMapLegend(state.whole);
   const feed = securityMapFeedOf(state.whole, state.recent);
+  const flagged = securityMapFlaggedFeedOf(state.whole, state.recent);
   const notes = state.whole ? securityMapNotes(state.whole) : [];
   const notOnMap = state.whole ? notOnMapWords(state.whole) : null;
   const empty = securityMapEmptyWords(state.whole);
@@ -158,6 +167,15 @@ export function SecurityMapClient({
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="security-map">
       <style>{FLAT_MAP_CSS}</style>
+
+      {shortened ? (
+        <p
+          data-testid="security-map-shortened"
+          className="border-border bg-muted text-foreground rounded-md border px-3 py-2 text-[13px] font-medium"
+        >
+          {shortened}
+        </p>
+      ) : null}
 
       <SecurityMapCounters counters={counters} />
 
@@ -192,55 +210,58 @@ export function SecurityMapClient({
         </div>
       </div>
 
-      <div
-        className="relative h-[clamp(300px,52vw,600px)] w-full overflow-hidden rounded-lg"
-        style={panelStyle}
-      >
-        <div className="absolute inset-0" aria-hidden="true">
-          {shown.view === 'globe' ? (
-            <SecurityMapGlobe
-              arcs={stage.drawn}
-              timing={stage.timing}
-              startedAt={startedAt}
-              focus={stage.focus}
-              mayTurn={stop === null}
-              hidden={hidden}
-              onUnavailable={onUnavailable}
-              onLost={onLost}
-            />
-          ) : (
-            <div className="flex h-full w-full items-center justify-center p-3">
-              <SecurityMapFlat
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div
+          className="relative h-[clamp(300px,52vw,600px)] w-full overflow-hidden rounded-lg"
+          style={panelStyle}
+        >
+          <div className="absolute inset-0" aria-hidden="true">
+            {shown.view === 'globe' ? (
+              <SecurityMapGlobe
                 arcs={stage.drawn}
                 timing={stage.timing}
-                stepKey={stage.timing === 'replay' ? step.index : 0}
+                startedAt={startedAt}
+                focus={stage.focus}
+                mayTurn={stop === null}
+                hidden={hidden}
+                onUnavailable={onUnavailable}
+                onLost={onLost}
               />
-            </div>
-          )}
-        </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-1 p-3 text-[12.5px] leading-snug sm:p-4">
-          {stopWords ? (
+            ) : (
+              <div className="flex h-full w-full items-center justify-center p-3">
+                <SecurityMapFlat
+                  arcs={stage.drawn}
+                  timing={stage.timing}
+                  stepKey={stage.timing === 'replay' ? step.index : 0}
+                />
+              </div>
+            )}
+          </div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-1 p-3 text-[12.5px] leading-snug sm:p-4">
+            {stopWords ? (
+              <p
+                data-testid="security-map-stop"
+                className="max-w-3xl font-medium"
+                style={{ color: PANEL.stockpilot, textShadow: OVER_PANEL }}
+              >
+                {stopWords}
+              </p>
+            ) : null}
             <p
-              data-testid="security-map-stop"
-              className="max-w-3xl font-medium"
-              style={{ color: PANEL.stockpilot, textShadow: OVER_PANEL }}
+              data-testid="security-map-mode"
+              className="max-w-3xl"
+              style={{ color: PANEL.text, textShadow: OVER_PANEL }}
             >
-              {stopWords}
+              {modeWords}
             </p>
-          ) : null}
-          <p
-            data-testid="security-map-mode"
-            className="max-w-3xl"
-            style={{ color: PANEL.text, textShadow: OVER_PANEL }}
-          >
-            {modeWords}
-          </p>
-          {shown.note ? (
-            <p className="max-w-3xl" style={{ color: PANEL.quiet, textShadow: OVER_PANEL }}>
-              {shown.note}
-            </p>
-          ) : null}
+            {shown.note ? (
+              <p className="max-w-3xl" style={{ color: PANEL.quiet, textShadow: OVER_PANEL }}>
+                {shown.note}
+              </p>
+            ) : null}
+          </div>
         </div>
+        <SecurityMapFlaggedList rows={flagged} />
       </div>
 
       {refused ? <p className="text-destructive text-[13px]">{refused}</p> : null}

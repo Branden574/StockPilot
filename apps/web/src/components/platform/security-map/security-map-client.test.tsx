@@ -9,6 +9,7 @@ import {
   SECURITY_MAP_REPLAY_STEP_MS,
   SECURITY_MAP_WORDS,
   securityEventCategoryLabel,
+  securityEventSourceLabel,
   securityMapViewOf,
   type SecurityMapAnswer,
 } from '@stockpilot/core';
@@ -27,10 +28,15 @@ import {
  * reads the page says "Not updating since" and nothing moves; a refused read
  * says "Sign in again" and nothing moves; the first read carries the
  * viewer's day start, then the last ten minutes every 30 seconds and the
- * whole window every 5 minutes, never while the tab is hidden; a read of the
- * last ten minutes never replaces the window's table; reduced motion shows
- * the flat map, still; a globe that cannot be drawn, or loses its context,
- * gives way to the flat map with one plain sentence. Made-up data only.
+ * whole window every 5 minutes, at the viewer's midnight and when the replay
+ * begins on an old read, never while the tab is hidden; a read of the last
+ * ten minutes never replaces the window's table; a shortened window says so
+ * and is never labelled as the whole one; a number the database calls a
+ * floor says "at least", and no other; the flagged list beside the map shows
+ * flagged entries only, with the hollow mark, city and country and nothing
+ * else of where; reduced motion shows the flat map, still; a globe that
+ * cannot be drawn, or loses its context, gives way to the flat map with one
+ * plain sentence. Made-up data only.
  */
 
 const h = vi.hoisted(() => ({
@@ -76,6 +82,7 @@ vi.mock('./security-map-globe', async () => {
   };
 });
 
+import { CATEGORY_LOOKS } from './map-model';
 import { SecurityMapClient } from './security-map-client';
 
 /* ───────────────────────────── made-up answers ───────────────────────────── */
@@ -99,7 +106,10 @@ function answer(over: Partial<SecurityMapAnswer> = {}): SecurityMapAnswer {
       from: '2026-11-22T22:00:00+00:00',
       to: '2026-11-23T22:00:00+00:00',
       live_from: '2026-11-23T21:50:00+00:00',
+      asked_from: '2026-11-22T22:00:00+00:00',
     },
+    window_shortened: false,
+    short_window: false,
     refused: null,
     generated_at: '2026-11-23T22:00:00+00:00',
     oldest_event_at: '2026-11-01T00:00:00+00:00',
@@ -113,7 +123,7 @@ function answer(over: Partial<SecurityMapAnswer> = {}): SecurityMapAnswer {
     by_country: [
       { country: 'SG', category: 'bots', outcome: 'blocked', events: 40 },
       { country: 'DE', category: 'exploit', outcome: 'blocked', events: 12 },
-      { country: 'XK', category: 'exploit', outcome: 'blocked', events: 5 },
+      { country: 'QZ', category: 'exploit', outcome: 'blocked', events: 5 },
       { country: 'BR', category: 'password_guessing', outcome: 'flagged', events: 3 },
       { country: 'US', category: 'phishing', outcome: 'flagged', events: 2 },
     ],
@@ -125,8 +135,34 @@ function answer(over: Partial<SecurityMapAnswer> = {}): SecurityMapAnswer {
     allowed_window: 0,
     day_start: null,
     blocked_since_day_start: null,
+    blocked_since_day_start_partial: false,
+    floors: ['flagged_window', 'totals.phishing.flagged'],
     feed: [
       feedEntry({ organization_id: ORG, organization_name: MARKUP_NAME }),
+      feedEntry({
+        minute: '2026-11-23T21:40:00+00:00',
+        category: 'phishing',
+        outcome: 'flagged',
+        reason: 'sign_in_new_country',
+        country: 'US',
+        city: 'Example Falls',
+      }),
+    ],
+    flagged_feed: [
+      feedEntry({
+        minute: '2026-11-23T21:44:00+00:00',
+        category: 'password_guessing',
+        outcome: 'flagged',
+        reason: 'sign_in_alerts_held',
+        source: 'api',
+        country: 'GB',
+        city: 'Example Borough',
+        events: 4,
+        at_least: true,
+        organization_id: ORG,
+        organization_name: 'Example Hidden Academy',
+        organizations: 1,
+      }),
       feedEntry({
         minute: '2026-11-23T21:40:00+00:00',
         category: 'phishing',
@@ -164,12 +200,21 @@ function feedEntry(over: Partial<SecurityMapAnswer['feed'][number]> = {}) {
     country: 'DE',
     city: 'Example Town',
     events: 12,
+    at_least: false,
     organization_id: null,
     organization_name: null,
     organizations: 0,
     ...over,
   };
 }
+
+/** A whole read that counts the day the poll asked for, as the database does. */
+const dayRead =
+  (over: Partial<SecurityMapAnswer> = {}) =>
+  (input: unknown) => {
+    const { dayStart } = input as { dayStart: string | null };
+    return wholeRead(answer({ day_start: dayStart, blocked_since_day_start: 9, ...over }));
+  };
 
 const wholeRead = (a: SecurityMapAnswer = answer()) => ({
   ok: true,
@@ -189,10 +234,15 @@ const liveAnswer = () =>
       from: '2026-11-23T21:50:30+00:00',
       to: '2026-11-23T22:00:30+00:00',
       live_from: '2026-11-23T21:50:30+00:00',
+      asked_from: '2026-11-23T21:50:30+00:00',
     },
+    short_window: true,
     timeline: [cell('2026-11-23T21:59:00+00:00', 60, 'CN', 'exploit', 'blocked', 4)],
     by_country: [],
+    flagged_feed: [],
   });
+/** A read of the last ten minutes with nothing in them: the play turns to the replay. */
+const quietAnswer = () => answer({ ...liveAnswer(), timeline: [], feed: [] });
 
 /* ─────────────────────────────── the browser ─────────────────────────────── */
 
@@ -240,6 +290,9 @@ function mount(poll: (input: unknown) => Promise<unknown>, initial: unknown = wh
 }
 
 const lastGlobe = () => h.globeProps[h.globeProps.length - 1]!;
+const today = () =>
+  screen.getByText('Blocked since midnight, your time').parentElement!.querySelector('dd')!
+    .textContent;
 const chooseFlat = () =>
   fireEvent.click(screen.getByRole('button', { name: SECURITY_MAP_WORDS.flat }));
 
@@ -248,9 +301,7 @@ const chooseFlat = () =>
 describe('the reads', () => {
   it("the first read is the whole window with the viewer's day start, at once; then the last ten minutes every 30 seconds; the whole window every 5 minutes", async () => {
     const { spy } = mount(async (input) =>
-      (input as { scope: string }).scope === 'whole'
-        ? wholeRead(answer({ day_start: '2026-11-23T08:00:00+00:00', blocked_since_day_start: 9 }))
-        : recentRead(liveAnswer()),
+      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
     );
     await advance(0);
     expect(spy).toHaveBeenCalledTimes(1);
@@ -278,23 +329,103 @@ describe('the reads', () => {
 
   it("the day's counter: 'Not counted yet' until the read with the day start lands, then its number", async () => {
     let release: (v: unknown) => void = () => {};
-    mount(
+    const { spy } = mount(
       () =>
         new Promise((resolve) => {
           release = resolve;
         }),
     );
-    const today = () =>
-      screen.getByText('Blocked since midnight, your time').parentElement!.querySelector('dd')!
-        .textContent;
     expect(today()).toBe('Not counted yet');
     await advance(0);
     await act(async () => {
-      release(
-        wholeRead(answer({ day_start: '2026-11-23T08:00:00+00:00', blocked_since_day_start: 9 })),
-      );
+      release(dayRead()(spy.mock.calls[0]![0]));
     });
     expect(today()).toBe('9');
+  });
+
+  it("the whole window is read again at the viewer's midnight, with the new day, between the 30-second reads", async () => {
+    vi.setSystemTime(new Date(2026, 10, 23, 23, 57, 50));
+    const { spy } = mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
+    );
+    await advance(0);
+    for (let i = 0; i < 4; i += 1) await advance(30_000);
+    expect(today()).toBe('9');
+    // 23:59:50 was the last read; midnight is 10 seconds on, before the next 30-second read.
+    await advance(10_000);
+    const calls = spy.mock.calls.map((c) => c[0] as { scope: string; dayStart: string | null });
+    expect(calls.map((c) => c.scope)).toEqual([
+      'whole',
+      'recent',
+      'recent',
+      'recent',
+      'recent',
+      'whole',
+    ]);
+    expect(new Date(calls[0]!.dayStart!).getDate()).toBe(23);
+    const next = new Date(calls[5]!.dayStart!);
+    expect([next.getDate(), next.getHours(), next.getMinutes()]).toEqual([24, 0, 0]);
+    expect(today()).toBe('9');
+  });
+
+  it("past midnight, before the new day is read, the day's counter says 'Not counted yet', never the old day's number", async () => {
+    vi.setSystemTime(new Date(2026, 10, 23, 23, 59, 45));
+    let wholeReads = 0;
+    mount(async (input) => {
+      if ((input as { scope: string }).scope !== 'whole') return recentRead(liveAnswer());
+      wholeReads += 1;
+      return wholeReads === 1 ? dayRead()(input) : SECURITY_MAP_POLL_FAILED;
+    });
+    await advance(0);
+    expect(today()).toBe('9');
+    await advance(15_000);
+    expect(wholeReads).toBe(2);
+    expect(today()).toBe('Not counted yet');
+  });
+
+  it('the whole window is read again at once when the replay begins on a read more than a minute old; not again while it goes on', async () => {
+    let recentReads = 0;
+    const { spy } = mount(async (input) => {
+      if ((input as { scope: string }).scope === 'whole') return dayRead()(input);
+      recentReads += 1;
+      return recentRead(recentReads <= 2 ? liveAnswer() : quietAnswer());
+    });
+    const scopes = () => spy.mock.calls.map((c) => (c[0] as { scope: string }).scope);
+    await advance(0);
+    await advance(30_000);
+    await advance(30_000);
+    expect(lastGlobe().timing).toBe('live');
+    // 90 seconds after the whole read, the last ten minutes come back empty: the replay begins.
+    await advance(30_000);
+    await advance(0);
+    expect(scopes()).toEqual(['whole', 'recent', 'recent', 'recent', 'whole']);
+    expect(lastGlobe().timing).toBe('replay');
+    for (let i = 0; i < 4; i += 1) await advance(30_000);
+    expect(scopes()).toEqual([
+      'whole',
+      'recent',
+      'recent',
+      'recent',
+      'whole',
+      'recent',
+      'recent',
+      'recent',
+      'recent',
+    ]);
+  });
+
+  it('a replay that begins within a minute of the last whole read asks for nothing more', async () => {
+    const { spy } = mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(quietAnswer()),
+    );
+    await advance(0);
+    await advance(30_000);
+    await advance(30_000);
+    expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
+      'whole',
+      'recent',
+      'recent',
+    ]);
   });
 
   it('never reads while the tab is hidden; an overdue read goes at once when it comes back', async () => {
@@ -384,16 +515,16 @@ describe('what is never drawn or listed', () => {
     expect(within(table).getByText('Not on the map: no point for this code')).toBeInTheDocument();
     expect(
       screen.getByText(
-        'Not on the map: 5 events come from a place the map has no point for (XK). They are in the table.',
+        'Not on the map: 5 events come from a place the map has no point for (QZ). They are in the table.',
       ),
     ).toBeInTheDocument();
     chooseFlat();
-    expect(document.querySelectorAll('[data-arc^="XK:"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-arc^="QZ:"]')).toHaveLength(0);
   });
 });
 
 describe('flagged against blocked', () => {
-  it('in words: the counters, the legend and the table say "flagged, not blocked"; the flagged sum says "at least"', () => {
+  it('in words: the counters, the legend and the table say "flagged, not blocked"; a flagged sum the database calls a floor says "at least"', () => {
     mount(async () => wholeRead());
     const flagged = screen.getByText('Flagged, last 24 hours').parentElement!;
     expect(flagged.textContent).toContain('at least 5');
@@ -429,6 +560,153 @@ describe('flagged against blocked', () => {
       ['DE:exploit:blocked', 'blocked'],
       ['BR:password_guessing:flagged', 'flagged'],
     ]);
+  });
+});
+
+describe('a window the database shortened', () => {
+  const shortened = () =>
+    answer({
+      window: {
+        from: '2026-11-23T18:08:00+00:00',
+        to: '2026-11-23T22:00:00+00:00',
+        live_from: '2026-11-23T21:50:00+00:00',
+        asked_from: '2026-11-22T22:00:00+00:00',
+      },
+      window_shortened: true,
+    });
+
+  it('says so in plain words, with the part read; the numbers are labelled with that part, never the whole day', () => {
+    mount(async () => new Promise(() => {}), wholeRead(shortened()));
+    const words = screen.getByTestId('security-map-shortened').textContent ?? '';
+    expect(words).toMatch(
+      /^Showing the last 3 hours 52 minutes only, from \d\d:\d\d, your time: there were too many events to count all of the last 24 hours\. Nothing before \d\d:\d\d is in these numbers\.$/,
+    );
+    expect(screen.getByText('Blocked, last 3 hours 52 minutes')).toBeInTheDocument();
+    expect(screen.getByText('Flagged, last 3 hours 52 minutes')).toBeInTheDocument();
+    expect(screen.queryByText('Blocked, last 24 hours')).toBeNull();
+    expect(screen.getByTestId('security-map-mode').textContent).toMatch(
+      /^Replay of the last 3 hours 52 minutes:/,
+    );
+  });
+
+  it('a window read whole says nothing of the kind', () => {
+    mount(async () => new Promise(() => {}));
+    expect(screen.queryByTestId('security-map-shortened')).toBeNull();
+    expect(screen.getByText('Blocked, last 24 hours')).toBeInTheDocument();
+  });
+});
+
+describe('floors: "at least" where the database says, and nowhere else', () => {
+  it('with no floors the same numbers are plain', () => {
+    // No entry of either feed is a floor here either.
+    mount(async () => new Promise(() => {}), wholeRead(answer({ floors: [], flagged_feed: [] })));
+    const flagged = screen.getByText('Flagged, last 24 hours').parentElement!;
+    expect(flagged.querySelector('dd')!.textContent).toBe('5');
+    expect(
+      screen.getByText('Not drawn: 2 flagged sign-in alerts. They are on the Security page.'),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('at least');
+  });
+
+  it('the blocked counter, the day counter and a table cell say "at least" when theirs are floors', () => {
+    const a = answer({
+      floors: ['blocked_window', 'blocked_since_day_start', 'totals.exploit.blocked'],
+      day_start: '2026-11-23T08:00:00+00:00',
+      blocked_since_day_start: 9,
+    });
+    mount(async () => new Promise(() => {}), wholeRead(a));
+    expect(
+      screen.getByText('Blocked, last 24 hours').parentElement!.querySelector('dd')!.textContent,
+    ).toBe('at least 57');
+    expect(
+      screen.getByText('Flagged, last 24 hours').parentElement!.querySelector('dd')!.textContent,
+    ).toBe('5');
+    const legend = document.querySelector('[data-legend="exploit"]')!;
+    expect(legend.textContent).toContain('at least 17 blocked');
+  });
+
+  it('a feed entry whose count is a floor says "at least" in its facts', () => {
+    const a = answer({ feed: [feedEntry({ at_least: true, events: 12 })] });
+    mount(async () => new Promise(() => {}), wholeRead(a));
+    fireEvent.click(screen.getByRole('button', { name: /Request for a settings file/ }));
+    expect(screen.getByText('at least 12')).toBeInTheDocument();
+  });
+});
+
+describe('the flagged list beside the map', () => {
+  const list = () => screen.getByTestId('security-map-flagged');
+  const entries = () => [...list().querySelectorAll('[data-flagged-entry]')];
+
+  it('lists the newest flagged entries with the hollow mark, what, city and country, time and count; nothing else', () => {
+    mount(async () => new Promise(() => {}));
+    expect(within(list()).getByText(SECURITY_MAP_WORDS.flaggedFeedTitle)).toBeInTheDocument();
+    // The phishing entry is a kind the map does not show: never listed.
+    expect(entries()).toHaveLength(1);
+    const entry = entries()[0]!;
+    expect(entry.textContent).toContain('Sign-in alerts held after too many in one day');
+    expect(entry.textContent).toContain('Example Borough, United Kingdom');
+    expect(entry.textContent).toContain('21:44 UTC');
+    expect(entry.textContent).toContain('at least 4');
+    // The same mark a flagged arc starts from: hollow, in its category's colour.
+    const mark = entry.querySelector('svg path')!;
+    expect(mark.getAttribute('fill')).toBe('none');
+    expect(mark.getAttribute('stroke')).toBe(CATEGORY_LOOKS.password_guessing.hex);
+    // Where is city and country only: no organization, no source, no link.
+    expect(list().textContent).not.toContain('Example Hidden Academy');
+    expect(list().textContent).not.toContain(securityEventSourceLabel('api'));
+    expect(list().querySelector('a, button')).toBeNull();
+    expect(list().textContent).not.toContain(securityEventCategoryLabel('phishing'));
+  });
+
+  it('it sits beside the map panel, in the same row', () => {
+    mount(async () => new Promise(() => {}));
+    const row = list().parentElement!;
+    expect(row.className).toContain('lg:grid-cols-');
+    expect(row.contains(screen.getByTestId('security-map-mode'))).toBe(true);
+  });
+
+  it('nothing flagged: one plain line', () => {
+    mount(async () => new Promise(() => {}), wholeRead(answer({ flagged_feed: [] })));
+    expect(entries()).toHaveLength(0);
+    expect(within(list()).getByText(SECURITY_MAP_WORDS.flaggedFeedEmpty)).toBeInTheDocument();
+  });
+
+  it("a poll's flagged entries go first; the whole read's own are kept only before the poll's window", async () => {
+    const flaggedAt = (minute: string, city: string) =>
+      feedEntry({
+        minute,
+        category: 'password_guessing',
+        outcome: 'flagged',
+        reason: 'sign_in_alerts_held',
+        country: 'GB',
+        city,
+        events: 1,
+      });
+    const whole = answer({
+      flagged_feed: [
+        flaggedAt('2026-11-23T21:55:00+00:00', 'Example Inside'),
+        flaggedAt('2026-11-23T21:44:00+00:00', 'Example Before'),
+      ],
+    });
+    const poll = answer({
+      ...liveAnswer(),
+      flagged_feed: [flaggedAt('2026-11-23T21:59:00+00:00', 'Example Newest')],
+    });
+    mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole' ? wholeRead(whole) : recentRead(poll),
+      wholeRead(whole),
+    );
+    await advance(0);
+    await advance(30_000);
+    expect(entries().map((e) => e.textContent!.match(/Example \w+/)![0])).toEqual([
+      'Example Newest',
+      'Example Before',
+    ]);
+    // The poll's numbers replace none of the whole read's.
+    expect(
+      screen.getByText('Blocked, last 24 hours').parentElement!.querySelector('dd')!.textContent,
+    ).toBe('57');
   });
 });
 
