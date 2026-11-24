@@ -181,7 +181,7 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
     const remove = vi.fn(async () => ({ data: null, error: null }));
     const download = vi.fn(async () =>
       downloadBody
-        ? { data: new Blob([downloadBody]), error: null }
+        ? { data: new Blob([new Uint8Array(downloadBody)]), error: null }
         : { data: null, error: { message: 'gone' } },
     );
     const store = { remove, download, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;

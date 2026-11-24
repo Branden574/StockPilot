@@ -4,14 +4,10 @@ import type { CountingUnit } from '@stockpilot/core';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { SIZE_SCAN_SIZES } from '@/lib/ai/size-scan';
-import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { reportError } from '@/lib/error-reporter';
-import {
-  isSniffedKindAllowedInBucket,
-  MIME_FOR_KIND,
-  sniffImage,
-} from '@/lib/image-signature';
+import { MIME_FOR_KIND } from '@/lib/image-signature';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { fetchAllRows } from './lib/paginate';
@@ -260,16 +256,16 @@ export class SizeCountsService {
     // The bytes pass THROUGH this method, so the check goes before the upload
     // rather than as the fetch-back-and-delete a client-direct finalize needs.
     // Nothing unverified reaches storage at all.
-    const sniffed = sniffImage(new Uint8Array(input.imageBytes));
-    if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'size-count-training')) {
-      throw new ServiceError(
-        'validation_error',
-        'This file could not be uploaded because it failed our security checks.',
-      );
-    }
-    // And whether anything is hiding after the end of the image.
-    const threat = scanDocumentBytes(new Uint8Array(input.imageBytes), sniffed.kind);
-    if (threat) throw new ServiceError('validation_error', THREAT_MESSAGES[threat.code]);
+    // And whether anything is hiding after the end of the image. Both are the
+    // one upload check (part 6), which records a refusal as a security event.
+    const checked = await checkUploadBytes(new Uint8Array(input.imageBytes), {
+      surface: 'size_count_training',
+      accept: ['png', 'jpeg', 'webp'],
+      organizationId: this.ctx.organizationId,
+      wrongTypeMessage: 'This file could not be uploaded because it failed our security checks.',
+    });
+    if (!checked.ok) throw new ServiceError('validation_error', checked.message);
+    const sniffed = { kind: checked.kind as 'png' | 'jpeg' | 'webp' };
 
     // Extension and stored content-type both follow the BYTES, not the claim.
     const ext = sniffed.kind === 'webp' ? 'webp' : sniffed.kind === 'png' ? 'png' : 'jpg';

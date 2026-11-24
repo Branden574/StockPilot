@@ -11,15 +11,14 @@ import {
   SIZE_SCAN_RESPONSE_SCHEMA,
 } from '@/lib/ai/size-scan';
 import { apiReadContext } from '@/server/lib/api-read-context';
-import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { env } from '@/lib/env';
-import { isSniffedKindAllowedInBucket, MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   internalErrorResponse,
   unreadableRequestResponse,
   VISION_FAILED_MESSAGE,
 } from '@/server/lib/api-error-response';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import { SizeCountsService } from '@/server/services/size-counts';
 
 import { sizeCountError } from '../../route';
@@ -144,22 +143,17 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // before its base64 hand-off. The declared Content-Type is the client's word
   // for it and decides nothing.
   const bytes = new Uint8Array(await photo.arrayBuffer());
-  const sniffed = sniffImage(bytes);
-  if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'size-count-training')) {
-    return NextResponse.json(
-      {
-        error: 'invalid_image',
-        message: 'This file could not be read because it failed our security checks.',
-      },
-      { status: 422 },
-    );
-  }
-  const threat = scanDocumentBytes(bytes, sniffed.kind);
-  if (threat) {
-    return NextResponse.json(
-      { error: 'invalid_image', message: THREAT_MESSAGES[threat.code] },
-      { status: 422 },
-    );
+  // The one upload check (part 6): the sniff and the scan, and a refusal
+  // recorded as a security event in this organization.
+  const checked = await checkUploadBytes(bytes, {
+    surface: 'size_count_scan',
+    accept: ['png', 'jpeg', 'webp'],
+    organizationId: ctx.organizationId,
+    headers: req.headers,
+    wrongTypeMessage: 'This file could not be read because it failed our security checks.',
+  });
+  if (!checked.ok) {
+    return NextResponse.json({ error: 'invalid_image', message: checked.message }, { status: 422 });
   }
 
   // The provider is resolved per REQUEST, never at module scope: resolveAiProvider
@@ -176,7 +170,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const modelVersion = useClaude ? env.ANTHROPIC_SIZE_SCAN_MODEL : env.GEMINI_MODEL;
   // The SNIFFED mime, never the declared one — the same rule the upload paths
   // follow, for the same reason.
-  const mediaType = MIME_FOR_KIND[sniffed.kind];
+  const mediaType = checked.mime;
   const base64 = Buffer.from(bytes).toString('base64');
 
   let raw: string;
