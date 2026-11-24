@@ -203,7 +203,11 @@ export function lineIsClean(line: string, req: Request): boolean {
     return false;
   }
   for (const value of req.headers.values()) seen.push(value);
-  return !seen.some((text) => text.length >= 3 && line.includes(text));
+  // The line's own booleans are not client text: a header whose whole value is
+  // "true" or "false" must not silence the measurement.
+  return !seen.some(
+    (text) => text.length >= 3 && text !== 'true' && text !== 'false' && line.includes(text),
+  );
 }
 
 /**

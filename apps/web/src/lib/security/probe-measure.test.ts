@@ -161,6 +161,13 @@ describe('measureProbeChannels', () => {
 });
 
 describe('lineIsClean', () => {
+  it('is not silenced by a header whose whole value is true or false', () => {
+    const req = new Request('https://app.example/api/security/probe/env_file', {
+      headers: { 'x-example-flag': 'true', 'x-example-other': 'false' },
+    });
+    expect(lineIsClean('{"url":{"present":true,"matchesKind":false}}', req)).toBe(true);
+  });
+
   const req = new Request('https://app.example.com/example-probe/settings?example=value', {
     headers: { 'x-forwarded-uri': '/example-probe/settings', 'x-example': 'example-header-value' },
   });
