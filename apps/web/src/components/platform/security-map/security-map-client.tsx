@@ -153,7 +153,7 @@ export function SecurityMapClient({
   const legend = securityMapLegend(state.whole);
   const flaggedWords = securityMapFlaggedListWords(
     state.whole,
-    state.flaggedFeed.length,
+    state.flaggedFeed,
     state.flaggedCut,
   );
   const notes = state.whole ? securityMapNotes(state.whole) : [];

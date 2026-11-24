@@ -82,7 +82,7 @@ vi.mock('./security-map-globe', async () => {
   };
 });
 
-import { CATEGORY_LOOKS } from './map-model';
+import { CATEGORY_LOOKS, HIDDEN_KIND_LOOK } from './map-model';
 import { SecurityMapClient } from './security-map-client';
 
 /* ───────────────────────────── made-up answers ───────────────────────────── */
@@ -170,6 +170,7 @@ function answer(over: Partial<SecurityMapAnswer> = {}): SecurityMapAnswer {
         reason: 'sign_in_new_country',
         country: 'US',
         city: 'Example Falls',
+        events: 2,
       }),
     ],
     late_sources: [],
@@ -655,8 +656,8 @@ describe('the flagged list beside the map', () => {
   it('lists the newest flagged entries with the hollow mark, what, city and country, time and count; nothing else', () => {
     mount(async () => new Promise(() => {}));
     expect(within(list()).getByText(SECURITY_MAP_WORDS.flaggedFeedTitle)).toBeInTheDocument();
-    // The phishing entry is a kind the map does not show: never listed.
-    expect(entries()).toHaveLength(1);
+    // Every kind is listed: the password-guessing entry, then the flagged sign-in alert.
+    expect(entries()).toHaveLength(2);
     const entry = entries()[0]!;
     expect(entry.textContent).toContain('Sign-in alerts held after too many in one day');
     expect(entry.textContent).toContain('Example Borough, United Kingdom');
@@ -670,7 +671,59 @@ describe('the flagged list beside the map', () => {
     expect(list().textContent).not.toContain('Example Hidden Academy');
     expect(list().textContent).not.toContain(securityEventSourceLabel('api'));
     expect(list().querySelector('a, button')).toBeNull();
-    expect(list().textContent).not.toContain(securityEventCategoryLabel('phishing'));
+  });
+
+  it('a flagged entry of a kind the map does not draw: its plain name, the grey mark, city and country, time and count; never its kind', () => {
+    mount(async () => new Promise(() => {}));
+    const entry = entries()[1]!;
+    expect(entry.textContent).toContain('Sign-in from a new country');
+    expect(entry.textContent).toContain('Example Falls, United States');
+    expect(entry.textContent).toContain('21:40 UTC');
+    expect(entry.textContent).toContain('2');
+    const mark = entry.querySelector('svg path')!;
+    expect(mark.getAttribute('fill')).toBe('none');
+    expect(mark.getAttribute('stroke')).toBe(HIDDEN_KIND_LOOK.hex);
+    expect(HIDDEN_KIND_LOOK.hex).not.toBe(CATEGORY_LOOKS.phishing.hex);
+    expect(Object.values(CATEGORY_LOOKS).map((l) => l.hex)).not.toContain(HIDDEN_KIND_LOOK.hex);
+    // The split, said in one line with the grey mark.
+    const split = screen.getByTestId('security-map-flagged-split');
+    expect(split.textContent).toBe(SECURITY_MAP_WORDS.flaggedFeedSplit);
+    expect(split.querySelector('svg path')!.getAttribute('stroke')).toBe(HIDDEN_KIND_LOOK.hex);
+  });
+
+  it('the words Phishing and Malware appear nowhere on the page, the flagged sign-in alert listed', () => {
+    mount(async () => new Promise(() => {}));
+    expect(entries()).toHaveLength(2);
+    for (const view of ['globe', 'flat'] as const) {
+      if (view === 'flat') chooseFlat();
+      const page = document.body.innerHTML;
+      expect(page).not.toMatch(/phishing|malware/i);
+    }
+  });
+
+  it('the globe, the flat map, the legend and the counters still carry nothing of the hidden kind', () => {
+    mount(async () => new Promise(() => {}));
+    expect(entries()[1]!.textContent).toContain('Sign-in from a new country');
+    for (const props of h.globeProps) {
+      const arcs = props.arcs as Array<{ arc: { category: string; country: string } }>;
+      expect(arcs.some((a) => a.arc.category === 'phishing' || a.arc.country === 'US')).toBe(false);
+    }
+    chooseFlat();
+    expect(document.querySelectorAll('[data-arc*="phishing"], [data-arc^="US:"]')).toHaveLength(0);
+    const legend = [...document.querySelectorAll('[data-legend]')].map((li) =>
+      li.getAttribute('data-legend'),
+    );
+    expect(legend).toEqual(['password_guessing', 'exploit', 'bots']);
+    expect(
+      [...document.querySelectorAll('[data-counter]')].map((c) => c.getAttribute('data-counter')),
+    ).toEqual(['blocked_today', 'blocked_window', 'flagged_window']);
+  });
+
+  it('a flagged reason this build does not know: neutral words, never the code', () => {
+    const odd = { ...answer().flagged_feed[1]!, reason: 'sign_in_from_the_moon' };
+    mount(async () => new Promise(() => {}), wholeRead(answer({ flagged_feed: [odd] })));
+    expect(entries()[0]!.textContent).toContain('Flagged sign-in event');
+    expect(list().textContent).not.toContain('sign_in_from_the_moon');
   });
 
   it('it sits beside the map panel, in the same row', () => {
@@ -689,33 +742,46 @@ describe('the flagged list beside the map', () => {
   it('nothing flagged: one plain line', () => {
     mount(
       async () => new Promise(() => {}),
-      wholeRead(answer({ flagged_feed: [], totals: noFlagged() })),
+      wholeRead(answer({ flagged_feed: [], totals: noFlagged(), flagged_window: 0 })),
     );
     expect(entries()).toHaveLength(0);
     expect(within(list()).getByText(SECURITY_MAP_WORDS.flaggedFeedEmpty)).toBeInTheDocument();
   });
 
-  it('none listed while the window holds flagged events of the shown kinds: never "Nothing was flagged"', () => {
-    // The only flagged entry is a Phishing one; password guessing has 3 flagged events, all older.
-    mount(
-      async () => new Promise(() => {}),
-      wholeRead(answer({ flagged_feed: [answer().flagged_feed[1]!] })),
-    );
+  it('none listed while the window holds flagged events: never "Nothing was flagged"', () => {
+    mount(async () => new Promise(() => {}), wholeRead(answer({ flagged_feed: [] })));
     expect(entries()).toHaveLength(0);
     expect(screen.getByTestId('security-map-flagged-words').textContent).toBe(
-      SECURITY_MAP_WORDS.flaggedFeedNoneShown,
+      SECURITY_MAP_WORDS.flaggedFeedNoneListed,
     );
     expect(within(list()).queryByText(SECURITY_MAP_WORDS.flaggedFeedEmpty)).toBeNull();
   });
 
-  it('the newest only, of more: the list says so', () => {
-    const totals = answer().totals;
-    totals.password_guessing.flagged = 9;
-    mount(async () => new Promise(() => {}), wholeRead(answer({ totals })));
-    expect(entries()).toHaveLength(1);
+  it("more: the kept list's events add up to less than the window's flagged events; a poll that fills the gap clears it", async () => {
+    // Listed 4 + 2 = 6 of the window's 7 flagged events.
+    const whole = answer({ flagged_window: 7 });
+    const newer = {
+      ...answer().flagged_feed[0]!,
+      minute: '2026-11-23T21:59:00+00:00',
+      city: 'Example Newest',
+      events: 1,
+      at_least: false,
+    };
+    mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole'
+          ? wholeRead(whole)
+          : recentRead(answer({ ...liveAnswer(), flagged_feed: [newer] })),
+      wholeRead(whole),
+    );
+    expect(entries()).toHaveLength(2);
     expect(screen.getByTestId('security-map-flagged-words').textContent).toBe(
       SECURITY_MAP_WORDS.flaggedFeedMore,
     );
+    await advance(0);
+    await advance(30_000);
+    expect(entries()).toHaveLength(3);
+    expect(screen.queryByTestId('security-map-flagged-words')).toBeNull();
   });
 
   it('all of them listed: no such words', () => {
@@ -764,7 +830,7 @@ describe('the flagged list beside the map', () => {
     }));
     const totals = answer().totals;
     totals.password_guessing.flagged = 20;
-    const whole = answer({ flagged_feed: twenty, totals });
+    const whole = answer({ flagged_feed: twenty, totals, flagged_window: 20 });
     const newer = { ...twenty[0]!, minute: '2026-11-23T21:59:00+00:00', city: 'Example Newest' };
     mount(
       async (input) =>
@@ -795,7 +861,7 @@ describe('the flagged list beside the map', () => {
       return wholeReads === 1 ? dayRead()(input) : dayRead({ feed: [], flagged_feed: [] })(input);
     });
     await advance(0);
-    expect(entries()).toHaveLength(1);
+    expect(entries()).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
     for (let i = 0; i < 10; i += 1) await advance(30_000);
     expect(wholeReads).toBe(2);

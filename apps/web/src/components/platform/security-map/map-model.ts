@@ -4,6 +4,7 @@ import {
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
   securityMapNextPollDelay,
+  securityMapShownCategories,
   type SecurityEventCategory,
   type SecurityMapArc,
   type SecurityMapPlan,
@@ -56,6 +57,20 @@ export const CATEGORY_LOOKS: Readonly<Record<SecurityEventCategory, CategoryLook
   phishing: look('#b794f6', 'triangle'),
   malware: look('#9be15d', 'hexagon'),
 };
+
+/**
+ * The one look of every kind the map does not draw, in the flagged list
+ * only: a grey mark, the same for each such kind, so the list never tells
+ * which hidden kind an entry was recorded under. Never drawn on the map.
+ */
+export const HIDDEN_KIND_LOOK: CategoryLook = look('#9aa6b8', 'triangle');
+
+/** An entry's look in the flagged list: its kind's own when the map shows that kind, else the grey one. */
+export function flaggedLookOf(category: SecurityEventCategory): CategoryLook {
+  return securityMapShownCategories().includes(category)
+    ? CATEGORY_LOOKS[category]
+    : HIDDEN_KIND_LOOK;
+}
 
 /** The shape's number in the globe's shader. */
 export const SHAPE_INDEX: Readonly<Record<MarkShape, number>> = {

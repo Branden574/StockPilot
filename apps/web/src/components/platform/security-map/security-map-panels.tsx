@@ -12,6 +12,7 @@ import {
   securityEventReasonLabel,
   securityEventSourceLabel,
   securityMapFeedWords,
+  securityMapFlaggedReasonWords,
   securityMapTableRows,
   type SecurityMapCounter,
   type SecurityMapFeedRow,
@@ -23,7 +24,13 @@ import {
 import { PlatformTable } from '../platform-table';
 
 import { markPath } from './security-map-flat';
-import { CATEGORY_LOOKS, countryName, type MarkShape } from './map-model';
+import {
+  CATEGORY_LOOKS,
+  HIDDEN_KIND_LOOK,
+  countryName,
+  flaggedLookOf,
+  type MarkShape,
+} from './map-model';
 import { countryPoint } from './world-geometry';
 
 /**
@@ -255,10 +262,12 @@ export function SecurityMapFeedList({
 
 /**
  * The newest flagged entries, beside the map, so a flood of blocked entries
- * never hides them. Each with the mark a flagged arc starts from (hollow, in
- * its category's colour), its time, what it was, where it came from (city
- * and country only) and how many. No organization and no source here: those
- * are in the feed's own entries under the map.
+ * never hides them. Every kind is listed, the flagged sign-in alerts too,
+ * though their kind is not drawn on the map: such an entry has the grey mark
+ * and is named by its reason only, never by its kind. Each with the mark a
+ * flagged arc starts from (hollow), its time, what it was in plain words,
+ * where it came from (city and country only) and how many. No organization,
+ * no source and no kind's name here.
  */
 export function SecurityMapFlaggedList({
   rows,
@@ -279,11 +288,18 @@ export function SecurityMapFlaggedList({
         {SECURITY_MAP_WORDS.flaggedFeedTitle}
       </h3>
       <p className="text-muted-foreground text-[12px]">{SECURITY_MAP_WORDS.flaggedFeedNote}</p>
+      <p
+        data-testid="security-map-flagged-split"
+        className="text-muted-foreground flex items-center gap-2 text-[12px]"
+      >
+        <CategoryMark shape={HIDDEN_KIND_LOOK.shape} colour={HIDDEN_KIND_LOOK.hex} hollow />
+        {SECURITY_MAP_WORDS.flaggedFeedSplit}
+      </p>
       {rows.length === 0 ? null : (
         <ol className="max-h-[30rem] min-w-0 overflow-y-auto">
           {rows.map((row) => {
             const w = securityMapFeedWords(row);
-            const look = CATEGORY_LOOKS[w.category];
+            const look = flaggedLookOf(w.category);
             return (
               <li
                 key={w.key}
@@ -295,7 +311,7 @@ export function SecurityMapFlaggedList({
                 </span>
                 <span className="flex min-w-0 flex-col">
                   <span className="text-foreground min-w-0 [overflow-wrap:anywhere]">
-                    {securityEventReasonLabel(w.reason)}
+                    {securityMapFlaggedReasonWords(w.reason)}
                   </span>
                   <span className="text-muted-foreground min-w-0 [overflow-wrap:anywhere]">
                     {placeOf(w)}
