@@ -2652,6 +2652,25 @@ WEB_TESTS=(
   src/components/platform/platform-security-map-section.test.tsx
   src/components/platform/security-map/security-map-client.test.tsx
   'src/app/(platform)/platform/security/map/page.test.tsx'
+
+  # What scanners asked for (part 5, stage 3): a sample is kept only when the
+  # path the request carries is taken by a rule of the route's own kind (the
+  # re-match), never under a path that can carry a token or key (the list is
+  # read from the route tree and fails on a new token route outside it),
+  # never for a method outside the seven, with the rule's own rewrite
+  # parameters dropped from the query string, and only after the core scrub.
+  # The scanner route's answer and its event are the same byte for byte with
+  # or without a sample, and a failing sample changes neither. The recorder
+  # has its own buffer (at most 50, merged, counts capped), never throws and
+  # is never waited on, drops a batch on 55P03 or a missing writer, and logs
+  # one count line of numbers only after every call. Every made-up scanner
+  # path comes out of the scrub as it was sent (probe-paths). The new files
+  # carry the "Security invariant" marker.
+  src/lib/security/probe-paths.test.ts
+  src/lib/security/probe-match.test.ts
+  src/lib/security/probe-sample.test.ts
+  'src/app/api/security/probe/[kind]/route.test.ts'
+  src/server/security/event-samples.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3027,6 +3046,15 @@ CORE_TESTS=(
   # every sentence; a flagged event is never called blocked, a floor says
   # "at least", and a number that could not be read is never a zero.
   src/security/security-map.test.ts
+  # The scrub of what scanners asked for (part 5, stage 3): a path or query
+  # string is kept only as printable ASCII, cut to length, with anything that
+  # reads as an email, an id, a number, an address, a long value or a token
+  # (a 22-character invite token in every position) replaced by a fixed
+  # marker, and a secret-named key's value removed; a second scrub changes
+  # nothing; the last step is the table's own predicate. Generated hostile
+  # inputs; ordinary scanner shapes come out unchanged (apps/web's
+  # probe-paths.test.ts holds every made-up scanner path to that too).
+  src/security/request-scrub.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
