@@ -94,6 +94,26 @@ describe("three.js stays in the attack map's lazy island", () => {
     }
   });
 
+  it('core is marked free of side effects, so what the island uses from it stays in the island', () => {
+    // Without the mark, Next's bundler keeps every core module that any
+    // browser code uses inside core's barrel, which the root layout loads:
+    // the map's words were in every page's first load (measured 2026-11-24:
+    // every route 16,041 bytes larger, 5.5 KB gzip). With it, a page gets
+    // only the core modules it uses.
+    const core = JSON.parse(
+      readFileSync(join(SRC, '..', '..', '..', 'packages', 'core', 'package.json'), 'utf8'),
+    ) as {
+      sideEffects?: unknown;
+    };
+    expect(core.sideEffects).toBe(false);
+    // The mark is true only while no core module is imported for its effect.
+    const coreSrc = join(SRC, '..', '..', '..', 'packages', 'core', 'src');
+    const bare = sourceFiles(coreSrc).filter((abs) =>
+      /^import\s+['"][^'"]+['"];?\s*$/m.test(readFileSync(abs, 'utf8')),
+    );
+    expect(bare.map((abs) => relative(coreSrc, abs))).toEqual([]);
+  });
+
   it('the island is rendered by the map section alone', () => {
     expect(staticImporters(/(^|\/)security-map-island$/)).toEqual([
       'components/platform/platform-security-map-section.tsx',
