@@ -59,7 +59,9 @@ import {
  * (review S7), and `dropped`, `busy`, `failed`, this instance's own drops
  * since the last line. Never a target, a query string or a country. A
  * non-zero `skipped` is a fault in the scrubber (it and the table disagree on
- * a text) and is logged at warning level.
+ * a text): the line is a warning, and it is reported (tag
+ * security.event_samples_skipped, warning, the writer's four counts only) at
+ * most once per SAMPLE_FAILURE_REPORT_INTERVAL_MS per instance.
  *
  * SERVER CODE ONLY: `import 'server-only'` and never 'use server'
  * (server/security/events.guard.test.ts): exported from a server action
@@ -75,6 +77,8 @@ export const SAMPLE_FLUSH_CALL_TIMEOUT_MS = 3_000;
 export const SAMPLE_FAILURE_REPORT_INTERVAL_MS = 10 * 60_000;
 /** The tag of the count line. */
 export const SAMPLE_COUNT_LINE_TAG = 'security.event_samples';
+/** The tag of the report of a skipped element (at most one per interval per instance). */
+export const SAMPLE_SKIPPED_REPORT_TAG = 'security.event_samples_skipped';
 /** The tag of the one line and the one report an instance makes when the writer is missing. */
 export const SAMPLE_MISSING_LINE_TAG = 'security.event_samples_missing';
 
@@ -116,6 +120,8 @@ interface SampleRecorderState {
   /** Whether this instance has said the writer is missing. */
   saidMissing: boolean;
   lastReportAt: number | null;
+  /** When this instance last reported a skipped element. */
+  lastSkippedReportAt: number | null;
 }
 
 /**
@@ -137,6 +143,7 @@ const state: SampleRecorderState = ((
   failed: 0,
   saidMissing: false,
   lastReportAt: null,
+  lastSkippedReportAt: null,
 });
 
 /** The country, by the security events' own rule (lib/client-ip.ts); never the city. */
@@ -376,8 +383,31 @@ function countLine(answer: WriterAnswer): void {
   state.busy = 0;
   state.failed = 0;
   // A skipped element is the scrubber and the table disagreeing on a text.
-  if (answer.skipped > 0) console.warn(line);
-  else console.info(line);
+  if (answer.skipped > 0) {
+    console.warn(line);
+    reportSkipped(answer);
+  } else console.info(line);
+}
+
+/** A skipped element, reported at most once per interval per instance, with the writer's counts only. */
+function reportSkipped(answer: WriterAnswer): void {
+  const now = Date.now();
+  const last = state.lastSkippedReportAt;
+  if (last !== null && now - last >= 0 && now - last < SAMPLE_FAILURE_REPORT_INTERVAL_MS) return;
+  state.lastSkippedReportAt = now;
+  void reportError(
+    new Error('The scrubber and the samples table disagree: the writer skipped an element'),
+    {
+      tag: SAMPLE_SKIPPED_REPORT_TAG,
+      level: 'warning',
+      extra: {
+        stored: answer.stored,
+        overflowed: answer.overflowed,
+        skipped: answer.skipped,
+        not_read: answer.not_read,
+      },
+    },
+  );
 }
 
 function reportFailure(code: string | null, rows: number): void {
@@ -404,6 +434,7 @@ export function __resetSecurityEventSamplesForTests(): void {
   state.failed = 0;
   state.saidMissing = false;
   state.lastReportAt = null;
+  state.lastSkippedReportAt = null;
   state.flushDelayMs = SAMPLE_FLUSH_DELAY_MS;
 }
 

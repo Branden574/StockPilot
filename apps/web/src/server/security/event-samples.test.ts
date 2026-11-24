@@ -432,8 +432,8 @@ describe('the count line', () => {
     }
   });
 
-  it('a skipped element is a scrubber fault: the line is a warning', async () => {
-    h.rpc.mockResolvedValueOnce(ANSWER(0, 0, 1, 0));
+  it('a skipped element is a scrubber fault: the line is a warning, and it is reported with the counts only', async () => {
+    h.rpc.mockResolvedValueOnce(ANSWER(2, 0, 1, 0));
     samples.recordSecurityEventSample(probe(), from());
     await samples.flushSecurityEventSamples();
     expect(info).not.toHaveBeenCalled();
@@ -442,6 +442,34 @@ describe('the count line', () => {
       tag: 'security.event_samples',
       skipped: 1,
     });
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    expect(h.reportError).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'security.event_samples_skipped',
+      level: 'warning',
+      extra: { stored: 2, overflowed: 0, skipped: 1, not_read: 0 },
+    });
+    expect(JSON.stringify(h.reportError.mock.calls)).not.toMatch(/\.env|debug|NL|GET|env_file/);
+  });
+
+  it('a skipped element is reported at most once per ten minutes per instance', async () => {
+    h.rpc.mockResolvedValue(ANSWER(0, 0, 1, 0));
+    for (let i = 0; i < 3; i++) {
+      samples.recordSecurityEventSample(probe(), from());
+      await samples.flushSecurityEventSamples();
+    }
+    expect(h.reportError).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(samples.SAMPLE_FAILURE_REPORT_INTERVAL_MS);
+    samples.recordSecurityEventSample(probe(), from());
+    await samples.flushSecurityEventSamples();
+    expect(h.reportError).toHaveBeenCalledTimes(2);
+  });
+
+  it('no skipped element, no report', async () => {
+    h.rpc.mockResolvedValueOnce(ANSWER(1, 1, 0, 1));
+    samples.recordSecurityEventSample(probe(), from());
+    await samples.flushSecurityEventSamples();
+    expect(h.reportError).not.toHaveBeenCalled();
   });
 
   it('a console that throws changes nothing', async () => {
