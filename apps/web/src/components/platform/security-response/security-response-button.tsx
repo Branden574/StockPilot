@@ -37,7 +37,7 @@ export function SecurityResponseButton({
   if (!host) return null;
   const level = SECURITY_RESPONSE_CARD_LEVELS[request.cardId];
   // The visible words first, then the entry's: one string, so every reader hears the same name.
-  const name = `${SECURITY_RESPONSE_WORDS.open}: ${request.what}`;
+  const name = SECURITY_RESPONSE_WORDS.openFor(request.what);
   const onClick = (event: MouseEvent<HTMLButtonElement>) => host.open(request, event.currentTarget);
   return (
     <span

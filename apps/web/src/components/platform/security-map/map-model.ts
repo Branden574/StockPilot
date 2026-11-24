@@ -4,7 +4,9 @@ import {
   SECURITY_MAP_RECENT_POLL_MS,
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
+  dayStartInZone,
   isSecurityMapLateSource,
+  nextDayStartInZone,
   securityMapCountWords,
   securityMapFeedWords,
   securityMapIsFloor,
@@ -512,17 +514,33 @@ export function replayWantsWhole(
   return lastWholeAt === null || now - lastWholeAt > REPLAY_REREAD_AFTER_MS;
 }
 
-/** The viewer's next midnight after the day that began at `dayStart`, or null for no time. */
-export function nextLocalMidnight(dayStart: string | null): number | null {
+/**
+ * The viewer's next midnight after the day that began at `dayStart`, or null
+ * for no time: in `zone` (the zone the page's times are in) when given, else
+ * the browser's own.
+ */
+export function nextLocalMidnight(dayStart: string | null, zone?: string): number | null {
   const at = dayStart === null ? NaN : Date.parse(dayStart);
   if (!Number.isFinite(at)) return null;
+  if (zone !== undefined) {
+    const next = nextDayStartInZone(at, zone);
+    return Number.isFinite(next) ? next : null;
+  }
   const next = new Date(at);
   next.setHours(24, 0, 0, 0);
   return next.getTime();
 }
 
-/** The instant the viewer's own day began, as the poll sends it. */
-export function localDayStart(now: Date): string {
+/**
+ * The instant the viewer's own day began, as the poll sends it: the midnight
+ * of `zone` when given (the zone the page's times are in, so the day's
+ * counter and the times beside it agree), else the browser's.
+ */
+export function localDayStart(now: Date, zone?: string): string {
+  if (zone !== undefined) {
+    const start = dayStartInZone(now, zone);
+    if (Number.isFinite(start)) return new Date(start).toISOString();
+  }
   const midnight = new Date(now.getTime());
   midnight.setHours(0, 0, 0, 0);
   return midnight.toISOString();

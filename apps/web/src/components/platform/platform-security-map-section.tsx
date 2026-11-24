@@ -1,3 +1,4 @@
+import { readPlatformViewerTimeZone } from '@/lib/platform/viewer-time-zone';
 import { readPlatformSecurityMap } from '@/server/services/platform/security-map';
 
 import { SecurityMapIsland } from './security-map/security-map-island';
@@ -20,10 +21,15 @@ import { SecurityMapIsland } from './security-map/security-map-island';
  * no source and no organization.
  */
 export async function PlatformSecurityMapSection() {
-  const initial = await readPlatformSecurityMap({ scope: 'whole', dayStart: null });
+  // The zone the viewer chose (their organization's Timezone setting), read
+  // beside the map's first read: the page's gate ran before either.
+  const [initial, timeZone] = await Promise.all([
+    readPlatformSecurityMap({ scope: 'whole', dayStart: null }),
+    readPlatformViewerTimeZone(),
+  ]);
   return (
     <section aria-label="Attack map" data-slot="platform-security-map" className="min-w-0">
-      <SecurityMapIsland initial={initial} />
+      <SecurityMapIsland initial={initial} timeZone={timeZone} />
     </section>
   );
 }

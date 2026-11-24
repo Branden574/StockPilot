@@ -20,6 +20,7 @@ import {
   securityMapFeedWords,
   securityMapFlaggedWords,
   securityMapTableRows,
+  securityMapTimesWords,
   type SecurityMapCounter,
   type SecurityMapFeedRow,
   type SecurityMapFlaggedRow,
@@ -31,6 +32,7 @@ import {
 
 import { PlatformTable } from '../platform-table';
 import { SecurityResponseButton } from '../security-response/security-response-button';
+import { ZonedTime, ZonedWords, exactUtcOf } from '../zoned-time';
 
 import { LABEL_LEADER } from './globe-math';
 import { markPath } from './security-map-flat';
@@ -203,7 +205,20 @@ function CountValue({ value }: { value: string }) {
   );
 }
 
-export function SecurityMapCounters({ counters }: { counters: readonly SecurityMapCounter[] }) {
+/**
+ * The zone the map's times are in (the viewer's chosen zone, else the
+ * browser's): set once by the island's client, read by every list here.
+ */
+export const SecurityMapZone = React.createContext<string>('UTC');
+
+export function SecurityMapCounters({
+  counters,
+  noteAt = null,
+}: {
+  counters: readonly SecurityMapCounter[];
+  /** The instant the day's note names ("Counted from ..."), for its exact UTC. */
+  noteAt?: string | null;
+}) {
   return (
     <dl className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
       {counters.map((c) => (
@@ -222,7 +237,9 @@ export function SecurityMapCounters({ counters }: { counters: readonly SecurityM
             </dd>
           ) : null}
           {c.note && c.id !== 'flagged_window' ? (
-            <dd className="text-muted-foreground basis-full text-[11.5px] leading-4">{c.note}</dd>
+            <dd className="text-muted-foreground basis-full text-[11.5px] leading-4">
+              <ZonedWords at={c.id === 'blocked_today' ? noteAt : null} text={c.note} />
+            </dd>
           ) : null}
         </div>
       ))}
@@ -250,14 +267,18 @@ const PILL_LOOK: Record<
  */
 export function SecurityMapModePill({
   pill,
+  at = null,
 }: {
   pill: { kind: SecurityMapPillKind; text: string };
+  /** The instants its words name, for their exact UTC in the title. */
+  at?: readonly number[] | null;
 }) {
   const look = PILL_LOOK[pill.kind];
   return (
     <div
       data-testid="security-map-pill"
       data-kind={pill.kind}
+      title={at ? (exactUtcOf(at) ?? undefined) : undefined}
       aria-hidden="true"
       className="sm-glass inline-flex h-8 items-center gap-2 rounded-full px-3 text-[12.5px] font-medium"
       style={{ borderColor: look.border, color: look.text }}
@@ -412,8 +433,9 @@ export function SecurityMapTicker({
   row: SecurityMapFeedRow | null;
   reserveRight: number;
 }) {
+  const zone = React.useContext(SecurityMapZone);
   if (!row) return <div className="flex-1" />;
-  const w = securityMapFeedWords(row);
+  const w = securityMapFeedWords(row, zone);
   const look = CATEGORY_LOOKS[w.category];
   // Centred under the globe (the room left of `reserveRight`) when it fits;
   // a longer line takes the reserve first, so it can grow to the whole width
@@ -451,7 +473,7 @@ export function SecurityMapTicker({
           {placeOf(w)}
         </span>
         <span className="shrink-0 font-mono text-[11px]" style={{ color: ON_STAGE.quiet }}>
-          {w.time}
+          <ZonedTime at={w.at} shown={w.time} />
         </span>
       </p>
       <div className="min-w-0" style={{ flex: `1 1 ${reserveRight}px` }} />
@@ -576,13 +598,15 @@ function placeOf(w: { flood: boolean; country: string | null; city: string | nul
 
 /** One entry of the feed: a button that opens its facts (a disclosure, never a live region). */
 function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
-  const w = securityMapFeedWords(row);
+  const zone = React.useContext(SecurityMapZone);
+  const w = securityMapFeedWords(row, zone);
+  const when = <ZonedTime at={w.at} shown={w.time} />;
   const [open, setOpen] = React.useState(false);
   const id = React.useId();
   const look = CATEGORY_LOOKS[w.category];
   const place = placeOf(w);
   const facts: Array<[string, React.ReactNode]> = [
-    ['When', w.time],
+    ['When', when],
     ['Kind', w.categoryLabel],
     ['Outcome', w.outcomeLabel],
     ['What', securityEventReasonLabel(w.reason)],
@@ -621,7 +645,7 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
       >
         <CategoryMark shape={look.shape} colour={look.hex} hollow={w.outcome === 'flagged'} />
         <span className="text-muted-foreground shrink-0 font-mono text-[12px] tabular-nums">
-          {w.time}
+          {when}
         </span>
         <span className="text-foreground min-w-0 truncate">
           {securityEventReasonLabel(w.reason)}
@@ -638,6 +662,7 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
                 kind: w.categoryLabel,
                 place,
                 time: w.time,
+                timeUtc: exactUtcOf(w.at),
                 organization: w.organizationName ?? w.organizationId ?? w.organizationWords,
               },
               organizationId: w.organizationId,
@@ -714,6 +739,7 @@ export function SecurityMapFeedList({
   title: string;
   rows: readonly SecurityMapFeedRow[];
 }) {
+  const zone = React.useContext(SecurityMapZone);
   const headingId = React.useId();
   const listId = React.useId();
   const [all, setAll] = React.useState(false);
@@ -725,7 +751,9 @@ export function SecurityMapFeedList({
         <h3 id={headingId} className="text-foreground text-[13px] font-medium">
           {title}
         </h3>
-        <p className="text-muted-foreground text-[12px]">{SECURITY_MAP_WORDS.feedTimes}</p>
+        <p className="text-muted-foreground text-[12px]" data-testid="security-map-feed-times">
+          {securityMapTimesWords(zone)}
+        </p>
       </div>
       {rows.length === 0 ? (
         <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_WORDS.feedEmpty}</p>
@@ -780,6 +808,7 @@ export function SecurityMapFlaggedList({
   words: string | null;
   tone?: 'stage' | 'page';
 }) {
+  const zone = React.useContext(SecurityMapZone);
   const headingId = React.useId();
   const listId = React.useId();
   const [all, setAll] = React.useState(false);
@@ -807,7 +836,7 @@ export function SecurityMapFlaggedList({
         {SECURITY_MAP_WORDS.flaggedFeedTitle}
       </h3>
       <p className={`${quiet ?? ''} text-[11.5px] leading-snug`} style={quietStyle}>
-        {SECURITY_MAP_WORDS.flaggedFeedNote}
+        {SECURITY_MAP_WORDS.flaggedFeedNote} {securityMapTimesWords(zone)}
       </p>
       <p
         data-testid="security-map-flagged-split"
@@ -834,7 +863,7 @@ export function SecurityMapFlaggedList({
           } ${more && !all ? 'sm-fade-bottom' : ''}`}
         >
           {shown.map((row) => {
-            const w = securityMapFlaggedWords(row);
+            const w = securityMapFlaggedWords(row, zone);
             const look = flaggedLookOf(w.category);
             const cardId = securityResponseCardIdFor(row[5]);
             return (
@@ -866,7 +895,7 @@ export function SecurityMapFlaggedList({
                         never breaks): the line wraps between the place and them. */}
                     {stage ? (
                       <span className="whitespace-nowrap font-mono text-[11px] tabular-nums">
-                        {w.time} · {w.count}
+                        <ZonedTime at={w.at} shown={w.time} /> · {w.count}
                       </span>
                     ) : null}
                   </span>
@@ -875,7 +904,7 @@ export function SecurityMapFlaggedList({
                       className={`${quiet ?? ''} whitespace-nowrap font-mono text-[11.5px] tabular-nums`}
                       style={quietStyle}
                     >
-                      {w.time} · {w.count}
+                      <ZonedTime at={w.at} shown={w.time} /> · {w.count}
                     </span>
                   )}
                   {cardId !== null ? (
@@ -891,6 +920,7 @@ export function SecurityMapFlaggedList({
                               w.category === null ? null : securityEventCategoryLabel(w.category),
                             place: placeOf(w),
                             time: w.time,
+                            timeUtc: exactUtcOf(w.at),
                             organization: null,
                           },
                           organizationId: null,

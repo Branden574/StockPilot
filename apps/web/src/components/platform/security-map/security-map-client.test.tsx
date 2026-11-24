@@ -314,16 +314,23 @@ async function advance(ms: number) {
   });
 }
 
-function mount(poll: (input: unknown) => Promise<unknown>, initial: unknown = wholeRead()) {
+/**
+ * The island as the page hands it: the viewer's chosen zone is UTC unless a
+ * test says otherwise (null: none chosen, the browser's zone then).
+ */
+function mount(
+  poll: (input: unknown) => Promise<unknown>,
+  initial: unknown = wholeRead(),
+  timeZone: string | null = 'UTC',
+) {
   const spy = vi.fn(poll);
-  const view = render(<SecurityMapClient initial={initial} poll={spy} />);
+  const view = render(<SecurityMapClient initial={initial} poll={spy} timeZone={timeZone} />);
   return { spy, ...view };
 }
 
 const lastGlobe = () => h.globeProps[h.globeProps.length - 1]!;
 const today = () =>
-  screen.getByText('Blocked since midnight, your time').parentElement!.querySelector('dd')!
-    .textContent;
+  screen.getByText(/^Blocked since midnight, /).parentElement!.querySelector('dd')!.textContent;
 const chooseFlat = () =>
   fireEvent.click(screen.getByRole('button', { name: SECURITY_MAP_WORDS.flat }));
 
@@ -343,13 +350,14 @@ describe('the reads', () => {
     await advance(0);
     // At once: the server's read could not carry the viewer's midnight.
     expect(spy.mock.calls.map((c) => c[0])).toEqual([
-      { scope: 'whole', dayStart: localDayStart(new Date()) },
+      { scope: 'whole', dayStart: localDayStart(new Date(), 'UTC') },
     ]);
     const first = spy.mock.calls[0]![0] as { dayStart: string };
-    expect(new Date(first.dayStart).getHours()).toBe(0);
+    // Midnight in the zone the times are in (UTC here).
+    expect(new Date(first.dayStart).getUTCHours()).toBe(0);
     await advance(30_000);
     expect(spy.mock.calls.map((c) => c[0])).toEqual([
-      { scope: 'whole', dayStart: localDayStart(new Date()) },
+      { scope: 'whole', dayStart: localDayStart(new Date(), 'UTC') },
       { scope: 'recent', dayStart: null },
     ]);
     // Each read is scheduled when the one before it has landed.
@@ -384,7 +392,7 @@ describe('the reads', () => {
 
   it("the whole window is read again at the viewer's midnight, with the new day, between the 30-second reads", async () => {
     // Opened at 23:52:50: the island reads the whole window at once, and again at 23:57:50.
-    vi.setSystemTime(new Date(2026, 10, 23, 23, 52, 50));
+    vi.setSystemTime(new Date(Date.UTC(2026, 10, 23, 23, 52, 50)));
     const { spy } = mount(async (input) =>
       (input as { scope: string }).scope === 'whole'
         ? dayRead(COUNTED_LIVE)(input)
@@ -406,15 +414,15 @@ describe('the reads', () => {
       'recent',
       'whole',
     ]);
-    expect(new Date(calls[0]!.dayStart!).getDate()).toBe(23);
-    expect(new Date(calls[10]!.dayStart!).getDate()).toBe(23);
+    expect(new Date(calls[0]!.dayStart!).getUTCDate()).toBe(23);
+    expect(new Date(calls[10]!.dayStart!).getUTCDate()).toBe(23);
     const next = new Date(calls[15]!.dayStart!);
-    expect([next.getDate(), next.getHours(), next.getMinutes()]).toEqual([24, 0, 0]);
+    expect([next.getUTCDate(), next.getUTCHours(), next.getUTCMinutes()]).toEqual([24, 0, 0]);
     expect(today()).toBe('9');
   });
 
   it("past midnight, before the new day is read, the day's counter says 'Not counted yet', never the old day's number", async () => {
-    vi.setSystemTime(new Date(2026, 10, 23, 23, 59, 30));
+    vi.setSystemTime(new Date(Date.UTC(2026, 10, 23, 23, 59, 30)));
     let wholeReads = 0;
     mount(async (input) => {
       if ((input as { scope: string }).scope !== 'whole') return recentRead(liveAnswer());
@@ -550,7 +558,7 @@ describe('the reads', () => {
     expect(screen.queryByTestId('security-map-stop')).toBeNull();
     await advance(1);
     expect(screen.getByTestId('security-map-stop').textContent).toMatch(
-      /^Not updating since \d\d:\d\d, your time\. The map is stopped and shows what was read then\.$/,
+      /^Not updating since \d\d:\d\d UTC\. The map is stopped and shows what was read then\.$/,
     );
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
@@ -586,7 +594,7 @@ describe('the reads', () => {
     expect(scopes.filter((scope) => scope === 'recent').length).toBeGreaterThan(15);
     expect(
       screen.getByText(
-        /^Totals and table as of \d\d:\d\d, your time\. The newest count could not be read/,
+        /^Totals and table as of \d\d:\d\d UTC\. The newest count could not be read/,
       ),
     ).toBeInTheDocument();
     // The last ten minutes stay live, against the last good whole read.
@@ -745,7 +753,7 @@ describe('a window the database shortened', () => {
     mount(async () => new Promise(() => {}), wholeRead(shortened()));
     const words = screen.getByTestId('security-map-shortened').textContent ?? '';
     expect(words).toMatch(
-      /^Showing the last 3 hours 52 minutes only, from \d\d:\d\d, your time: there were too many events to count all of the last 24 hours\. Nothing before \d\d:\d\d is in these numbers\.$/,
+      /^Showing the last 3 hours 52 minutes only, from \d\d:\d\d UTC: there were too many events to count all of the last 24 hours\. Nothing before \d\d:\d\d UTC is in these numbers\.$/,
     );
     expect(screen.getByText('Blocked, last 3 hours 52 minutes')).toBeInTheDocument();
     expect(screen.getByText('Flagged, last 3 hours 52 minutes')).toBeInTheDocument();
@@ -1129,7 +1137,7 @@ describe('when the page stops', () => {
     expect(lastGlobe().timing).toBe('replay');
     await advance(60_000);
     expect(screen.getByTestId('security-map-stop').textContent).toMatch(
-      /^Not updating since \d\d:\d\d, your time\. The map is stopped and shows what was read then\.$/,
+      /^Not updating since \d\d:\d\d UTC\. The map is stopped and shows what was read then\.$/,
     );
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
@@ -1291,7 +1299,7 @@ describe('the stage', () => {
     );
     const pill = () => screen.getByTestId('security-map-pill');
     expect(pill().getAttribute('data-kind')).toBe('replay');
-    expect(pill().textContent).toMatch(/^Replay \d\d:\d\d to \d\d:\d\d$/);
+    expect(pill().textContent).toMatch(/^Replay \d\d:\d\d to \d\d:\d\d UTC$/);
     expect(pill().getAttribute('aria-hidden')).toBe('true');
     await advance(0);
     await advance(30_000);
@@ -1305,7 +1313,7 @@ describe('the stage', () => {
     await advance(60_000);
     const pill = screen.getByTestId('security-map-pill');
     expect(pill.getAttribute('data-kind')).toBe('not_updating');
-    expect(pill.textContent).toMatch(/^Not updating since \d\d:\d\d$/);
+    expect(pill.textContent).toMatch(/^Not updating since \d\d:\d\d UTC$/);
   });
 
   it('the ticker: the newest feed entry the stage draws, never one it does not', async () => {
@@ -2014,5 +2022,110 @@ describe("new events past the totals (the coordinator's change, 2026-11-24)", ()
     expect(scopesOf(spy)).toEqual(['whole', 'recent', 'whole']);
     expect(screen.queryByTestId('security-map-recounting')).toBeNull();
     expect(screen.queryByText(/^Nothing was blocked or flagged/)).toBeNull();
+  });
+});
+
+/* ───────────────────────────── the viewer's zone ───────────────────────────── */
+
+describe("the viewer's zone (owner request, 2026-11-24)", () => {
+  const realResolved = Intl.DateTimeFormat.prototype.resolvedOptions;
+  /** The browser's own zone, as Intl reports it. */
+  const browserZone = (zone: string) =>
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(function (
+      this: Intl.DateTimeFormat,
+    ) {
+      return { ...realResolved.call(this), timeZone: zone };
+    });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const feedTime = () =>
+    screen
+      .getAllByRole('button', { name: FEED_ENTRY_SETTINGS })[0]!
+      .querySelector('time') as HTMLElement;
+  const firstDayStart = (spy: ReturnType<typeof vi.fn>) =>
+    (spy.mock.calls[0]![0] as { dayStart: string }).dayStart;
+
+  it("Pacific chosen: every time on the map in Pacific, named, with its exact UTC; the day starts at Pacific's midnight", async () => {
+    // The browser is elsewhere: the chosen zone wins.
+    browserZone('Asia/Tokyo');
+    const { spy } = mount(async (input) => dayRead()(input), wholeRead(), 'America/Los_Angeles');
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('13:58 PST');
+    expect(feedTime()).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
+    expect(feedTime().querySelector('.sr-only')?.textContent).toBe(' (23 Nov 2026, 21:58 UTC)');
+    const flagged = screen.getByTestId('security-map-flagged').querySelector('time')!;
+    expect(flagged.firstChild?.textContent).toBe('13:44 PST');
+    expect(flagged).toHaveAttribute('title', '23 Nov 2026, 21:44 UTC');
+    expect(screen.getByTestId('security-map-feed-times').textContent).toBe(
+      'Times in Pacific Standard Time (America/Los_Angeles).',
+    );
+    expect(screen.getByTestId('security-map-flagged').textContent).toContain(
+      'Times in Pacific Standard Time (America/Los_Angeles).',
+    );
+    expect(document.body.textContent).not.toContain('Times in UTC');
+    // The day: Pacific's midnight is sent, and the label names the zone.
+    expect(firstDayStart(spy)).toBe('2026-11-23T08:00:00.000Z');
+    expect(screen.getByText('Blocked since midnight, PST')).toBeTruthy();
+    const asOf = screen.getByText(/^Totals and table as of /);
+    expect(asOf.textContent).toMatch(/^Totals and table as of 14:00 PST\. /);
+    expect(asOf).toHaveAttribute('title', '23 Nov 2026, 22:00 UTC');
+  });
+
+  it('a zone east of UTC: its own clock, and its own midnight, a day earlier in UTC', async () => {
+    const { spy } = mount(async (input) => dayRead()(input), wholeRead(), 'Europe/Berlin');
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('22:58 GMT+1');
+    expect(firstDayStart(spy)).toBe('2026-11-22T23:00:00.000Z');
+    expect(screen.getByText('Blocked since midnight, GMT+1')).toBeTruthy();
+  });
+
+  it("none chosen: the browser's zone, for the times and the day alike", async () => {
+    browserZone('Asia/Tokyo');
+    const { spy } = mount(async (input) => dayRead()(input), wholeRead(), null);
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('06:58 GMT+9');
+    // 07:00 on the 24th in Tokyo: its day began at 15:00 UTC on the 23rd.
+    expect(firstDayStart(spy)).toBe('2026-11-23T15:00:00.000Z');
+    expect(screen.getByText('Blocked since midnight, GMT+9')).toBeTruthy();
+  });
+
+  it("a zone the runtime does not know is no choice: the browser's zone then", async () => {
+    browserZone('Asia/Tokyo');
+    mount(async (input) => dayRead()(input), wholeRead(), 'America/Nowhere');
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('06:58 GMT+9');
+  });
+
+  it("the next midnight is the chosen zone's: the whole window is read again then", async () => {
+    // 23:52:50 in Pacific on the 23rd; Pacific's midnight is 08:00 UTC on the 24th.
+    vi.setSystemTime(new Date('2026-11-24T07:52:50Z'));
+    browserZone('UTC');
+    const { spy } = mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole'
+          ? dayRead(COUNTED_LIVE)(input)
+          : recentRead(liveAnswer()),
+      wholeRead(),
+      'America/Los_Angeles',
+    );
+    await advance(0);
+    for (let i = 0; i < 14; i += 1) await advance(30_000);
+    await advance(10_000);
+    const calls = spy.mock.calls.map((c) => c[0] as { scope: string; dayStart: string | null });
+    const wholes = calls.filter((c) => c.scope === 'whole');
+    expect(wholes[0]!.dayStart).toBe('2026-11-23T08:00:00.000Z');
+    expect(wholes[wholes.length - 1]!.dayStart).toBe('2026-11-24T08:00:00.000Z');
+  });
+
+  it("the card opened from an entry says its time in the viewer's zone, with the exact UTC", async () => {
+    mount(async () => wholeRead(), wholeRead(), 'America/Los_Angeles');
+    const panel = await openCard(respond('Request for a settings file'));
+    const when = [
+      ...within(panel).getByTestId('security-response-context').querySelectorAll('dt'),
+    ].find((dt) => dt.textContent === 'When')!.nextElementSibling!;
+    expect(when.firstChild?.textContent).toBe('13:58 PST');
+    expect(when).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
+    expect(when.querySelector('.sr-only')?.textContent).toBe(' (23 Nov 2026, 21:58 UTC)');
   });
 });

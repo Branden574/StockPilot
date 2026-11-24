@@ -190,6 +190,9 @@ export function SecurityResponsePanel({
     [SECURITY_RESPONSE_WORDS.when, context.time],
     [SECURITY_RESPONSE_WORDS.organization, context.organization],
   ].filter((f): f is [string, string] => typeof f[1] === 'string' && f[1].length > 0);
+  // The time's exact instant in UTC, when the entry gave one that says more than the time shown.
+  const utc =
+    context.timeUtc && context.time && !context.time.endsWith(' UTC') ? context.timeUtc : null;
 
   const parts = {
     what: (
@@ -293,7 +296,15 @@ export function SecurityResponsePanel({
               {facts.map(([label, value]) => (
                 <React.Fragment key={label}>
                   <dt className="text-muted-foreground">{label}</dt>
-                  <dd className="text-foreground min-w-0 [overflow-wrap:anywhere]">{value}</dd>
+                  <dd
+                    className="text-foreground min-w-0 [overflow-wrap:anywhere]"
+                    title={label === SECURITY_RESPONSE_WORDS.when && utc ? utc : undefined}
+                  >
+                    {value}
+                    {label === SECURITY_RESPONSE_WORDS.when && utc ? (
+                      <span className="sr-only"> ({utc})</span>
+                    ) : null}
+                  </dd>
                 </React.Fragment>
               ))}
             </dl>

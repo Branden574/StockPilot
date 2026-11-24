@@ -21,9 +21,12 @@ import {
   securityMapShortenedWords,
   securityMapStopReason,
   securityMapStopWords,
+  runtimeTimeZone,
+  usableTimeZone,
 } from '@stockpilot/core';
 
 import { SecurityResponseHost } from '../security-response/security-response-host';
+import { ZonedWords } from '../zoned-time';
 
 import type { StageInsets } from './globe-renderer';
 import {
@@ -46,6 +49,7 @@ import { SecurityMapFlat, FLAT_MAP_CSS } from './security-map-flat';
 import { SecurityMapGlobe } from './security-map-globe';
 import {
   SecurityMapCounters,
+  SecurityMapZone,
   SecurityMapCountryTable,
   SecurityMapFeedList,
   SecurityMapFlaggedList,
@@ -82,6 +86,12 @@ export interface SecurityMapClientProps {
   initial: unknown;
   /** The read the page polls. The Server Action unless a test hands another. */
   poll?: SecurityMapPoll;
+  /**
+   * The zone the viewer chose (their organization's Timezone setting, read on
+   * the server after the gate), or null for none: the browser's zone then.
+   * Every time on the map is printed in it, and its midnight starts the day.
+   */
+  timeZone?: string | null;
 }
 
 function subscribeVisibility(onChange: () => void): () => void {
@@ -131,12 +141,16 @@ const STAGE_BOTTOM_BAR_PX = 76;
 export function SecurityMapClient({
   initial,
   poll = pollPlatformSecurityMapAction,
+  timeZone = null,
 }: SecurityMapClientProps) {
+  // The chosen zone, else the browser's. The island renders only in the
+  // browser (ssr: false), so the browser's zone never meets a server render.
+  const zone = React.useMemo(() => usableTimeZone(timeZone) ?? runtimeTimeZone(), [timeZone]);
   const hidden = useDocumentHidden();
   const reducedMotion = useMedia(REDUCED_MOTION, true);
   const wide = useMedia(WIDE, false);
   const notPhone = useMedia(NOT_PHONE, false);
-  const { state, plan } = useSecurityMapPoll(initial, poll, hidden);
+  const { state, plan } = useSecurityMapPoll(initial, poll, hidden, zone);
   const [paused, setPaused] = React.useState(false);
   const [choice, setChoice] = React.useState<MapViewChoice>('globe');
   const [globe, setGlobe] = React.useState<GlobeState>('ok');
@@ -197,9 +211,14 @@ export function SecurityMapClient({
 
   // The viewer's day as of the newest read: once it has turned since the
   // whole window was counted, the day's counter says so until the new day is read.
-  const dayStartNow = state.lastPollAt === null ? null : localDayStart(new Date(state.lastPollAt));
-  const counters = securityMapCounters(state.whole, state.dayStartAsked, { dayStartNow });
-  const shortened = securityMapShortenedWords(state.whole);
+  const dayStartNow =
+    state.lastPollAt === null ? null : localDayStart(new Date(state.lastPollAt), zone);
+  const counters = securityMapCounters(state.whole, state.dayStartAsked, {
+    dayStartNow,
+    timeZone: zone,
+    now: state.lastPollAt ?? undefined,
+  });
+  const shortened = securityMapShortenedWords(state.whole, zone);
   const legend = securityMapLegend(state.whole);
   const flaggedWords = securityMapFlaggedListWords(
     state.whole,
@@ -220,9 +239,24 @@ export function SecurityMapClient({
   );
   const empty = securityMapEmptyWords(state.whole, behind);
   const stepIndex = Math.max(0, stage.stepIndex);
-  const modeWords = securityMapModeWords(plan, state.whole, stepIndex);
-  const pill = securityMapPillWords(plan, stop, state.health, stepIndex);
-  const stopWords = securityMapStopWords(stop, state.health);
+  const modeWords = securityMapModeWords(plan, state.whole, stepIndex, zone);
+  const pill = securityMapPillWords(plan, stop, state.health, stepIndex, zone);
+  const stopWords = securityMapStopWords(stop, state.health, zone);
+  // The instants those words name, for their exact UTC beside them.
+  const replayStep =
+    plan.mode === 'replay'
+      ? plan.steps[Math.max(0, Math.min(stepIndex, plan.steps.length - 1))]
+      : undefined;
+  const stepAt = replayStep ? [replayStep.fromMs, replayStep.toMs] : null;
+  const lastGoodAt = state.health.lastGoodAt;
+  const pillAt =
+    pill.kind === 'not_updating'
+      ? lastGoodAt === null
+        ? null
+        : [lastGoodAt]
+      : pill.kind === 'replay'
+        ? stepAt
+        : null;
   const refused = state.refusedWindow ? securityMapRefusedWindowWords(state.refusedWindow) : null;
 
   // The stage's height: everything from the counters to the caption's end
@@ -292,133 +326,143 @@ export function SecurityMapClient({
   );
 
   return (
-    <SecurityResponseHost>
-      <div ref={rootRef} className="flex min-w-0 flex-col gap-2" data-testid="security-map">
-        <style>{FLAT_MAP_CSS + STAGE_CSS}</style>
+    <SecurityMapZone.Provider value={zone}>
+      <SecurityResponseHost>
+        <div ref={rootRef} className="flex min-w-0 flex-col gap-2" data-testid="security-map">
+          <style>{FLAT_MAP_CSS + STAGE_CSS}</style>
 
-        {shortened ? (
-          <p
-            data-testid="security-map-shortened"
-            className="border-border bg-muted text-foreground rounded-md border px-3 py-2 text-[13px] font-medium"
+          {shortened ? (
+            <p
+              data-testid="security-map-shortened"
+              className="border-border bg-muted text-foreground rounded-md border px-3 py-2 text-[13px] font-medium"
+            >
+              <ZonedWords at={state.whole?.from ?? null} text={shortened} />
+            </p>
+          ) : null}
+
+          <SecurityMapCounters counters={counters} noteAt={state.whole?.from ?? null} />
+
+          <div
+            ref={stageRef}
+            data-testid="security-map-stage"
+            data-layout={wide ? 'wide' : notPhone ? 'medium' : 'phone'}
+            className="sm-stage relative h-[420px] w-full min-w-0 overflow-hidden rounded-xl sm:h-[clamp(420px,68vh,760px)]"
+            style={notPhone && stageHeight !== null ? { height: stageHeight } : undefined}
           >
-            {shortened}
-          </p>
-        ) : null}
-
-        <SecurityMapCounters counters={counters} />
-
-        <div
-          ref={stageRef}
-          data-testid="security-map-stage"
-          data-layout={wide ? 'wide' : notPhone ? 'medium' : 'phone'}
-          className="sm-stage relative h-[420px] w-full min-w-0 overflow-hidden rounded-xl sm:h-[clamp(420px,68vh,760px)]"
-          style={notPhone && stageHeight !== null ? { height: stageHeight } : undefined}
-        >
-          <div className="absolute inset-0" aria-hidden="true">
-            {shown.view === 'globe' ? (
-              <SecurityMapGlobe
-                arcs={stage.drawn}
-                timing={stage.timing}
-                startedAt={startedAt}
-                stepMs={SECURITY_MAP_REPLAY_STEP_MS}
-                target={target}
-                mayTurn={stop === null || stop === 'nothing_to_play'}
-                still={reducedMotion}
-                hidden={hidden}
-                heat={stage.heat}
-                labels={labels}
-                showLabels={notPhone}
-                insets={insets}
-                onUnavailable={onUnavailable}
-                onLost={onLost}
-              />
-            ) : (
-              <div
-                className="flex h-full w-full items-center justify-center p-3 sm:p-6"
-                style={wide ? { paddingRight: PANEL_WIDTH + PANEL_MARGIN * 2 } : undefined}
-              >
-                <SecurityMapFlat
+            <div className="absolute inset-0" aria-hidden="true">
+              {shown.view === 'globe' ? (
+                <SecurityMapGlobe
                   arcs={stage.drawn}
                   timing={stage.timing}
-                  stepKey={stage.timing === 'replay' ? step.index : 0}
+                  startedAt={startedAt}
+                  stepMs={SECURITY_MAP_REPLAY_STEP_MS}
+                  target={target}
+                  mayTurn={stop === null || stop === 'nothing_to_play'}
+                  still={reducedMotion}
+                  hidden={hidden}
+                  heat={stage.heat}
+                  labels={labels}
+                  showLabels={notPhone}
+                  insets={insets}
+                  onUnavailable={onUnavailable}
+                  onLost={onLost}
+                />
+              ) : (
+                <div
+                  className="flex h-full w-full items-center justify-center p-3 sm:p-6"
+                  style={wide ? { paddingRight: PANEL_WIDTH + PANEL_MARGIN * 2 } : undefined}
+                >
+                  <SecurityMapFlat
+                    arcs={stage.drawn}
+                    timing={stage.timing}
+                    stepKey={stage.timing === 'replay' ? step.index : 0}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="sm-vignette pointer-events-none absolute inset-0" aria-hidden="true" />
+
+            <div className="absolute left-3 top-3 sm:left-4 sm:top-4">
+              <SecurityMapModePill pill={pill} at={pillAt} />
+            </div>
+            {notPhone ? (
+              <div className="absolute right-3 top-3 sm:right-4 sm:top-4">{controls}</div>
+            ) : null}
+            {wide ? (
+              <div
+                className="absolute bottom-[68px] top-[62px] flex flex-col"
+                style={{ right: PANEL_MARGIN, width: PANEL_WIDTH }}
+              >
+                {flaggedList}
+              </div>
+            ) : null}
+            {notPhone ? (
+              <div
+                className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-4 px-4 pb-3.5"
+                aria-hidden="true"
+              >
+                <SecurityMapStageLegend items={legend} />
+                <SecurityMapTicker
+                  row={tickerRow}
+                  reserveRight={wide ? PANEL_WIDTH + PANEL_MARGIN : 0}
                 />
               </div>
-            )}
+            ) : null}
           </div>
-          <div className="sm-vignette pointer-events-none absolute inset-0" aria-hidden="true" />
 
-          <div className="absolute left-3 top-3 sm:left-4 sm:top-4">
-            <SecurityMapModePill pill={pill} />
-          </div>
-          {notPhone ? (
-            <div className="absolute right-3 top-3 sm:right-4 sm:top-4">{controls}</div>
-          ) : null}
-          {wide ? (
+          {notPhone ? null : <div className="flex flex-wrap gap-2">{controls}</div>}
+          <div className="flex min-w-0">
             <div
-              className="absolute bottom-[68px] top-[62px] flex flex-col"
-              style={{ right: PANEL_MARGIN, width: PANEL_WIDTH }}
+              ref={captionRef}
+              className="text-muted-foreground grid min-w-0 flex-1 gap-x-8 text-[12.5px] leading-snug lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
+              data-testid="security-map-caption"
             >
-              {flaggedList}
-            </div>
-          ) : null}
-          {notPhone ? (
-            <div
-              className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-4 px-4 pb-3.5"
-              aria-hidden="true"
-            >
-              <SecurityMapStageLegend items={legend} />
-              <SecurityMapTicker
-                row={tickerRow}
-                reserveRight={wide ? PANEL_WIDTH + PANEL_MARGIN : 0}
-              />
-            </div>
-          ) : null}
-        </div>
-
-        {notPhone ? null : <div className="flex flex-wrap gap-2">{controls}</div>}
-        <div className="flex min-w-0">
-          <div
-            ref={captionRef}
-            className="text-muted-foreground grid min-w-0 flex-1 gap-x-8 text-[12.5px] leading-snug lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
-            data-testid="security-map-caption"
-          >
-            {/* Always there, so a screen reader is told when the map stops and why
+              {/* Always there, so a screen reader is told when the map stops and why
               (review S9): "Not updating since ...", "Sign in again". Polite. */}
-            <div role="status" data-testid="security-map-stop-status" className="lg:col-span-2">
-              {stopWords ? (
-                <p data-testid="security-map-stop" className="text-foreground mb-1 font-medium">
-                  {stopWords}
+              <div role="status" data-testid="security-map-stop-status" className="lg:col-span-2">
+                {stopWords ? (
+                  <p data-testid="security-map-stop" className="text-foreground mb-1 font-medium">
+                    <ZonedWords
+                      at={stop === 'not_updating' && lastGoodAt !== null ? [lastGoodAt] : null}
+                      text={stopWords}
+                    />
+                  </p>
+                ) : null}
+                {behind ? (
+                  <p data-testid="security-map-recounting" className="text-foreground mb-1">
+                    {SECURITY_MAP_WORDS.recounting}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex min-w-0 flex-col gap-1">
+                <p data-testid="security-map-mode">
+                  <ZonedWords at={stepAt} text={modeWords} />
                 </p>
-              ) : null}
-              {behind ? (
-                <p data-testid="security-map-recounting" className="text-foreground mb-1">
-                  {SECURITY_MAP_WORDS.recounting}
-                </p>
-              ) : null}
+                {shown.note ? <p data-testid="security-map-view-note">{shown.note}</p> : null}
+              </div>
+              <p className="mt-1 lg:mt-0">
+                <ZonedWords
+                  at={state.whole?.generatedAt ?? null}
+                  text={securityMapAsOfWords(state.whole, zone, state.wholeFailures > 0)}
+                />
+              </p>
             </div>
-            <div className="flex min-w-0 flex-col gap-1">
-              <p data-testid="security-map-mode">{modeWords}</p>
-              {shown.note ? <p data-testid="security-map-view-note">{shown.note}</p> : null}
-            </div>
-            <p className="mt-1 lg:mt-0">
-              {securityMapAsOfWords(state.whole, undefined, state.wholeFailures > 0)}
-            </p>
+          </div>
+
+          {wide ? null : flaggedList}
+
+          {refused ? <p className="text-destructive text-[13px]">{refused}</p> : null}
+          {empty ? <p className="text-foreground text-[13px]">{empty}</p> : null}
+
+          <SecurityMapLegend items={legend} />
+          <SecurityMapNotes lines={noteLines} />
+
+          <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+            <SecurityMapFeedList title={SECURITY_MAP_WORDS.feedTitle} rows={state.feed} />
+            <SecurityMapCountryTable whole={state.whole} behind={behind} />
           </div>
         </div>
-
-        {wide ? null : flaggedList}
-
-        {refused ? <p className="text-destructive text-[13px]">{refused}</p> : null}
-        {empty ? <p className="text-foreground text-[13px]">{empty}</p> : null}
-
-        <SecurityMapLegend items={legend} />
-        <SecurityMapNotes lines={noteLines} />
-
-        <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-          <SecurityMapFeedList title={SECURITY_MAP_WORDS.feedTitle} rows={state.feed} />
-          <SecurityMapCountryTable whole={state.whole} behind={behind} />
-        </div>
-      </div>
-    </SecurityResponseHost>
+      </SecurityResponseHost>
+    </SecurityMapZone.Provider>
   );
 }

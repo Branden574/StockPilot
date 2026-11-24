@@ -24,7 +24,10 @@ export interface SecurityResponseContext {
   /** The kind's name, when the place it was opened from shows one. */
   kind: string | null;
   place: string | null;
+  /** The time as the entry shows it, in the viewer's zone ("13:58 PST"). */
   time: string | null;
+  /** The same instant, exactly, in UTC ("23 Nov 2026, 21:58 UTC"): the title, and for screen readers. */
+  timeUtc?: string | null;
   /** The organization's name (or its id, or "No organization"), where the list shows it. */
   organization: string | null;
 }

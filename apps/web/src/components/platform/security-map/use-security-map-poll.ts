@@ -268,6 +268,8 @@ export function useSecurityMapPoll(
   initial: unknown,
   poll: SecurityMapPoll,
   hidden: boolean,
+  /** The zone the page's times are in: its midnight starts the day the read counts. */
+  zone?: string,
 ): SecurityMapPollResult {
   const [state, setState] = useState(() => initialPollState(initial, Date.now()));
   const plan = useMemo(
@@ -316,7 +318,7 @@ export function useSecurityMapPoll(
         lastWholeTryAt: state.lastWholeTryAt,
         wholeFailures: state.wholeFailures,
         dayEndsAt: state.dayStartAsked
-          ? nextLocalMidnight(state.whole?.whole.dayStart ?? null)
+          ? nextLocalMidnight(state.whole?.whole.dayStart ?? null, zone)
           : null,
         wholeWanted: wholeWanted.current,
         dayUnread: !state.dayStartAsked,
@@ -338,7 +340,7 @@ export function useSecurityMapPoll(
           wholeWanted.current = false;
           wholeStartedAt.current = Date.now();
         }
-        const dayStart = scope === 'whole' ? localDayStart(new Date()) : null;
+        const dayStart = scope === 'whole' ? localDayStart(new Date(), zone) : null;
         readId.current += 1;
         const id = readId.current;
         limit.current = setTimeout(() => {
@@ -369,7 +371,7 @@ export function useSecurityMapPoll(
       Math.max(0, step.at - Date.now()),
     );
     return () => clearTimeout(timer);
-  }, [hidden, state, poll, replaying]);
+  }, [hidden, state, poll, replaying, zone]);
 
   return { state, plan };
 }
