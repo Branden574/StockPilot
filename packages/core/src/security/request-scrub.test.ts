@@ -197,18 +197,18 @@ const NOISE = [
   '\u001b',
   '\u007f',
   '\u0085',
-  '​',
-  '‌',
-  '‍',
-  '⁠',
-  '﻿',
-  '­',
-  '‪',
-  '‮',
-  '⁦',
-  '⁩',
-  '؜',
-  ' ',
+  '\u200b',
+  '\u200c',
+  '\u200d',
+  '\u2060',
+  '\ufeff',
+  '\u00ad',
+  '\u202a',
+  '\u202e',
+  '\u2066',
+  '\u2069',
+  '\u061c',
+  '\u2028',
   'é',
   '中',
   '\u{1f600}',
@@ -525,10 +525,10 @@ describe('each rule', () => {
     expect(t('/x/%4123456/.env')).toBe('/x/<number>/.env');
   });
   it('control, zero-width and bidi characters: taken out when literal, kept as escapes, never let a value through', () => {
-    expect(t('/x/a‮b​c/.env')).toBe('/x/abc/.env');
+    expect(t('/x/a\u202eb\u200bc/.env')).toBe('/x/abc/.env');
     expect(t('/x/a\nb/.env')).toBe('/x/ab/.env');
     expect(t('/x/a%0D%0Ab/.env')).toBe('/x/a%0D%0Ab/.env');
-    expect(t('/x/123​456/.env')).toBe('/x/<number>/.env');
+    expect(t('/x/123\u200b456/.env')).toBe('/x/<number>/.env');
     expect(t('/x/123%E2%80%8B456/.env')).toBe('/x/<number>/.env');
     expect(t('/x/café/.env')).toBe('/x/caf?/.env');
     expect(t('/x/caf%C3%A9/.env')).toBe('/x/caf%C3%A9/.env');
@@ -694,7 +694,7 @@ describe('generated hostile inputs (seeded)', () => {
 
   it('random printable and non-printable text never yields anything unstorable', () => {
     const seq = sequence(0x5eed04);
-    const alphabet = `${LOWER}${UPPER}${DIGITS}%@./-_=+;&?#:[]()<> ​‮é\n`;
+    const alphabet = `${LOWER}${UPPER}${DIGITS}%@./-_=+;&?#:[]()<> \u200b\u202eé\n`;
     for (let i = 0; i < 2_000; i++) {
       const raw = seq.text(alphabet, seq.int(0, 900));
       const target = scrubRequestTarget(`/${raw}`);
