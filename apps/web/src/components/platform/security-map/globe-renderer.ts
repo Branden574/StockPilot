@@ -32,7 +32,10 @@ import {
   dragGlobe,
   limbFade,
   lonLatToVector,
+  LABEL_LEADER,
+  LABEL_SPOTS,
   placeLabels,
+  stockpilotSpots,
   pointAlong,
   projectToStage,
   ribbonIndexes,
@@ -43,7 +46,9 @@ import {
   writeRibbon,
   writeStars,
   type ArcTiming,
+  type GlobeFacing,
   type LabelAnchor,
+  type LabelSpot,
   type PlacedLabel,
   type ScreenBox,
   type StageCamera,
@@ -82,8 +87,8 @@ export interface GlobeScene {
   startedAt: number;
   /** A replay step's length: its arcs' tracks fade out as it ends. */
   stepMs: number;
-  /** The yaw to face (globe-math facingYaw), or null to stay. */
-  target: number | null;
+  /** Where to face, yaw and tilt and the sway's reach (globe-math facingOf), or null to stay. */
+  target: GlobeFacing | null;
   /** Whether the globe may turn on its own (nothing stops the play). */
   mayTurn: boolean;
   /** Reduced motion: nothing moves on its own, no pulse, no flight. */
@@ -134,6 +139,8 @@ export const GLOBE_MAX_ARCS = 40;
 
 const DOT_RADIUS = 1.003;
 const MARK_RADIUS = 1.004;
+/** Half of StockPilot's mark on the screen, with its inner ring (CSS px). */
+const HOME_MARK_HALF = 9;
 const CAMERA_FOV = 30;
 const HALO_SIZE = 1.7;
 /** Frames slower than this, for this long, drop the scenery first. */
@@ -1012,12 +1019,30 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
   let radiusPx = 1;
   let slowFor = 0;
   let lowQuality = false;
-  let labels: Array<{ label: GlobeLabel; point: Float32Array; anchor: LabelAnchor; fade: number }> =
-    [];
+  let labels: Array<{
+    label: GlobeLabel;
+    point: Float32Array;
+    key: string;
+    anchor: LabelAnchor;
+    fade: number;
+  }> = [];
   let anchors: LabelAnchor[] = [];
   const placed: PlacedLabel[] = [];
   const reserved: ScreenBox[] = [];
   const projected = new Float32Array(3);
+  const projectedEnd = new Float32Array(3);
+  const scratchPoint = new Float32Array(3);
+  // How far each source country's marks reach from its point (CSS px), by "lon,lat".
+  const markReach = new Map<string, number>();
+  // The boxes of the marks on the screen this frame: no label may cover one.
+  const markBoxPool = Array.from({ length: GLOBE_MAX_ARCS + 1 }, () => ({
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+  }));
+  const markBoxes: ScreenBox[] = [];
+  const homeSpots: LabelSpot[] = [];
   const stageCamera: StageCamera = {
     distance: 5,
     tanHalf: Math.tan(((CAMERA_FOV / 2) * Math.PI) / 180),
@@ -1039,6 +1064,7 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
 
   function writeArcs(next: GlobeScene): void {
     count = Math.min(GLOBE_MAX_ARCS, next.arcs.length);
+    markReach.clear();
     // Marks that share a country stand a few pixels apart, round their point.
     const sharing = new Map<string, number[]>();
     for (let i = 0; i < count; i += 1) {
@@ -1096,6 +1122,8 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
       const angle = (place / group.length) * Math.PI * 2 + Math.PI / 4;
       markNudges[i * 2] = Math.cos(angle) * spread;
       markNudges[i * 2 + 1] = Math.sin(angle) * spread;
+      const key = `${arc.from[0]},${arc.from[1]}`;
+      markReach.set(key, Math.max(markReach.get(key) ?? 0, spread + (markSizes[i] as number) / 2));
     }
     for (const name of ['position', 'previous', 'next', 'side', 'along', 'distance'] as const) {
       arcGeometry.getAttribute(name).needsUpdate = true;
@@ -1129,23 +1157,83 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
     headAlphaAttribute.needsUpdate = true;
   }
 
-  /** The labels: each next to its place, clear of each other and of the island's panels. */
+  /** The marks on the screen this frame, as boxes (StockPilot's too). */
+  function writeMarkBoxes(): void {
+    markBoxes.length = 0;
+    const limbCos = 1 / stageCamera.distance;
+    const seenFade = (8 * Math.PI) / 180;
+    for (let i = 0; i < count; i += 1) {
+      for (let k = 0; k < 3; k += 1) scratchPoint[k] = markPositions[i * 3 + k] as number;
+      projectToStage(scratchPoint, motion.yaw, motion.pitch, stageCamera, projected);
+      if (limbFade(projected[2] as number, limbCos, seenFade) <= 0.05) continue;
+      const half = (markSizes[i] as number) / 2 + 1;
+      const box = markBoxPool[i]!;
+      box.x = (projected[0] as number) + (markNudges[i * 2] as number) - half;
+      box.y = (projected[1] as number) - (markNudges[i * 2 + 1] as number) - half;
+      box.w = half * 2;
+      box.h = half * 2;
+      markBoxes.push(box);
+    }
+    projectToStage(at, motion.yaw, motion.pitch, stageCamera, projected);
+    if (limbFade(projected[2] as number, limbCos, seenFade) > 0.05) {
+      const box = markBoxPool[GLOBE_MAX_ARCS]!;
+      box.x = (projected[0] as number) - HOME_MARK_HALF;
+      box.y = (projected[1] as number) - HOME_MARK_HALF;
+      box.w = HOME_MARK_HALF * 2;
+      box.h = HOME_MARK_HALF * 2;
+      markBoxes.push(box);
+    }
+  }
+
+  /**
+   * StockPilot's label's spots, best first: away from the last stretch of the
+   * arcs coming in (globe-math stockpilotSpots), keeping its side while that
+   * stays good enough.
+   */
+  function writeHomeSpots(held: LabelSpot | null): void {
+    projectToStage(at, motion.yaw, motion.pitch, stageCamera, projectedEnd);
+    let dx = 0;
+    let dy = 0;
+    for (let i = 0; i < count; i += 1) {
+      // A point an eighth of the way back along the arc from StockPilot.
+      const points = slots[i]!.points;
+      const back = (ARC_SEGMENTS - 9) * 3;
+      for (let k = 0; k < 3; k += 1) scratchPoint[k] = points[back + k] as number;
+      projectToStage(scratchPoint, motion.yaw, motion.pitch, stageCamera, projected);
+      const ex = (projected[0] as number) - (projectedEnd[0] as number);
+      const ey = (projected[1] as number) - (projectedEnd[1] as number);
+      const length = Math.hypot(ex, ey);
+      if (length < 1e-3) continue;
+      dx += ex / length;
+      dy += ey / length;
+    }
+    stockpilotSpots(dx, dy, held, homeSpots);
+  }
+
+  /** The labels: each beside its marks, clear of each other, of every mark and of the island's panels. */
   function writeLabels(): void {
     if (labels.length === 0) return;
+    writeMarkBoxes();
     for (let i = 0; i < labels.length; i += 1) {
       const entry = labels[i]!;
       projectToStage(entry.point, motion.yaw, motion.pitch, stageCamera, projected);
+      const home = entry.label.kind === 'stockpilot';
       entry.fade = limbFade(
         projected[2] as number,
         1 / stageCamera.distance,
-        ((entry.label.kind === 'stockpilot' ? 12 : 8) * Math.PI) / 180,
+        ((home ? 12 : 8) * Math.PI) / 180,
       );
       const anchor = entry.anchor;
       anchor.x = projected[0] as number;
       anchor.y = projected[1] as number;
       anchor.visible = entry.fade > 0.05;
+      anchor.reach = (home ? HOME_MARK_HALF : (markReach.get(entry.key) ?? 6)) + LABEL_LEADER + 1;
+      if (home) {
+        writeHomeSpots(placed[i]?.side ?? null);
+        anchor.spots = homeSpots;
+      }
     }
-    placeLabels(anchors, { w: width, h: height }, reserved, placed);
+    placeLabels(anchors, { w: width, h: height }, reserved, markBoxes, placed);
     for (let i = 0; i < labels.length; i += 1) {
       const entry = labels[i]!;
       const spot = placed[i]!;
@@ -1153,6 +1241,9 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
       const style = entry.label.el.style;
       const transform = `translate3d(${spot.x.toFixed(1)}px, ${spot.y.toFixed(1)}px, 0)`;
       if (style.transform !== transform) style.transform = transform;
+      // The side its leader line comes from (the stage's CSS draws the line).
+      const side = spot.side ?? '';
+      if (entry.label.el.dataset.side !== side) entry.label.el.dataset.side = side;
       const o = opacity.toFixed(2);
       if (style.opacity !== o) style.opacity = o;
       const visibility = opacity > 0.01 ? 'visible' : 'hidden';
@@ -1357,11 +1448,11 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
           y: 0,
           w: label.el.offsetWidth,
           h: label.el.offsetHeight,
+          reach: LABEL_LEADER,
           visible: false,
-          spots:
-            label.kind === 'stockpilot' ? ['right', 'left'] : ['right', 'left', 'above', 'below'],
+          spots: LABEL_SPOTS,
         };
-        return { label, point, anchor, fade: 0 };
+        return { label, point, key: `${label.lonLat[0]},${label.lonLat[1]}`, anchor, fade: 0 };
       });
       anchors = labels.map((entry) => entry.anchor);
       if (running && !lost && frame === 0) draw(performance.now());

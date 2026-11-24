@@ -4,7 +4,7 @@ import * as React from 'react';
 
 import { SECURITY_MAP_WORDS } from '@stockpilot/core';
 
-import type { ArcTiming } from './globe-math';
+import type { ArcTiming, GlobeFacing } from './globe-math';
 import type { GlobeHandle, GlobeLabel, StageInsets } from './globe-renderer';
 import { PANEL, globeArcsOf, webglAvailable, type DrawnArc, type SourceLabel } from './map-model';
 import { STOCKPILOT_LON_LAT, landDots, landOwners } from './world-geometry';
@@ -47,7 +47,7 @@ export function SecurityMapGlobe({
   timing: ArcTiming;
   startedAt: number;
   stepMs: number;
-  target: number;
+  target: GlobeFacing;
   mayTurn: boolean;
   /** Reduced motion: the globe is drawn still. */
   still: boolean;

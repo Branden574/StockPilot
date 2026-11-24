@@ -24,30 +24,41 @@ const r = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('./globe-renderer', () => {
-  r.imported += 1;
-  return {
-    createGlobe: vi.fn(() => {
-      r.handle = {
-        show: vi.fn(),
-        setRunning: vi.fn(),
-        resize: vi.fn(),
-        setLabels: vi.fn(),
-        dispose: vi.fn(),
-      };
-      return r.handle;
-    }),
-  };
-});
+/** The renderer's stub; its factory counts each time the renderer is loaded. */
+function mockRenderer() {
+  vi.doMock('./globe-renderer', () => {
+    r.imported += 1;
+    return {
+      createGlobe: vi.fn(() => {
+        r.handle = {
+          show: vi.fn(),
+          setRunning: vi.fn(),
+          resize: vi.fn(),
+          setLabels: vi.fn(),
+          dispose: vi.fn(),
+        };
+        return r.handle;
+      }),
+    };
+  });
+}
 
-import { SecurityMapGlobe } from './security-map-globe';
+/**
+ * The wrapper, loaded afresh for each test (the module registry is reset and
+ * the renderer's stub registered again before each), so the stub's factory
+ * runs once in each test that loads the renderer, and `r.imported` counts
+ * that test's loads alone, whatever order the tests run in (review round 2, N5).
+ */
+async function wrapper() {
+  return (await import('./security-map-globe')).SecurityMapGlobe;
+}
 
 const props = (over: Record<string, unknown> = {}) => ({
   arcs: [],
   timing: 'live' as const,
   startedAt: 0,
   stepMs: 2500,
-  target: 0,
+  target: { yaw: 0, pitch: 0.3, sway: 0.2 },
   mayTurn: true,
   still: false,
   hidden: false,
@@ -64,6 +75,8 @@ let gl: unknown = null;
 let lost = 0;
 
 beforeEach(() => {
+  vi.resetModules();
+  mockRenderer();
   r.imported = 0;
   r.handle = null;
   lost = 0;
@@ -86,6 +99,7 @@ async function settle() {
 describe('the globe wrapper', () => {
   it('no WebGL 2: the flat map is asked for, and the renderer (three.js) is never loaded', async () => {
     gl = null;
+    const SecurityMapGlobe = await wrapper();
     const p = props();
     render(<SecurityMapGlobe {...p} />);
     await settle();
@@ -96,6 +110,7 @@ describe('the globe wrapper', () => {
 
   it('WebGL 2: the test context is given back, the renderer is loaded and handed the play and the labels; freed on unmount', async () => {
     gl = { getExtension: () => ({ loseContext: () => (lost += 1) }) };
+    const SecurityMapGlobe = await wrapper();
     const p = props();
     const view = render(<SecurityMapGlobe {...p} />);
     await settle();
@@ -103,7 +118,12 @@ describe('the globe wrapper', () => {
     expect(r.imported).toBe(1);
     expect(p.onUnavailable).not.toHaveBeenCalled();
     expect(r.handle!.show).toHaveBeenCalledWith(
-      expect.objectContaining({ arcs: [], timing: 'live', target: 0, still: false }),
+      expect.objectContaining({
+        arcs: [],
+        timing: 'live',
+        target: { yaw: 0, pitch: 0.3, sway: 0.2 },
+        still: false,
+      }),
     );
     const labels = r.handle!.setLabels.mock.calls.at(-1)![0] as Array<{ kind: string }>;
     expect(labels.map((l) => l.kind)).toEqual(['stockpilot', 'source']);
@@ -120,9 +140,31 @@ describe('the globe wrapper', () => {
     expect(r.handle!.dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("no WebGL 2 after a test that loaded the renderer: still never loaded (the count is this test's own)", async () => {
+    gl = { getExtension: () => null };
+    const First = await wrapper();
+    const first = render(<First {...props()} />);
+    await settle();
+    expect(r.imported).toBe(1);
+    first.unmount();
+    vi.resetModules();
+    mockRenderer();
+    r.imported = 0;
+    gl = null;
+    const SecurityMapGlobe = await wrapper();
+    const p = props();
+    render(<SecurityMapGlobe {...p} />);
+    await settle();
+    expect(p.onUnavailable).toHaveBeenCalledTimes(1);
+    expect(r.imported).toBe(0);
+  });
+
   it('a phone: no words on the globe', async () => {
     gl = { getExtension: () => null };
+    const SecurityMapGlobe = await wrapper();
     render(<SecurityMapGlobe {...props({ showLabels: false })} />);
+    await settle();
+    expect(r.imported).toBe(1);
     await settle();
     expect(screen.queryByTestId('security-map-label-stockpilot')).toBeNull();
     expect(screen.queryByTestId('security-map-label-source')).toBeNull();

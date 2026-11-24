@@ -13,6 +13,7 @@ import {
   securityMapFlaggedListWords,
   securityMapLegend,
   securityMapModeWords,
+  securityMapCutWords,
   securityMapNotes,
   securityMapPillWords,
   securityMapRefusedWindowWords,
@@ -30,6 +31,7 @@ import {
   notOnMapWords,
   planDrawnArcs,
   sourceLabels,
+  stageHeightFor,
   stageOf,
   stageSpan,
   tickerRowOf,
@@ -120,6 +122,8 @@ const NOT_PHONE = '(min-width: 640px)';
 /** The in-stage flagged panel's width and its margin from the stage's edge, in CSS pixels. */
 const PANEL_WIDTH = 304;
 const PANEL_MARGIN = 14;
+/** The strip at the stage's bottom the legend and the ticker take, which no label may cover. */
+const STAGE_BOTTOM_BAR_PX = 76;
 
 export function SecurityMapClient({
   initial,
@@ -201,12 +205,51 @@ export function SecurityMapClient({
   );
   const notes = state.whole ? securityMapNotes(state.whole) : [];
   const notOnMap = state.whole ? notOnMapWords(state.whole) : null;
+  // "More happened than ... can draw", of the play on screen only (lab walk 2, note A).
+  const cutNote = securityMapCutWords(plan);
+  const noteLines = [...notes, ...(cutNote ? [cutNote] : []), ...(notOnMap ? [notOnMap] : [])];
   const empty = securityMapEmptyWords(state.whole);
   const stepIndex = Math.max(0, stage.stepIndex);
   const modeWords = securityMapModeWords(plan, state.whole, stepIndex);
   const pill = securityMapPillWords(plan, stop, state.health, stepIndex);
   const stopWords = securityMapStopWords(stop, state.health);
   const refused = state.refusedWindow ? securityMapRefusedWindowWords(state.refusedWindow) : null;
+
+  // The stage's height: everything from the counters to the caption's end
+  // above the fold, the stage made shorter first (map-model stageHeightFor).
+  // Worked out again when the window, the caption or anything above changes.
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const stageRef = React.useRef<HTMLDivElement | null>(null);
+  const captionRef = React.useRef<HTMLDivElement | null>(null);
+  const [stageHeight, setStageHeight] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    const root = rootRef.current;
+    const stageEl = stageRef.current;
+    const captionEl = captionRef.current;
+    if (!notPhone || !root || !stageEl || !captionEl || typeof window === 'undefined') {
+      setStageHeight(null);
+      return undefined;
+    }
+    const fit = () => {
+      const stageBox = stageEl.getBoundingClientRect();
+      const captionBox = captionEl.getBoundingClientRect();
+      const next = stageHeightFor({
+        viewport: window.innerHeight,
+        stageTop: stageBox.top + window.scrollY,
+        below: captionBox.bottom - stageBox.bottom,
+      });
+      setStageHeight((now) => (now !== null && Math.abs(now - next) < 1 ? now : next));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit);
+    observer?.observe(root);
+    observer?.observe(captionEl);
+    return () => {
+      window.removeEventListener('resize', fit);
+      observer?.disconnect();
+    };
+  }, [notPhone]);
 
   const onUnavailable = React.useCallback(() => setGlobe('unavailable'), []);
   const onLost = React.useCallback(() => setGlobe('lost'), []);
@@ -215,7 +258,7 @@ export function SecurityMapClient({
     () => ({
       topLeft: notPhone ? { w: 300, h: 56 } : { w: 220, h: 48 },
       right: wide ? PANEL_WIDTH + PANEL_MARGIN * 2 : 0,
-      bottom: notPhone ? 56 : 0,
+      bottom: notPhone ? STAGE_BOTTOM_BAR_PX : 0,
     }),
     [wide, notPhone],
   );
@@ -239,7 +282,7 @@ export function SecurityMapClient({
   );
 
   return (
-    <div className="flex min-w-0 flex-col gap-2" data-testid="security-map">
+    <div ref={rootRef} className="flex min-w-0 flex-col gap-2" data-testid="security-map">
       <style>{FLAT_MAP_CSS + STAGE_CSS}</style>
 
       {shortened ? (
@@ -254,9 +297,11 @@ export function SecurityMapClient({
       <SecurityMapCounters counters={counters} />
 
       <div
+        ref={stageRef}
         data-testid="security-map-stage"
         data-layout={wide ? 'wide' : notPhone ? 'medium' : 'phone'}
         className="sm-stage relative h-[420px] w-full min-w-0 overflow-hidden rounded-xl sm:h-[clamp(420px,68vh,760px)]"
+        style={notPhone && stageHeight !== null ? { height: stageHeight } : undefined}
       >
         <div className="absolute inset-0" aria-hidden="true">
           {shown.view === 'globe' ? (
@@ -322,6 +367,7 @@ export function SecurityMapClient({
       {notPhone ? null : <div className="flex flex-wrap gap-2">{controls}</div>}
       <div className="flex min-w-0">
         <div
+          ref={captionRef}
           className="text-muted-foreground grid min-w-0 flex-1 gap-x-8 text-[12.5px] leading-snug lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
           data-testid="security-map-caption"
         >
@@ -350,7 +396,7 @@ export function SecurityMapClient({
       {empty ? <p className="text-foreground text-[13px]">{empty}</p> : null}
 
       <SecurityMapLegend items={legend} />
-      <SecurityMapNotes lines={notOnMap ? [...notes, notOnMap] : notes} />
+      <SecurityMapNotes lines={noteLines} />
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-2">
         <SecurityMapFeedList title={SECURITY_MAP_WORDS.feedTitle} rows={state.feed} />

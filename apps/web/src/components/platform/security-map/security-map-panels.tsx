@@ -25,6 +25,7 @@ import {
 
 import { PlatformTable } from '../platform-table';
 
+import { LABEL_LEADER } from './globe-math';
 import { markPath } from './security-map-flat';
 import {
   CATEGORY_LOOKS,
@@ -43,6 +44,38 @@ import { countryPoint } from './world-geometry';
  * on the page as plain text only.
  */
 
+/**
+ * The country labels on the globe: nearly solid, so they read over the
+ * brightest land dots in either page appearance (the stage is dark in both):
+ * the backdrop at least 88% opaque, its text at least 7:1 against it (lab
+ * walk 2, F5; checked in the client test).
+ */
+export const LABEL_LOOK = {
+  background: 'rgba(6,11,22,0.92)',
+  homeBackground: 'rgba(9,15,29,0.94)',
+  text: '#dbe6f7',
+  count: '#b4c4dc',
+  leader: 'rgba(170,196,240,0.7)',
+} as const;
+
+const LEADER_CSS = (['right', 'left', 'above', 'below'] as const)
+  .map((side) => {
+    const across = side === 'right' || side === 'left';
+    const at =
+      side === 'right'
+        ? `left:-${LABEL_LEADER + 1}px;top:50%`
+        : side === 'left'
+          ? `right:-${LABEL_LEADER + 1}px;top:50%`
+          : side === 'above'
+            ? `bottom:-${LABEL_LEADER + 1}px;left:50%`
+            : `top:-${LABEL_LEADER + 1}px;left:50%`;
+    const size = across
+      ? `width:${LABEL_LEADER}px;height:1px`
+      : `width:1px;height:${LABEL_LEADER}px`;
+    return `.sm-label[data-side=${side}]::before{display:block;${at};${size}}`;
+  })
+  .join('\n');
+
 /** The stage's own colours and keyframes (dark in both appearances), scoped by their sm- names. */
 export const STAGE_CSS = `
 .sm-stage{background:radial-gradient(ellipse 72% 68% at var(--sm-cx,50%) 47%,#0d1a36 0%,#08111f 40%,#050a13 74%,#03060b 100%);border:1px solid rgba(15,23,42,.16);box-shadow:0 1px 2px rgba(2,6,23,.08),0 22px 50px -24px rgba(2,6,23,.55);isolation:isolate;color-scheme:dark}
@@ -50,9 +83,11 @@ export const STAGE_CSS = `
 .sm-stage[data-layout=wide]{--sm-cx:41%}
 .sm-vignette{background:radial-gradient(ellipse 90% 82% at 45% 47%,transparent 56%,rgba(1,3,8,.6) 100%)}
 .sm-glass{background:rgba(7,12,24,.74);border:1px solid rgba(160,190,240,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 8px 24px -12px rgba(0,0,0,.6)}
-.sm-label{position:absolute;left:0;top:0;visibility:hidden;opacity:0;white-space:nowrap;display:flex;align-items:baseline;gap:6px;padding:3px 7px;border-radius:6px;font-size:11.5px;line-height:15px;color:#dbe6f7;background:rgba(6,11,22,.74);border:1px solid rgba(160,190,240,.16);will-change:transform,opacity}
-.sm-label-home{font-weight:600;font-size:12px;letter-spacing:.01em;background:rgba(9,15,29,.86);border-color:rgba(255,255,255,.3)}
-.sm-label-count{font-family:var(--font-mono);font-size:11px;color:#a9bbd6}
+.sm-label{position:absolute;left:0;top:0;visibility:hidden;opacity:0;white-space:nowrap;display:flex;align-items:baseline;gap:6px;padding:3px 7px;border-radius:6px;font-size:11.5px;line-height:15px;color:${LABEL_LOOK.text};background:${LABEL_LOOK.background};border:1px solid rgba(160,190,240,.2);box-shadow:0 2px 8px -2px rgba(0,0,0,.6);will-change:transform,opacity}
+.sm-label::before{content:'';position:absolute;display:none;background:${LABEL_LOOK.leader}}
+${LEADER_CSS}
+.sm-label-home{font-weight:600;font-size:12px;letter-spacing:.01em;background:${LABEL_LOOK.homeBackground};border-color:rgba(255,255,255,.3)}
+.sm-label-count{font-family:var(--font-mono);font-size:11px;color:${LABEL_LOOK.count}}
 .sm-dot-live{animation:sm-breathe 2.4s ease-in-out infinite}
 .sm-ticker-line{animation:sm-rise .5s ease-out both}
 .sm-fade-bottom{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 56px),transparent);mask-image:linear-gradient(to bottom,#000 calc(100% - 56px),transparent)}
@@ -320,6 +355,7 @@ export function SecurityMapStageLegend({ items }: { items: readonly SecurityMapL
           {SECURITY_MAP_WORDS.legendFlagged}
         </span>
       </div>
+      <p data-testid="security-map-legend-counts">{SECURITY_MAP_WORDS.legendCounts}</p>
     </div>
   );
 }
@@ -358,8 +394,20 @@ export function SecurityMapTicker({
           size={13}
         />
         <span className="shrink-0 font-medium">{w.outcomeLabel}</span>
-        <span className="min-w-0 truncate" style={{ color: ON_STAGE.quiet }}>
-          {securityEventReasonLabel(w.reason)} · {placeOf(w)}
+        {/* The reason's words give way first; the place keeps up to 32 characters
+            whole ("City, Country"), and only a longer one is cut (lab walk 2, F7). */}
+        <span data-part="reason" className="min-w-0 truncate" style={{ color: ON_STAGE.quiet }}>
+          {securityEventReasonLabel(w.reason)}
+        </span>
+        <span className="shrink-0" style={{ color: ON_STAGE.quiet }}>
+          ·
+        </span>
+        <span
+          data-part="place"
+          className="max-w-[32ch] shrink-0 truncate"
+          style={{ color: ON_STAGE.quiet }}
+        >
+          {placeOf(w)}
         </span>
         <span className="shrink-0 font-mono text-[11px]" style={{ color: ON_STAGE.quiet }}>
           {w.time}

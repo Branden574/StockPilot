@@ -363,14 +363,23 @@ export function projectToStage(
 
 /** The camera's tilt: the globe is seen from this far north of its equator (pitch = latitude at the front). */
 export const GLOBE_TILT = 18 * RADIANS;
-/** A source is seen in full up to this far from the middle of the view, and not at all past SOURCE_GONE. */
-export const SOURCE_SEEN = 42 * RADIANS;
-export const SOURCE_GONE = 76 * RADIANS;
-/** StockPilot is seen in full up to this far from the middle, and counts for nothing past STOCKPILOT_GONE. */
-export const STOCKPILOT_SEEN = 48 * RADIANS;
-export const STOCKPILOT_GONE = 68 * RADIANS;
-/** What keeping StockPilot in view is worth, against all the sources' weight together. */
-export const STOCKPILOT_WORTH = 0.6;
+/** The highest the tilt rises, when that is what shows StockPilot and the sources together. */
+export const GLOBE_TILT_MAX = 55 * RADIANS;
+/**
+ * Whenever there is something to play, StockPilot is kept at most this far
+ * from the middle of the view: 15 degrees inside the limb, so its arrivals
+ * and their rings are always seen (lab walk 2, F2).
+ */
+export const STOCKPILOT_REACH = 75 * RADIANS;
+/** The sway's reach is never cut below this, so a view held near StockPilot's limit still drifts. */
+export const SWAY_MIN = 8 * RADIANS;
+/**
+ * The tilt rises only when, at GLOBE_TILT, the sources' middle cannot be
+ * brought nearer the middle of the view than this; and then a degree of tilt
+ * must bring it at least TILT_PRICE degrees closer.
+ */
+export const SOURCES_CENTRE_SEEN = 55 * RADIANS;
+const TILT_PRICE = 0.25;
 
 /** A place the play draws arcs from, and how much it weighs in where the globe faces. */
 export interface WeightedPlace {
@@ -378,52 +387,106 @@ export interface WeightedPlace {
   weight: number;
 }
 
+/** Where the globe faces: its yaw and tilt, and how far its sway may reach either side. */
+export interface GlobeFacing {
+  yaw: number;
+  pitch: number;
+  sway: number;
+}
+
 /** The angle from the middle of the view (yaw, at the tilt's latitude) to a place, in radians. */
 export function angleFromView(yaw: number, place: LonLat, tilt = GLOBE_TILT): number {
   return centralAngle([-yaw / RADIANS, tilt / RADIANS], place);
 }
 
-/** 1 up to `full`, 0 from `gone`, smooth in between. */
-function seen(angle: number, full: number, gone: number): number {
-  const x = Math.min(1, Math.max(0, (gone - angle) / (gone - full)));
-  return x * x * (3 - 2 * x);
+/** The weighted middle of the places, as a place; null when they cancel out (spread all round). */
+function centreOf(places: readonly WeightedPlace[]): LonLat | null {
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  let total = 0;
+  const v = [0, 0, 0];
+  for (const p of places) {
+    lonLatToVector(p.lonLat[0], p.lonLat[1], 1, v);
+    x += p.weight * v[0]!;
+    y += p.weight * v[1]!;
+    z += p.weight * v[2]!;
+    total += p.weight;
+  }
+  const length = Math.hypot(x, y, z);
+  if (!(length > 1e-6 * total)) return null;
+  return [Math.atan2(x, z) / RADIANS, Math.asin(Math.max(-1, Math.min(1, y / length))) / RADIANS];
 }
 
 /**
- * The yaw that faces the play's sources while keeping StockPilot on the
- * visible side whenever that can be had. Every yaw, a degree apart, is given
- * a score: the weight of the sources it shows well (a source in the middle
- * counts a little more than one near the edge), and, when StockPilot is well
- * inside the limb, STOCKPILOT_WORTH of all the sources' weight. The best
- * wins; so StockPilot is kept in view unless that would hide most of the
- * sources (a play from the far side of the world faces the sources). With no
- * places (nothing to play) the globe faces StockPilot. A place's weight is
- * the square root of its events, so one loud country does not hide the rest.
+ * Where the globe faces for the play's sources: the view that brings their
+ * weighted middle as close to the middle of the view as it can, while
+ * StockPilot stays at most STOCKPILOT_REACH from it (a hard rule whenever
+ * there is something to play; the sway either side, SWAY_MIN at least, keeps
+ * it too). The tilt stays at GLOBE_TILT unless that rule holds the sources'
+ * middle further than SOURCES_CENTRE_SEEN from the middle of the view; then
+ * it may rise to GLOBE_TILT_MAX, while each degree buys more than TILT_PRICE
+ * degrees: a far-side play is
+ * seen over the pole or the ocean between, its arcs crossing the face to a
+ * StockPilot in view. Sources that end up behind the globe are hidden; their
+ * arcs come in over the limb. A place's weight is the square root of its
+ * events, so one loud country does not hide the rest. With nothing to play,
+ * or sources spread so evenly all round that they have no middle, the globe
+ * faces StockPilot.
  */
-export function facingYaw(places: readonly WeightedPlace[], stockpilot: LonLat): number {
-  const own = wrapAngle(-stockpilot[0] * RADIANS);
+export function facingOf(places: readonly WeightedPlace[], stockpilot: LonLat): GlobeFacing {
+  const own: GlobeFacing = {
+    yaw: wrapAngle(-stockpilot[0] * RADIANS),
+    pitch: GLOBE_TILT,
+    sway: SWAY,
+  };
   const weighed = places.filter((p) => p.weight > 0 && Number.isFinite(p.weight));
-  if (weighed.length === 0) return own;
-  const total = weighed.reduce((sum, p) => sum + p.weight, 0);
-  let best = own;
-  let bestScore = -Infinity;
-  for (let degree = -179; degree <= 180; degree += 1) {
-    const yaw = degree * RADIANS;
-    let score = 0;
-    for (const p of weighed) {
-      const angle = angleFromView(yaw, p.lonLat);
-      score += p.weight * (seen(angle, SOURCE_SEEN, SOURCE_GONE) + 0.25 * Math.cos(angle));
+  const centre = weighed.length === 0 ? null : centreOf(weighed);
+  if (!centre) return own;
+  // StockPilot within reach at this yaw and tilt, and `reach` either side of the yaw.
+  const keeps = (yaw: number, pitch: number, reach: number): boolean =>
+    angleFromView(yaw, stockpilot, pitch) <= STOCKPILOT_REACH + 1e-9 &&
+    angleFromView(yaw - reach, stockpilot, pitch) <= STOCKPILOT_REACH + 1e-9 &&
+    angleFromView(yaw + reach, stockpilot, pitch) <= STOCKPILOT_REACH + 1e-9;
+  const swayFor = (yaw: number, pitch: number): number => {
+    let reach = SWAY;
+    while (reach > SWAY_MIN && !keeps(yaw, pitch, reach)) reach -= RADIANS;
+    return Math.max(SWAY_MIN, reach);
+  };
+  // Straight at the sources' middle, at the usual tilt, when that keeps StockPilot.
+  const straight = wrapAngle(-centre[0] * RADIANS);
+  if (keeps(straight, GLOBE_TILT, SWAY_MIN)) {
+    return { yaw: straight, pitch: GLOBE_TILT, sway: swayFor(straight, GLOBE_TILT) };
+  }
+  // The yaw, a degree apart, that brings the middle nearest at this tilt, StockPilot kept.
+  const nearestAt = (tilt: number): { yaw: number; angle: number } | null => {
+    let found: { yaw: number; angle: number } | null = null;
+    for (let degree = -179; degree <= 180; degree += 1) {
+      const yaw = degree * RADIANS;
+      if (!keeps(yaw, tilt, SWAY_MIN)) continue;
+      const angle = angleFromView(yaw, centre, tilt);
+      if (!found || angle < found.angle - 1e-9) found = { yaw, angle };
     }
-    score +=
-      STOCKPILOT_WORTH *
-      total *
-      seen(angleFromView(yaw, stockpilot), STOCKPILOT_SEEN, STOCKPILOT_GONE);
-    if (score > bestScore + 1e-9) {
-      bestScore = score;
-      best = yaw;
+    return found;
+  };
+  const usual = nearestAt(GLOBE_TILT);
+  let best: GlobeFacing | null = usual ? { yaw: usual.yaw, pitch: GLOBE_TILT, sway: 0 } : null;
+  if (!usual || usual.angle > SOURCES_CENTRE_SEEN) {
+    // Held back from the sources at the usual tilt: let it rise.
+    let bestCost = usual ? usual.angle : Infinity;
+    for (let tilt = GLOBE_TILT + RADIANS; tilt <= GLOBE_TILT_MAX + 1e-9; tilt += RADIANS) {
+      const at = nearestAt(tilt);
+      if (!at) continue;
+      const cost = at.angle + TILT_PRICE * (tilt - GLOBE_TILT);
+      if (cost < bestCost - 1e-9) {
+        bestCost = cost;
+        best = { yaw: at.yaw, pitch: tilt, sway: 0 };
+      }
     }
   }
-  return wrapAngle(best);
+  if (!best) return own;
+  best.sway = swayFor(best.yaw, best.pitch);
+  return best;
 }
 
 /* ─────────────────────────── turning the globe ─────────────────────────── */
@@ -431,12 +494,13 @@ export function facingYaw(places: readonly WeightedPlace[], stockpilot: LonLat):
 /** The globe's turn, kept between frames. advanceGlobeMotion() changes it in place. */
 export interface GlobeMotion {
   yaw: number;
-  /** The tilt: the globe is only ever turned left and right. */
+  /** The tilt: it changes only with the target (an ease), never by a drag or the sway. */
   pitch: number;
-  /** The yaw the globe faces (its sway goes either side of it); null before the first. */
-  target: number | null;
-  /** An ease toward the target: the yaw it started from, and how far it is (ms); -1 when none. */
+  /** Where the globe faces (its sway goes either side of the yaw); null before the first. */
+  target: GlobeFacing | null;
+  /** An ease toward the target: the yaw and tilt it started from, and how far it is (ms); -1 when none. */
   easeFrom: number;
+  easeFromPitch: number;
   easeMs: number;
   /** Turn speed left over from a drag, radians per millisecond. */
   yawSpeed: number;
@@ -470,6 +534,7 @@ export function createGlobeMotion(yaw = 0): GlobeMotion {
     pitch: GLOBE_TILT,
     target: null,
     easeFrom: 0,
+    easeFromPitch: GLOBE_TILT,
     easeMs: -1,
     yawSpeed: 0,
     idleMs: RETURN_AFTER_MS,
@@ -484,11 +549,28 @@ export function easeInOut(x: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 }
 
-/** The sway's offset from the target after `ms` of swaying. */
-export const swayAt = (ms: number): number => SWAY * Math.sin((TAU * ms) / SWAY_PERIOD_MS);
+/**
+ * The sway's offset from the target after `ms` of swaying, reaching `reach`
+ * either side (the target's sway: less than SWAY where more would take
+ * StockPilot past its limit). The same period at any reach, so a shorter
+ * sway is only slower.
+ */
+export const swayAt = (ms: number, reach = SWAY): number =>
+  reach * Math.sin((TAU * ms) / SWAY_PERIOD_MS);
+
+/** Whether a new target is far enough from the old to be worth an ease (or a new sway). */
+function movedFrom(old: GlobeFacing | null, next: GlobeFacing): boolean {
+  return (
+    old === null ||
+    Math.abs(wrapAngle(next.yaw - old.yaw)) > TARGET_MOVE ||
+    Math.abs(next.pitch - old.pitch) > TARGET_MOVE ||
+    Math.abs(next.sway - old.sway) > RADIANS
+  );
+}
 
 function startEase(m: GlobeMotion): void {
   m.easeFrom = m.yaw;
+  m.easeFromPitch = m.pitch;
   m.easeMs = 0;
   m.swayMs = 0;
   m.away = false;
@@ -498,15 +580,16 @@ function startEase(m: GlobeMotion): void {
  * One frame of the globe's turn, in place.
  *
  * - `still` (reduced motion): nothing moves on its own. The globe is put
- *   straight on its target (no ease, no sway); a drag turns it, with no
- *   coasting.
+ *   straight on its target, yaw and tilt (no ease, no sway); a drag turns
+ *   it, with no coasting.
  * - `mayTurn` false (paused, not updating, hidden): the globe holds where it
  *   is; only the viewer's drag and its coasting move it. The very first
  *   target is taken straight, so a stopped page still faces its sources.
- * - Otherwise: a new target (further than TARGET_MOVE from the old) is eased
- *   to over EASE_MS; in between, a slow sway either side of it, never faster
- *   than one turn in DRIFT_TURN_MS. After a drag the globe coasts, waits
- *   RETURN_AFTER_MS, then eases back.
+ * - Otherwise: a new target (further than TARGET_MOVE from the old, in yaw
+ *   or tilt) is eased to over EASE_MS, yaw and tilt together; in between, a
+ *   slow sway either side of its yaw, as far as the target's sway, never
+ *   faster than one turn in DRIFT_TURN_MS. After a drag the globe coasts,
+ *   waits RETURN_AFTER_MS, then eases back.
  *
  * A long gap between frames (a tab that comes back) counts as a short one.
  */
@@ -517,13 +600,12 @@ export function advanceGlobeMotion(
     dragging: boolean;
     mayTurn: boolean;
     still: boolean;
-    target: number | null;
+    target: GlobeFacing | null;
   },
 ): void {
   const dt = Math.min(MAX_STEP_MS, Math.max(0, input.dtMs));
   const target = input.target;
-  const moved =
-    target !== null && (m.target === null || Math.abs(wrapAngle(target - m.target)) > TARGET_MOVE);
+  const moved = target !== null && movedFrom(m.target, target);
   if (input.dragging) {
     m.idleMs = 0;
     return;
@@ -534,7 +616,8 @@ export function advanceGlobeMotion(
     m.easeMs = -1;
     if (moved) {
       m.target = target;
-      m.yaw = wrapAngle(target);
+      m.yaw = wrapAngle(target.yaw);
+      m.pitch = target.pitch;
       m.away = false;
     }
     return;
@@ -547,7 +630,10 @@ export function advanceGlobeMotion(
     return;
   }
   if (!input.mayTurn) {
-    if (moved && m.target === null) m.yaw = wrapAngle(target);
+    if (moved && m.target === null) {
+      m.yaw = wrapAngle(target.yaw);
+      m.pitch = target.pitch;
+    }
     if (moved) m.target = target;
     m.easeMs = -1;
     return;
@@ -562,15 +648,17 @@ export function advanceGlobeMotion(
     startEase(m);
   }
   m.swayMs += dt;
-  const goal = m.target + swayAt(m.swayMs);
+  const goal = m.target.yaw + swayAt(m.swayMs, m.target.sway);
   if (m.easeMs >= 0) {
     m.easeMs += dt;
     const k = easeInOut(m.easeMs / EASE_MS);
     m.yaw = wrapAngle(m.easeFrom + wrapAngle(goal - m.easeFrom) * k);
+    m.pitch = m.easeFromPitch + (m.target.pitch - m.easeFromPitch) * k;
     if (m.easeMs >= EASE_MS) m.easeMs = -1;
     return;
   }
   m.yaw = wrapAngle(goal);
+  m.pitch = m.target.pitch;
 }
 
 /**
@@ -741,11 +829,17 @@ export interface LabelAnchor {
   y: number;
   w: number;
   h: number;
+  /** How far the label's near edge stands from the point: its marks' reach and a short leader line. */
+  reach: number;
   visible: boolean;
-  /** Which spots it may take, in order (StockPilot's label: right, then left). */
+  /** Which spots it may take, in order. */
   spots: readonly LabelSpot[];
 }
 export type LabelSpot = 'right' | 'left' | 'above' | 'below';
+/** A label's leader line, from its edge toward its mark, in CSS pixels (the stage's CSS draws it). */
+export const LABEL_LEADER = 8;
+/** Every spot, the order a source's label tries them in. */
+export const LABEL_SPOTS: readonly LabelSpot[] = ['right', 'left', 'above', 'below'];
 /** A box on the screen (top-left, size). */
 export interface ScreenBox {
   x: number;
@@ -757,6 +851,8 @@ export interface PlacedLabel {
   x: number;
   y: number;
   shown: boolean;
+  /** The spot it took (the side its leader line comes from); null when not shown. */
+  side: LabelSpot | null;
 }
 
 const overlaps = (a: ScreenBox, b: ScreenBox, pad: number): boolean =>
@@ -764,43 +860,90 @@ const overlaps = (a: ScreenBox, b: ScreenBox, pad: number): boolean =>
 
 /**
  * Places labels beside their marks, in the order given (the most important
- * first): each takes the first of its spots that stays inside `bounds` (with
- * `margin` to spare) and clear of the labels already placed and of the
- * `reserved` boxes (the in-stage panels). A label with no free spot, or whose
- * mark is hidden, is not shown. Writes into `out`, one entry per anchor.
+ * first): each takes the first of its spots, `reach` from its point (room for
+ * its marks and a short leader line), that stays inside `bounds` (with
+ * `margin` to spare) and clear of the labels already placed, of every mark on
+ * the screen (`marks`, the boxes of the visible marks) and of the `reserved`
+ * boxes (the in-stage panels). A label never sits on a mark (lab walk 2, F4).
+ * A label with no free spot, or whose mark is hidden, is not shown: the
+ * lowest-ranked go first. Writes into `out`, one entry per anchor.
  */
 export function placeLabels(
   anchors: readonly LabelAnchor[],
   bounds: { w: number; h: number },
   reserved: readonly ScreenBox[],
+  marks: readonly ScreenBox[],
   out: PlacedLabel[],
-  gap = 10,
   margin = 8,
 ): void {
   const placed: ScreenBox[] = [];
   for (let i = 0; i < anchors.length; i += 1) {
     const a = anchors[i]!;
-    const slot = out[i] ?? { x: 0, y: 0, shown: false };
+    const slot = out[i] ?? { x: 0, y: 0, shown: false, side: null };
     out[i] = slot;
     slot.shown = false;
+    slot.side = null;
     if (!a.visible) continue;
     for (const spot of a.spots) {
-      const x = spot === 'right' ? a.x + gap : spot === 'left' ? a.x - gap - a.w : a.x - a.w / 2;
-      const y = spot === 'above' ? a.y - gap - a.h : spot === 'below' ? a.y + gap : a.y - a.h / 2;
+      const x =
+        spot === 'right' ? a.x + a.reach : spot === 'left' ? a.x - a.reach - a.w : a.x - a.w / 2;
+      const y =
+        spot === 'above' ? a.y - a.reach - a.h : spot === 'below' ? a.y + a.reach : a.y - a.h / 2;
       const box = { x, y, w: a.w, h: a.h };
       if (x < margin || y < margin || x + a.w > bounds.w - margin || y + a.h > bounds.h - margin) {
         continue;
       }
-      if (placed.some((p) => overlaps(p, box, 4)) || reserved.some((r) => overlaps(r, box, 0))) {
+      if (
+        placed.some((p) => overlaps(p, box, 4)) ||
+        marks.some((m) => overlaps(m, box, 2)) ||
+        reserved.some((r) => overlaps(r, box, 0))
+      ) {
         continue;
       }
       placed.push(box);
       slot.x = x;
       slot.y = y;
       slot.shown = true;
+      slot.side = spot;
       break;
     }
   }
+}
+
+const SPOT_DIRECTION: Record<LabelSpot, readonly [number, number]> = {
+  right: [1, 0],
+  left: [-1, 0],
+  above: [0, -1],
+  below: [0, 1],
+};
+
+/**
+ * The spots for StockPilot's label, best first: away from where the arcs
+ * come in. `dx`, `dy` is the sum of the screen directions (y down) from
+ * StockPilot back along each arriving arc's last stretch; the label goes the
+ * other way, so it never covers their last stretch (lab walk 2, F6). With
+ * no arcs coming in (a sum near zero), right first. `current` is the spot it
+ * holds: it keeps it unless another is clearly better, so the label does not
+ * jump to and fro as the globe sways.
+ */
+export function stockpilotSpots(
+  dx: number,
+  dy: number,
+  current: LabelSpot | null,
+  out: LabelSpot[] = [],
+): LabelSpot[] {
+  const length = Math.hypot(dx, dy);
+  out.length = 0;
+  out.push(...LABEL_SPOTS);
+  if (!(length > 1e-3)) return out;
+  const score = (spot: LabelSpot): number =>
+    -(SPOT_DIRECTION[spot][0] * dx + SPOT_DIRECTION[spot][1] * dy) / length;
+  out.sort((a, b) => score(b) - score(a));
+  if (current !== null && out[0] !== current && score(out[0]!) - score(current) < 0.3) {
+    out.splice(out.indexOf(current), 1);
+    out.unshift(current);
+  }
+  return out;
 }
 
 /**

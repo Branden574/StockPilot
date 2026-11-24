@@ -12,17 +12,20 @@ import {
   FLIGHT_MIN_MS,
   GLOBE_HEIGHT_SHARE,
   GLOBE_TILT,
+  GLOBE_TILT_MAX,
+  LABEL_LEADER,
+  LABEL_SPOTS,
   LIVE_PERIOD_MS,
   REPLAY_FLIGHT_MS,
   REPLAY_SPREAD_MS,
   RETURN_AFTER_MS,
   RING_MS,
-  SOURCE_SEEN,
   STAGE_HEADROOM,
   STILL_TRACK,
-  STOCKPILOT_GONE,
-  STOCKPILOT_SEEN,
+  STOCKPILOT_REACH,
+  SOURCES_CENTRE_SEEN,
   SWAY,
+  SWAY_MIN,
   SWAY_PERIOD_MS,
   TARGET_MOVE,
   TRACK_HOLD_MS,
@@ -42,7 +45,7 @@ import {
   dotPositions,
   dragGlobe,
   easeInOut,
-  facingYaw,
+  facingOf,
   flightMs,
   heatOf,
   limbFade,
@@ -53,6 +56,7 @@ import {
   ribbonIndexes,
   ribbonVertexCount,
   sourceMarkSize,
+  stockpilotSpots,
   stopCoasting,
   swayAt,
   turnPoint,
@@ -60,6 +64,7 @@ import {
   writeArcPoints,
   writeRibbon,
   writeStars,
+  type GlobeFacing,
   type LabelAnchor,
   type PlacedLabel,
   type RibbonArrays,
@@ -146,76 +151,186 @@ describe('turning the globe to face a place', () => {
     near(GLOBE_TILT, 18 * DEG);
   });
 
-  it('nothing to play: the globe faces StockPilot', () => {
-    near(facingYaw([], STOCKPILOT_LON_LAT), wrapAngle(-STOCKPILOT_LON_LAT[0] * DEG));
+  // StockPilot's distance from the middle of the view at a facing, and at both ends of its sway.
+  const stockpilotSeen = (f: GlobeFacing): number =>
+    Math.max(
+      angleFromView(f.yaw, STOCKPILOT_LON_LAT, f.pitch),
+      angleFromView(f.yaw - f.sway, STOCKPILOT_LON_LAT, f.pitch),
+      angleFromView(f.yaw + f.sway, STOCKPILOT_LON_LAT, f.pitch),
+    );
+  const placesOf = (rows: ReadonlyArray<readonly [number, number, number]>) =>
+    rows.map(([lon, lat, events]) => ({ lonLat: [lon, lat] as const, weight: Math.sqrt(events) }));
+  // Made-up plays (longitude, latitude, events) at the places lab walk 2 asked for (F2, F3).
+  const ASIA = placesOf([
+    [104, 35, 90],
+    [79, 22, 50],
+    [138, 37, 30],
+    [128, 36, 20],
+    [106, 16, 25],
+    [114, -1, 22],
+    [69, 30, 18],
+    [104, 1, 15],
+  ]);
+  const OCEANIA = placesOf([
+    [134, -26, 40],
+    [171, -44, 18],
+    [144, -7, 6],
+    [178, -18, 4],
+  ]);
+  const ASIA_AND_EUROPE = placesOf([
+    [104, 35, 70],
+    [79, 22, 40],
+    [138, 37, 20],
+    [10, 51, 30],
+    [2, 46, 20],
+    [5, 52, 18],
+    [31, 49, 14],
+    [96, 62, 60],
+  ]);
+  const NEAR_THE_ANTIPODE = placesOf([[97, -12, 12]]);
+
+  it('nothing to play: the globe faces StockPilot at the usual tilt, with the whole sway', () => {
+    const own = { yaw: wrapAngle(-STOCKPILOT_LON_LAT[0] * DEG), pitch: GLOBE_TILT, sway: SWAY };
+    expect(facingOf([], STOCKPILOT_LON_LAT)).toEqual(own);
     // A weight of nothing (or not a number) is no place at all.
-    near(
-      facingYaw(
+    expect(
+      facingOf(
         [
           { lonLat: [100, 30], weight: 0 },
           { lonLat: [120, 30], weight: Number.NaN },
         ],
         STOCKPILOT_LON_LAT,
       ),
-      wrapAngle(-STOCKPILOT_LON_LAT[0] * DEG),
+    ).toEqual(own);
+    // Sources spread evenly all round have no middle: StockPilot.
+    expect(
+      facingOf(
+        [
+          { lonLat: [0, 0], weight: 1 },
+          { lonLat: [180, 0], weight: 1 },
+        ],
+        STOCKPILOT_LON_LAT,
+      ),
+    ).toEqual(own);
+  });
+
+  it("sources on StockPilot's side: straight at their weighted middle, at the usual tilt, swaying the whole way", () => {
+    const places = placesOf([
+      [-100, 40, 9],
+      [-50, -15, 4],
+    ]);
+    const f = facingOf(places, STOCKPILOT_LON_LAT);
+    expect(f.pitch).toBe(GLOBE_TILT);
+    expect(f.sway).toBe(SWAY);
+    // The middle of the view is at the sources' weighted middle's longitude.
+    const v = [0, 0, 0];
+    const sum = [0, 0, 0];
+    for (const p of places) {
+      lonLatToVector(p.lonLat[0], p.lonLat[1], 1, v);
+      for (let k = 0; k < 3; k += 1) sum[k]! += p.weight * v[k]!;
+    }
+    near(f.yaw, wrapAngle(-Math.atan2(sum[0]!, sum[2]!)), 9);
+    expect(stockpilotSeen(f)).toBeLessThanOrEqual(STOCKPILOT_REACH);
+  });
+
+  it('sources east of StockPilot: as near their middle as StockPilot allows, the tilt kept, the sway cut to keep it', () => {
+    // Facing these alone (about 5 E) puts StockPilot 73 degrees out, and the
+    // sway would take it past 75; the globe turns west just enough.
+    const places = placesOf([
+      [10, 50, 9],
+      [8, 9, 9],
+      [-4, 40, 4],
+    ]);
+    const f = facingOf(places, STOCKPILOT_LON_LAT);
+    expect(f.pitch).toBe(GLOBE_TILT);
+    expect(-f.yaw / DEG).toBeLessThan(5);
+    expect(f.sway).toBeGreaterThanOrEqual(SWAY_MIN);
+    expect(f.sway).toBeLessThan(SWAY);
+    expect(stockpilotSeen(f)).toBeLessThanOrEqual(STOCKPILOT_REACH + 1e-9);
+    // Pushed to its limit: one degree further east and the sway would take StockPilot past it.
+    expect(angleFromView(f.yaw - DEG - f.sway, STOCKPILOT_LON_LAT, f.pitch)).toBeGreaterThan(
+      STOCKPILOT_REACH,
     );
   });
 
-  it("sources on StockPilot's side: StockPilot and every source are in view", () => {
-    const places = [
-      { lonLat: [-100, 40] as const, weight: 3 },
-      { lonLat: [10, 50] as const, weight: 4 },
-      { lonLat: [-50, -15] as const, weight: 2 },
-    ];
-    const yaw = facingYaw(places, STOCKPILOT_LON_LAT);
-    expect(angleFromView(yaw, STOCKPILOT_LON_LAT)).toBeLessThanOrEqual(STOCKPILOT_SEEN);
-    for (const p of places) expect(angleFromView(yaw, p.lonLat)).toBeLessThan(76 * DEG);
-  });
-
-  it('sources east of StockPilot: the globe turns from their middle toward StockPilot, keeping it in view', () => {
-    // Facing these three alone puts the middle of the view near 6 E and StockPilot
-    // past the limb (74 degrees out); what StockPilot is worth turns the globe
-    // west until it is just inside, the sources still well in view.
-    const places = [
-      { lonLat: [10, 50] as const, weight: 3 },
-      { lonLat: [8, 9] as const, weight: 3 },
-      { lonLat: [-4, 40] as const, weight: 2 },
-    ];
-    const yaw = facingYaw(places, STOCKPILOT_LON_LAT);
-    expect(-yaw / DEG).toBeLessThan(-15);
-    expect(angleFromView(yaw, STOCKPILOT_LON_LAT)).toBeLessThan(50 * DEG);
-    for (const p of places) expect(angleFromView(yaw, p.lonLat)).toBeLessThan(46 * DEG);
-  });
-
-  it('a play from the far side of the world faces its sources, not StockPilot', () => {
-    const places = [
-      { lonLat: [105, 35] as const, weight: 5 },
-      { lonLat: [78, 21] as const, weight: 4 },
-      { lonLat: [135, 36] as const, weight: 3 },
-      { lonLat: [120, 15] as const, weight: 2 },
-    ];
-    const yaw = facingYaw(places, STOCKPILOT_LON_LAT);
-    for (const p of places) expect(angleFromView(yaw, p.lonLat)).toBeLessThanOrEqual(SOURCE_SEEN);
-    expect(angleFromView(yaw, STOCKPILOT_LON_LAT)).toBeGreaterThan(STOCKPILOT_GONE);
+  it('far-side plays keep StockPilot in view: the tilt rises (up to GLOBE_TILT_MAX) when that brings the sources nearer, and stays when it would not', () => {
+    for (const [name, places] of [
+      ['Asia', ASIA],
+      ['Oceania', OCEANIA],
+      ['Asia and Europe', ASIA_AND_EUROPE],
+      ['one source near the antipode', NEAR_THE_ANTIPODE],
+    ] as const) {
+      const f = facingOf(places, STOCKPILOT_LON_LAT);
+      expect(stockpilotSeen(f), name).toBeLessThanOrEqual(STOCKPILOT_REACH + 1e-9);
+      expect(f.sway, name).toBeGreaterThanOrEqual(SWAY_MIN);
+      expect(f.pitch, name).toBeGreaterThanOrEqual(GLOBE_TILT);
+      expect(f.pitch, name).toBeLessThanOrEqual(GLOBE_TILT_MAX + 1e-9);
+    }
+    // Asia, Asia and Europe, the antipode: over the north, the tilt raised.
+    expect(facingOf(ASIA, STOCKPILOT_LON_LAT).pitch).toBeGreaterThan(40 * DEG);
+    expect(facingOf(ASIA_AND_EUROPE, STOCKPILOT_LON_LAT).pitch).toBeGreaterThan(40 * DEG);
+    expect(facingOf(NEAR_THE_ANTIPODE, STOCKPILOT_LON_LAT).pitch).toBeGreaterThan(40 * DEG);
+    // Oceania: across the Pacific at the usual tilt (rising would take the view further off).
+    expect(facingOf(OCEANIA, STOCKPILOT_LON_LAT).pitch).toBe(GLOBE_TILT);
+    // Raised, the sources' middle is nearer than any view at the usual tilt that keeps StockPilot.
+    const asia = facingOf(ASIA, STOCKPILOT_LON_LAT);
+    const sum = [0, 0, 0];
+    const v = [0, 0, 0];
+    for (const p of ASIA) {
+      lonLatToVector(p.lonLat[0], p.lonLat[1], 1, v);
+      for (let k = 0; k < 3; k += 1) sum[k]! += p.weight * v[k]!;
+    }
+    const middle = [
+      Math.atan2(sum[0]!, sum[2]!) / DEG,
+      Math.asin(sum[1]! / Math.hypot(sum[0]!, sum[1]!, sum[2]!)) / DEG,
+    ] as const;
+    let usual = Infinity;
+    for (let degree = -179; degree <= 180; degree += 1) {
+      const yaw = degree * DEG;
+      if (angleFromView(yaw, STOCKPILOT_LON_LAT) > STOCKPILOT_REACH) continue;
+      usual = Math.min(usual, angleFromView(yaw, middle));
+    }
+    expect(usual).toBeGreaterThan(SOURCES_CENTRE_SEEN);
+    expect(angleFromView(asia.yaw, middle, asia.pitch)).toBeLessThan(usual - 20 * DEG);
   });
 
   it('a heavier source pulls the facing toward itself', () => {
-    const light = facingYaw(
+    const light = facingOf(
       [
-        { lonLat: [10, 50], weight: 1 },
-        { lonLat: [30, 50], weight: 1 },
+        { lonLat: [-110, 30], weight: 1 },
+        { lonLat: [-60, 30], weight: 1 },
       ],
-      [20, 50],
+      STOCKPILOT_LON_LAT,
     );
-    const heavy = facingYaw(
+    const heavy = facingOf(
       [
-        { lonLat: [10, 50], weight: 1 },
-        { lonLat: [30, 50], weight: 9 },
+        { lonLat: [-110, 30], weight: 1 },
+        { lonLat: [-60, 30], weight: 9 },
       ],
-      [20, 50],
+      STOCKPILOT_LON_LAT,
     );
     // A yaw of -longitude faces that longitude: heavier on the east, a smaller yaw.
-    expect(heavy).toBeLessThan(light);
+    expect(heavy.yaw).toBeLessThan(light.yaw);
+  });
+
+  it('whatever the play, StockPilot stays within its reach, the sway either side included', () => {
+    // Made-up plays from a fixed seed: one to six sources anywhere, any weights.
+    let seed = 7;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    for (let play = 0; play < 60; play += 1) {
+      const places = Array.from({ length: 1 + Math.floor(rand() * 6) }, () => ({
+        lonLat: [rand() * 360 - 180, rand() * 140 - 70] as const,
+        weight: 0.5 + rand() * 9,
+      }));
+      const f = facingOf(places, STOCKPILOT_LON_LAT);
+      expect(stockpilotSeen(f), JSON.stringify(places)).toBeLessThanOrEqual(
+        STOCKPILOT_REACH + 1e-9,
+      );
+      expect(f.sway).toBeGreaterThanOrEqual(SWAY_MIN);
+    }
   });
 
   it('angles wrap into (-pi, pi]', () => {
@@ -530,55 +645,127 @@ describe('labels', () => {
     y,
     w: 100,
     h: 20,
+    reach: 10,
     visible: true,
-    spots: ['right', 'left', 'above', 'below'],
+    spots: LABEL_SPOTS,
     ...more,
   });
   const bounds = { w: 800, h: 500 };
+  const box = (x: number, y: number, half = 6) => ({
+    x: x - half,
+    y: y - half,
+    w: half * 2,
+    h: half * 2,
+  });
 
-  it('beside its mark, on the right when it fits', () => {
+  it('beside its mark, on the right when it fits, its reach from the point (its marks and a leader line)', () => {
     const out: PlacedLabel[] = [];
-    placeLabels([anchor(300, 200)], bounds, [], out);
-    expect(out[0]).toEqual({ x: 310, y: 190, shown: true });
+    placeLabels([anchor(300, 200)], bounds, [], [], out);
+    expect(out[0]).toEqual({ x: 310, y: 190, shown: true, side: 'right' });
+    placeLabels([anchor(300, 200, { reach: 9 + LABEL_LEADER + 1 })], bounds, [], [], out);
+    expect(out[0]).toEqual({ x: 318, y: 190, shown: true, side: 'right' });
   });
 
   it('flips to the left near the right edge, and is never cut by the stage', () => {
     const out: PlacedLabel[] = [];
-    placeLabels([anchor(740, 200)], bounds, [], out);
-    expect(out[0]).toEqual({ x: 630, y: 190, shown: true });
-    placeLabels([anchor(790, 4, { spots: ['right', 'left'] })], bounds, [], out);
+    placeLabels([anchor(740, 200)], bounds, [], [], out);
+    expect(out[0]).toEqual({ x: 630, y: 190, shown: true, side: 'left' });
+    placeLabels([anchor(790, 4, { spots: ['right', 'left'] })], bounds, [], [], out);
+    expect([out[0]!.shown, out[0]!.side]).toEqual([false, null]);
+  });
+
+  it("never sits on a mark, its own country's or another's: right, left, above, below, in turn", () => {
+    const out: PlacedLabel[] = [];
+    // A mark where the right spot would be: left.
+    placeLabels([anchor(300, 200)], bounds, [], [box(360, 200)], out);
+    expect(out[0]).toEqual({ x: 190, y: 190, shown: true, side: 'left' });
+    // Marks right and left: above, centred on the point.
+    placeLabels([anchor(300, 200)], bounds, [], [box(360, 200), box(240, 200)], out);
+    expect(out[0]).toEqual({ x: 250, y: 170, shown: true, side: 'above' });
+    // And above: below.
+    placeLabels([anchor(300, 200)], bounds, [], [box(360, 200), box(240, 200), box(300, 180)], out);
+    expect(out[0]).toEqual({ x: 250, y: 210, shown: true, side: 'below' });
+    // Nowhere free: not shown.
+    placeLabels(
+      [anchor(300, 200)],
+      bounds,
+      [],
+      [box(360, 200), box(240, 200), box(300, 180), box(300, 220)],
+      out,
+    );
     expect(out[0]!.shown).toBe(false);
   });
 
-  it('keeps clear of the panels on the stage and of the labels placed before it', () => {
+  it('keeps clear of the panels on the stage and of the labels placed before it; the lowest-ranked is dropped first', () => {
     const out: PlacedLabel[] = [];
-    placeLabels([anchor(300, 200)], bounds, [{ x: 305, y: 150, w: 200, h: 100 }], out);
-    expect(out[0]).toEqual({ x: 190, y: 190, shown: true });
-    placeLabels([anchor(300, 200), anchor(305, 200)], bounds, [], out);
-    expect(out[0]).toEqual({ x: 310, y: 190, shown: true });
+    placeLabels([anchor(300, 200)], bounds, [{ x: 305, y: 150, w: 200, h: 100 }], [], out);
+    expect(out[0]).toEqual({ x: 190, y: 190, shown: true, side: 'left' });
+    placeLabels([anchor(300, 200), anchor(305, 200)], bounds, [], [], out);
+    expect(out[0]).toEqual({ x: 310, y: 190, shown: true, side: 'right' });
     expect(out[1]!.shown).toBe(true);
-    expect(out[1]!.x).not.toBe(315);
+    expect(out[1]!.side).not.toBe('right');
+    // Two labels and room for one: the first keeps its spot, the second goes.
+    const one = { w: 130, h: 60 };
+    placeLabels(
+      [anchor(10, 30, { spots: ['right'] }), anchor(12, 32, { spots: ['right'] })],
+      one,
+      [],
+      [],
+      out,
+    );
+    expect(out.map((p) => p.shown)).toEqual([true, false]);
   });
 
   it('a label whose mark is behind the globe is not shown', () => {
     const out: PlacedLabel[] = [];
-    placeLabels([anchor(300, 200, { visible: false })], bounds, [], out);
+    placeLabels([anchor(300, 200, { visible: false })], bounds, [], [], out);
     expect(out[0]!.shown).toBe(false);
+  });
+
+  it("StockPilot's label goes the other way from the arcs coming in, and keeps its side while that stays good enough", () => {
+    // Arcs coming in from the east (their last stretch runs right of StockPilot): the label goes left.
+    expect(stockpilotSpots(3, 0, null)[0]).toBe('left');
+    // From below (y grows downward): above.
+    expect(stockpilotSpots(0, 2, null)[0]).toBe('above');
+    // From the upper right: left or below, never right or above.
+    const upperRight = stockpilotSpots(2, -1.5, null);
+    expect(upperRight.slice(0, 2).sort()).toEqual(['below', 'left']);
+    expect(upperRight.slice(2).sort()).toEqual(['above', 'right']);
+    // Every spot, once each.
+    expect([...stockpilotSpots(1, 1, null)].sort()).toEqual([...LABEL_SPOTS].sort());
+    // Nothing coming in: right first.
+    expect(stockpilotSpots(0, 0, null)).toEqual(LABEL_SPOTS);
+    // Held on its side while another is only a little better; moved when clearly worse.
+    expect(stockpilotSpots(2, -1.8, 'below')[0]).toBe('below');
+    expect(stockpilotSpots(3, 0, 'right')[0]).toBe('left');
   });
 });
 
 describe("the globe's turn", () => {
   const frame = { dtMs: 16, dragging: false, mayTurn: true, still: false, target: null };
+  // A facing at the usual tilt with the whole sway.
+  const at = (yaw: number, pitch = GLOBE_TILT, sway = SWAY): GlobeFacing => ({ yaw, pitch, sway });
   const run = (m: ReturnType<typeof createGlobeMotion>, ms: number, more = {}) => {
     for (let t = 0; t < ms; t += 16) advanceGlobeMotion(m, { ...frame, ...more });
   };
 
-  it('starts at the tilt, which never changes: the globe only turns left and right', () => {
+  it('starts at the tilt; a drag or the sway never changes it; a target eases it, yaw and tilt together', () => {
     const m = createGlobeMotion(0.3);
     expect(m.pitch).toBe(GLOBE_TILT);
     dragGlobe(m, 50, 16, 200);
-    run(m, 10_000, { target: 1 });
     expect(m.pitch).toBe(GLOBE_TILT);
+    run(m, 10_000, { target: at(1) });
+    expect(m.pitch).toBe(GLOBE_TILT);
+    // A raised target: half way through the ease the tilt is half way up, then it stays.
+    const n = createGlobeMotion(0);
+    run(n, EASE_MS / 2, { target: at(1, 50 * DEG) });
+    expect(Math.abs(n.pitch - 34 * DEG)).toBeLessThan(2 * DEG);
+    run(n, EASE_MS / 2 + 32, { target: at(1, 50 * DEG) });
+    near(n.pitch, 50 * DEG);
+    run(n, 20_000, { target: at(1, 50 * DEG) });
+    near(n.pitch, 50 * DEG);
+    dragGlobe(n, 50, 16, 200);
+    near(n.pitch, 50 * DEG);
   });
 
   it('eases to its target over EASE_MS, slow at both ends', () => {
@@ -587,84 +774,97 @@ describe("the globe's turn", () => {
     near(easeInOut(1), 1);
     expect(easeInOut(0.1)).toBeLessThan(0.1);
     const m = createGlobeMotion(0);
-    run(m, EASE_MS / 2, { target: 1 });
+    run(m, EASE_MS / 2, { target: at(1) });
     expect(Math.abs(m.yaw - 0.5)).toBeLessThan(0.05);
-    run(m, EASE_MS / 2 + 32, { target: 1 });
+    run(m, EASE_MS / 2 + 32, { target: at(1) });
     expect(m.easeMs).toBe(-1);
     expect(Math.abs(m.yaw - 1)).toBeLessThan(0.05);
   });
 
-  it('then sways either side of it, never faster than one turn per DRIFT_TURN_MS', () => {
+  it("then sways either side of it, as far as the target's sway and never faster than one turn per DRIFT_TURN_MS", () => {
     near(SWAY_PERIOD_MS, SWAY * DRIFT_TURN_MS);
-    const m = createGlobeMotion(0);
-    run(m, EASE_MS + 100, { target: 0 });
-    let last = m.yaw;
-    let fastest = 0;
-    let reach = 0;
-    for (let t = 0; t < SWAY_PERIOD_MS; t += 16) {
-      advanceGlobeMotion(m, { ...frame, target: 0 });
-      fastest = Math.max(fastest, Math.abs(wrapAngle(m.yaw - last)) / 16);
-      reach = Math.max(reach, Math.abs(m.yaw));
-      last = m.yaw;
+    for (const sway of [SWAY, SWAY_MIN]) {
+      const m = createGlobeMotion(0);
+      run(m, EASE_MS + 100, { target: at(0, GLOBE_TILT, sway) });
+      let last = m.yaw;
+      let fastest = 0;
+      let reach = 0;
+      for (let t = 0; t < SWAY_PERIOD_MS; t += 16) {
+        advanceGlobeMotion(m, { ...frame, target: at(0, GLOBE_TILT, sway) });
+        fastest = Math.max(fastest, Math.abs(wrapAngle(m.yaw - last)) / 16);
+        reach = Math.max(reach, Math.abs(m.yaw));
+        last = m.yaw;
+      }
+      expect(fastest).toBeLessThanOrEqual((2 * Math.PI) / DRIFT_TURN_MS + 1e-9);
+      expect(reach).toBeLessThanOrEqual(sway + 1e-9);
+      expect(reach).toBeGreaterThan(sway * 0.95);
     }
-    expect(fastest).toBeLessThanOrEqual((2 * Math.PI) / DRIFT_TURN_MS + 1e-9);
-    expect(reach).toBeLessThanOrEqual(SWAY + 1e-9);
-    expect(reach).toBeGreaterThan(SWAY * 0.95);
     near(swayAt(SWAY_PERIOD_MS / 4), SWAY);
+    near(swayAt(SWAY_PERIOD_MS / 4, SWAY_MIN), SWAY_MIN);
   });
 
-  it('a target that hardly moves is not a new ease', () => {
+  it('a target that hardly moves is not a new ease; one that moves in yaw, in tilt or in its sway is', () => {
     const m = createGlobeMotion(0);
-    run(m, EASE_MS + 100, { target: 0 });
-    advanceGlobeMotion(m, { ...frame, target: TARGET_MOVE / 2 });
+    run(m, EASE_MS + 100, { target: at(0) });
+    advanceGlobeMotion(m, { ...frame, target: at(TARGET_MOVE / 2, GLOBE_TILT + TARGET_MOVE / 2) });
     expect(m.easeMs).toBe(-1);
-    expect(m.target).toBe(0);
-    advanceGlobeMotion(m, { ...frame, target: TARGET_MOVE * 2 });
-    expect(m.easeMs).toBeGreaterThanOrEqual(0);
-    expect(m.target).toBe(TARGET_MOVE * 2);
+    expect(m.target).toEqual(at(0));
+    for (const next of [
+      at(TARGET_MOVE * 2),
+      at(TARGET_MOVE * 2, GLOBE_TILT + TARGET_MOVE * 2),
+      at(TARGET_MOVE * 2, GLOBE_TILT + TARGET_MOVE * 2, SWAY_MIN),
+    ]) {
+      run(m, EASE_MS + 100, { target: m.target });
+      advanceGlobeMotion(m, { ...frame, target: next });
+      expect(m.easeMs).toBeGreaterThanOrEqual(0);
+      expect(m.target).toEqual(next);
+    }
   });
 
   it('never turns on its own while paused, stopped or hidden (mayTurn false); its first target is taken straight', () => {
     const m = createGlobeMotion(0.5);
-    advanceGlobeMotion(m, { ...frame, mayTurn: false, target: 1.2 });
+    advanceGlobeMotion(m, { ...frame, mayTurn: false, target: at(1.2, 40 * DEG) });
     near(m.yaw, 1.2);
+    near(m.pitch, 40 * DEG);
     const first = m.yaw;
-    run(m, 30_000, { mayTurn: false, target: 2 });
+    run(m, 30_000, { mayTurn: false, target: at(2) });
     expect(m.yaw).toBe(first);
-    expect(m.target).toBe(2);
+    near(m.pitch, 40 * DEG);
+    expect(m.target).toEqual(at(2));
   });
 
   it('reduced motion (still): straight on its target, no ease, no sway, and a drag does not coast', () => {
     const m = createGlobeMotion(0);
-    advanceGlobeMotion(m, { ...frame, still: true, target: 0.8 });
+    advanceGlobeMotion(m, { ...frame, still: true, target: at(0.8, 45 * DEG) });
     near(m.yaw, 0.8);
-    run(m, 20_000, { still: true, target: 0.8 });
+    near(m.pitch, 45 * DEG);
+    run(m, 20_000, { still: true, target: at(0.8, 45 * DEG) });
     near(m.yaw, 0.8);
     dragGlobe(m, 40, 16, 200, true);
     expect(m.yawSpeed).toBe(0);
     near(m.yaw, 1);
-    run(m, 20_000, { still: true, target: 0.8 });
+    run(m, 20_000, { still: true, target: at(0.8, 45 * DEG) });
     near(m.yaw, 1);
   });
 
   it('a drag turns the globe with the pointer, coasts, waits RETURN_AFTER_MS, then eases back', () => {
     const m = createGlobeMotion(0);
-    run(m, EASE_MS + 100, { target: 0 });
+    run(m, EASE_MS + 100, { target: at(0) });
     const before = m.yaw;
     dragGlobe(m, 60, 16, 200);
     near(m.yaw, wrapAngle(before + 0.3));
     expect(m.yawSpeed).toBeGreaterThan(0);
-    advanceGlobeMotion(m, { ...frame, dragging: true, target: 0 });
+    advanceGlobeMotion(m, { ...frame, dragging: true, target: at(0) });
     expect(m.idleMs).toBe(0);
     const held = m.yaw;
-    advanceGlobeMotion(m, { ...frame, target: 0 });
+    advanceGlobeMotion(m, { ...frame, target: at(0) });
     expect(m.yaw).toBeGreaterThan(held);
-    run(m, 4000, { target: 0 });
+    run(m, 4000, { target: at(0) });
     expect(m.yawSpeed).toBe(0);
     const away = m.yaw;
-    run(m, RETURN_AFTER_MS - 4000 - 100, { target: 0 });
+    run(m, RETURN_AFTER_MS - 4000 - 100, { target: at(0) });
     expect(m.yaw).toBe(away);
-    run(m, 200 + EASE_MS, { target: 0 });
+    run(m, 200 + EASE_MS, { target: at(0) });
     expect(Math.abs(m.yaw)).toBeLessThanOrEqual(SWAY + 0.01);
   });
 
@@ -674,8 +874,8 @@ describe("the globe's turn", () => {
     stopCoasting(m);
     expect(m.yawSpeed).toBe(0);
     const n = createGlobeMotion(0);
-    advanceGlobeMotion(n, { ...frame, target: 2 });
-    advanceGlobeMotion(n, { ...frame, dtMs: 60_000, target: 2 });
+    advanceGlobeMotion(n, { ...frame, target: at(2) });
+    advanceGlobeMotion(n, { ...frame, dtMs: 60_000, target: at(2) });
     expect(n.easeMs).toBeLessThan(EASE_MS / 4);
   });
 });

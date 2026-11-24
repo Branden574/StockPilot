@@ -86,9 +86,15 @@ vi.mock('./security-map-globe', async () => {
   };
 });
 
-import { CATEGORY_LOOKS, HIDDEN_KIND_LOOK, localDayStart } from './map-model';
+import { CATEGORY_LOOKS, HIDDEN_KIND_LOOK, PANEL, localDayStart } from './map-model';
 import { SecurityMapClient } from './security-map-client';
-import { FEED_VISIBLE, FLAGGED_VISIBLE, MARK_TILE } from './security-map-panels';
+import {
+  FEED_VISIBLE,
+  FLAGGED_VISIBLE,
+  LABEL_LOOK,
+  MARK_TILE,
+  STAGE_CSS,
+} from './security-map-panels';
 
 /* ───────────────────────────── made-up answers ───────────────────────────── */
 
@@ -486,12 +492,20 @@ describe('the reads', () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  it('one read at a time: a read still out holds the next one back, up to the read limit', async () => {
-    const { spy } = mount(() => new Promise(() => {}));
+  it('one read at a time: a read still out holds the next one back, up to the read limit, however often the page draws again', async () => {
+    // A new poll function on each draw runs the effect that schedules reads
+    // again while the first read is out (review round 2, N4): without the
+    // check of a read in flight, that sends a second one at once.
+    const calls = vi.fn((_input: unknown) => new Promise(() => {}));
+    const initial = wholeRead();
+    const view = render(<SecurityMapClient initial={initial} poll={(input) => calls(input)} />);
     await advance(0);
-    expect(spy).toHaveBeenCalledTimes(1);
-    for (let i = 0; i < 19; i += 1) await advance(1_000);
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 19; i += 1) {
+      view.rerender(<SecurityMapClient initial={initial} poll={(input) => calls(input)} />);
+      await advance(1_000);
+    }
+    expect(calls).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('security-map-stop')).toBeNull();
   });
 
@@ -1272,7 +1286,9 @@ describe('the stage', () => {
       ['DE', 'Germany', '12'],
       ['BR', 'Brazil', '3'],
     ]);
-    expect(typeof props.target).toBe('number');
+    const target = props.target as { yaw: number; pitch: number; sway: number };
+    expect(Object.keys(target).sort()).toEqual(['pitch', 'sway', 'yaw']);
+    for (const v of Object.values(target)) expect(Number.isFinite(v)).toBe(true);
     expect([...(props.heat as Map<string, number>).keys()]).toEqual(['DE', 'BR']);
   });
 
@@ -1334,6 +1350,161 @@ describe('the controls and the flagged entries line up', () => {
       expect(timeAndCount, layout).toBeDefined();
       expect(timeAndCount!.className.split(' '), layout).toContain('whitespace-nowrap');
       unmount();
+    }
+  });
+});
+
+describe('lab walk 2', () => {
+  it('the ticker shows no organization and no source, only outcome, reason, city and country, and time (N6)', async () => {
+    notPhone = true;
+    const live = answer({
+      ...liveAnswer(),
+      feed: [
+        feedEntry({
+          minute: '2026-11-23T21:58:00+00:00',
+          country: 'CN',
+          city: 'Example Harbour',
+          source: 'edge',
+          organization_id: ORG,
+          organization_name: 'Example Hidden Academy',
+          organizations: 1,
+        }),
+      ],
+    });
+    mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(live),
+    );
+    await advance(0);
+    await advance(30_000);
+    const ticker = screen.getByTestId('security-map-ticker');
+    expect(ticker.textContent).toContain('Example Harbour, China');
+    expect(ticker.textContent).not.toContain('Example Hidden Academy');
+    expect(ticker.textContent).not.toContain(ORG);
+    expect(ticker.textContent).not.toContain(securityEventSourceLabel('edge'));
+    expect(ticker.querySelector('a, button')).toBeNull();
+  });
+
+  it("the ticker never cuts the place: the reason's words give way first, the place keeps up to 32 characters (F7)", async () => {
+    notPhone = true;
+    const live = answer({
+      ...liveAnswer(),
+      feed: [
+        feedEntry({ minute: '2026-11-23T21:58:00+00:00', country: 'CN', city: 'Example Harbour' }),
+      ],
+    });
+    mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(live),
+    );
+    await advance(0);
+    await advance(30_000);
+    const ticker = screen.getByTestId('security-map-ticker');
+    const reason = ticker.querySelector('[data-part="reason"]')!;
+    const place = ticker.querySelector('[data-part="place"]')!;
+    expect(place.textContent).toBe('Example Harbour, China');
+    expect(reason.className.split(' ')).toEqual(expect.arrayContaining(['min-w-0', 'truncate']));
+    expect(place.className.split(' ')).toEqual(
+      expect.arrayContaining(['shrink-0', 'max-w-[32ch]', 'truncate']),
+    );
+    expect(place.className.split(' ')).not.toContain('min-w-0');
+  });
+
+  it('the stage legend says what the numbers by a country count (N1)', () => {
+    notPhone = true;
+    mount(async () => new Promise(() => {}));
+    expect(screen.getByTestId('security-map-legend-counts').textContent).toBe(
+      SECURITY_MAP_WORDS.legendCounts,
+    );
+    expect(SECURITY_MAP_WORDS.legendCounts).toContain('events in this play');
+  });
+
+  it('a country label reads over the brightest land: its backdrop at least 88% opaque, its text at least 7:1 (F5), with a leader line on its side (F4)', () => {
+    const rgba = (css: string) => {
+      const m = /^rgba\((\d+),(\d+),(\d+),([\d.]+)\)$/.exec(css)!;
+      return { rgb: [Number(m[1]), Number(m[2]), Number(m[3])], alpha: Number(m[4]) };
+    };
+    const hex = (rgb: number[]) =>
+      `#${rgb.map((v) => Math.round(v).toString(16).padStart(2, '0')).join('')}`;
+    const luminance = (h: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => {
+        const c = parseInt(h.slice(i, i + 2), 16) / 255;
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const contrast = (a: string, b: string) => {
+      const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+      return (x! + 0.05) / (y! + 0.05);
+    };
+    for (const backdrop of [LABEL_LOOK.background, LABEL_LOOK.homeBackground]) {
+      const { rgb, alpha } = rgba(backdrop);
+      expect(alpha).toBeGreaterThanOrEqual(0.88);
+      // Over the brightest land dot (white) and over the dark sea alike.
+      for (const under of [255, 0]) {
+        const seen = hex(rgb.map((v) => v * alpha + under * (1 - alpha)));
+        expect(contrast(LABEL_LOOK.text, seen), `${backdrop} over ${under}`).toBeGreaterThanOrEqual(
+          7,
+        );
+        expect(
+          contrast(LABEL_LOOK.count, seen),
+          `${backdrop} over ${under}`,
+        ).toBeGreaterThanOrEqual(7);
+        expect(contrast(PANEL.stockpilot, seen)).toBeGreaterThanOrEqual(7);
+      }
+    }
+    expect(STAGE_CSS).toContain(`background:${LABEL_LOOK.background}`);
+    for (const side of ['right', 'left', 'above', 'below']) {
+      expect(STAGE_CSS).toContain(`.sm-label[data-side=${side}]::before{display:block;`);
+    }
+  });
+
+  it('more happened than the map can draw: said of the play on screen only, never beside a live play that draws everything (item 6)', async () => {
+    notPhone = true;
+    const cut = answer({ timeline_truncated: true });
+    mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole' ? wholeRead(cut) : recentRead(liveAnswer()),
+      wholeRead(cut),
+    );
+    // The replay on screen was cut: it says so, naming the replay.
+    expect(document.body.textContent).toContain(SECURITY_MAP_WORDS.cutReplay);
+    await advance(0);
+    await advance(30_000);
+    expect(lastGlobe().timing).toBe('live');
+    // The live play draws all of its arcs: no word of the replay's cut.
+    expect(document.body.textContent).not.toContain('More happened');
+  });
+
+  it('the stage is made shorter so the caption ends above the fold (F1), but never under 420 px', () => {
+    notPhone = true;
+    wide = true;
+    const heightWas = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+    const boxes: Record<string, { top: number; bottom: number }> = {
+      'security-map-stage': { top: 244, bottom: 856 },
+      'security-map-caption': { top: 864, bottom: 949 },
+    };
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const box = boxes[this.dataset.testid ?? ''] ?? { top: 0, bottom: 0 };
+      return {
+        ...box,
+        left: 0,
+        right: 0,
+        width: 0,
+        height: box.bottom - box.top,
+        x: 0,
+        y: box.top,
+        toJSON: () => ({}),
+      } as DOMRect;
+    });
+    try {
+      mount(async () => new Promise(() => {}));
+      // 800 - 244 - (949 - 856) - 8 = 455.
+      expect(screen.getByTestId('security-map-stage').style.height).toBe('455px');
+    } finally {
+      vi.restoreAllMocks();
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: heightWas });
     }
   });
 });

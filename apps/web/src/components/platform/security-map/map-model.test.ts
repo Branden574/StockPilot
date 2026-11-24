@@ -11,13 +11,15 @@ import {
   type SecurityMapWholeRead,
 } from '@stockpilot/core';
 
-import { facingYaw, heatOf } from './globe-math';
+import { facingOf, heatOf } from './globe-math';
 import {
   CATEGORY_LOOKS,
   SHAPE_INDEX,
   SOURCE_LABELS,
   countryName,
   drawnArcs,
+  STAGE_MAX_PX,
+  STAGE_MIN_PX,
   focusOf,
   globeArcsOf,
   heatByCountry,
@@ -29,6 +31,7 @@ import {
   notOnMapWords,
   replayWantsWhole,
   sourceLabels,
+  stageHeightFor,
   stageOf,
   stageSpan,
   tickerRowOf,
@@ -124,8 +127,8 @@ describe('what is on the map this moment', () => {
 
   it("the globe faces the drawn arcs' sources, each country weighed by the square root of its events", () => {
     const drawn = drawnArcs([arc('DE', 1, 0, 5), arc('DE', 0, 1, 4), arc('BR', 2, 0, 16)]);
-    expect(focusOf(drawn)).toBe(
-      facingYaw(
+    expect(focusOf(drawn)).toEqual(
+      facingOf(
         [
           { lonLat: countryPoint('DE')!, weight: 3 },
           { lonLat: countryPoint('BR')!, weight: 4 },
@@ -135,20 +138,20 @@ describe('what is on the map this moment', () => {
     );
     // One loud country and one quiet one: weighed 7 to 1, not alike (that would
     // face between them) and not 49 to 1.
-    const loud = focusOf(drawnArcs([arc('RU', 0, 0, 49), arc('ZA', 1, 0, 1)]));
+    const loud = focusOf(drawnArcs([arc('US', 0, 0, 49), arc('BR', 1, 0, 1)]));
     const weighed = (a: number, b: number) =>
-      facingYaw(
+      facingOf(
         [
-          { lonLat: countryPoint('RU')!, weight: a },
-          { lonLat: countryPoint('ZA')!, weight: b },
+          { lonLat: countryPoint('US')!, weight: a },
+          { lonLat: countryPoint('BR')!, weight: b },
         ],
         STOCKPILOT_LON_LAT,
       );
-    expect(loud).toBe(weighed(7, 1));
-    expect(loud).not.toBe(weighed(1, 1));
-    expect(loud).not.toBe(weighed(49, 1));
+    expect(loud).toEqual(weighed(7, 1));
+    expect(loud).not.toEqual(weighed(1, 1));
+    expect(loud).not.toEqual(weighed(49, 1));
     // Nothing to draw: StockPilot.
-    expect(focusOf([])).toBe(facingYaw([], STOCKPILOT_LON_LAT));
+    expect(focusOf([])).toEqual(facingOf([], STOCKPILOT_LON_LAT));
   });
 
   it('every arc of the play: live, every hour of the replay, or the still picture once it stops', () => {
@@ -534,5 +537,28 @@ describe('which view', () => {
   it("a country's name, or its code when the runtime has none", () => {
     expect(countryName('DE')).toBe('Germany');
     expect(countryName('QZ')).toBe('QZ');
+  });
+});
+
+describe("the stage's height (lab walk 2, F1)", () => {
+  it('68% of the window from 420 to 760 px when the caption fits under it', () => {
+    expect(stageHeightFor({ viewport: 1000, stageTop: 240, below: 40 })).toBe(680);
+    expect(stageHeightFor({ viewport: 1400, stageTop: 240, below: 40 })).toBe(STAGE_MAX_PX);
+    expect(stageHeightFor({ viewport: 500, stageTop: 240, below: 40 })).toBe(STAGE_MIN_PX);
+  });
+
+  it('shorter first, so the caption ends above the fold, 8 px to spare', () => {
+    // 1440x900, live: the caption ends 42 px under the stage.
+    expect(stageHeightFor({ viewport: 900, stageTop: 244, below: 42 })).toBe(606);
+    // 1280x800, a replay with the longest sentences: 5 lines of caption.
+    const h = stageHeightFor({ viewport: 800, stageTop: 244, below: 93 });
+    expect(h).toBe(455);
+    expect(244 + h + 93).toBeLessThanOrEqual(800 - 8);
+  });
+
+  it('never under 420 px: past that the caption falls below rather than the stage', () => {
+    expect(stageHeightFor({ viewport: 700, stageTop: 244, below: 93 })).toBe(STAGE_MIN_PX);
+    expect(STAGE_MIN_PX).toBe(420);
+    expect(STAGE_MAX_PX).toBe(760);
   });
 });

@@ -18,7 +18,7 @@ import {
   type SecurityMapWholeRead,
 } from '@stockpilot/core';
 
-import { facingYaw, heatOf, type ArcTiming } from './globe-math';
+import { facingOf, heatOf, type ArcTiming, type GlobeFacing } from './globe-math';
 import { STOCKPILOT_LON_LAT, countryPoint, type LonLat } from './world-geometry';
 
 /**
@@ -98,6 +98,29 @@ export const PANEL = {
   text: '#e6edf7',
   quiet: '#c9d6ea',
 } as const;
+
+/* ─────────────────────────── the stage's height ─────────────────────────── */
+
+/** The stage's height on a screen wider than a phone: 68% of the window, from 420 to 760 px (brief A). */
+export const STAGE_MIN_PX = 420;
+export const STAGE_MAX_PX = 760;
+const STAGE_SHARE = 0.68;
+/** Room left under the caption's last line at the fold. */
+const FOLD_SPARE_PX = 8;
+
+/**
+ * The stage's height, so that everything from the counters to the end of the
+ * caption is above the fold (lab walk 2, F1): 68% of the window (420 to 760
+ * px), made shorter when the caption under it would otherwise fall below the
+ * window's bottom, but never under 420 px. `stageTop` is where the stage
+ * starts on the page, `below` how far the caption's end is under the
+ * stage's (the gap and the caption, whatever its sentences).
+ */
+export function stageHeightFor(fit: { viewport: number; stageTop: number; below: number }): number {
+  const wanted = Math.min(STAGE_MAX_PX, Math.max(STAGE_MIN_PX, STAGE_SHARE * fit.viewport));
+  const room = fit.viewport - fit.stageTop - fit.below - FOLD_SPARE_PX;
+  return Math.round(Math.max(STAGE_MIN_PX, Math.min(wanted, room)));
+}
 
 /* ─────────────────────────── what is on the map now ─────────────────────────── */
 
@@ -201,16 +224,16 @@ function eventsByCountry(
 }
 
 /**
- * The yaw the globe faces for these arcs (globe-math facingYaw): the
- * weighted middle of their sources, keeping StockPilot in view when that
- * can be had; StockPilot itself when there is nothing to draw.
+ * Where the globe faces for these arcs (globe-math facingOf): as near the
+ * weighted middle of their sources as it can while StockPilot stays in
+ * view; StockPilot itself when there is nothing to draw.
  */
-export function focusOf(drawn: readonly DrawnArc[]): number {
+export function focusOf(drawn: readonly DrawnArc[]): GlobeFacing {
   const places = [...eventsByCountry(drawn).values()].map(({ from, events }) => ({
     lonLat: from,
     weight: Math.sqrt(events),
   }));
-  return facingYaw(places, STOCKPILOT_LON_LAT);
+  return facingOf(places, STOCKPILOT_LON_LAT);
 }
 
 /** How strongly each source country's land glows, by its share of the arcs on the map (log scale). */
