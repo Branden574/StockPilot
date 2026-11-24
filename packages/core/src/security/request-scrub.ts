@@ -369,7 +369,7 @@ export interface ScrubRule {
   /** The parts of `view` this rule replaces; in order, not overlapping. */
   readonly find: (view: string) => Found[];
   /** Run over a query string only (a path's `/` is a separator, not data). */
-  readonly only?: 'query';
+  readonly only?: 'query' | 'target';
 }
 
 function all(re: RegExp, view: string, keep?: (text: string) => boolean): Found[] {
@@ -524,8 +524,12 @@ export function looksLikeToken(run: string): boolean {
   return run.split(/[-_]+/).some((part) => part.length >= 4 && !isNameLikePart(part));
 }
 
-/** A standard base64 run: its alphabet, 32 characters or more, then up to two `=`. */
-const BASE64_RUN = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=])/g;
+/**
+ * A standard base64 run: its alphabet, 32 characters or more, then one or two
+ * `=` only when they end it (review 3B, S2: a padding followed by more once
+ * left the whole run behind).
+ */
+const BASE64_RUN = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{32,}(?:={1,2}(?![A-Za-z0-9+/=]))?/g;
 
 /**
  * Whether a BASE64_RUN with a `+` or a `/` in it is a value: split at them, some
@@ -538,6 +542,60 @@ function looksLikeBase64Value(run: string): boolean {
     .replace(/=+$/, '')
     .split(/[+/]+/)
     .some((part) => part.length >= 4 && !isNameLikePart(part));
+}
+
+/**
+ * Whether a BASE64_RUN in a PATH is a value: it holds a `+` or a `/`, and
+ * more than half of its characters sit in parts (split at them) of four or
+ * more that do not read as a name (isNameLikePart). A path of names
+ * (`/vendor/phpunit/phpunit/src/Util/PHP`) is kept; a random value is
+ * taken whole (review 3B, S2).
+ */
+function looksLikeBase64ValueInPath(run: string): boolean {
+  if (!/[+/]/.test(run)) return false;
+  const parts = run.replace(/=+$/, '').split(/[+/]+/);
+  let odd = 0;
+  let total = 0;
+  for (const part of parts) {
+    total += part.length;
+    if (part.length >= 4 && !isNameLikePart(part)) odd += part.length;
+  }
+  return odd * 2 > total;
+}
+
+/**
+ * BASE64_RUN in a path, judged by looksLikeBase64ValueInPath once a `/` at
+ * either end, and a whole segment there that is shorter than four characters
+ * or reads as a name (with no `+` in it), are left out: `admin/<value>/x`
+ * takes the value only. What is left must still be 16 characters or more.
+ */
+function findBase64ValueInPath(view: string): Found[] {
+  const found: Found[] = [];
+  const edge = (segment: string) =>
+    !segment.includes('+') && (segment.length < 4 || isNameLikePart(segment));
+  for (const { from, to } of all(BASE64_RUN, view)) {
+    let start = from;
+    let end = to;
+    for (;;) {
+      while (start < end && view[start] === '/') start++;
+      while (end > start && view[end - 1] === '/') end--;
+      const first = view.indexOf('/', start);
+      if (first !== -1 && first < end && edge(view.slice(start, first))) {
+        start = first;
+        continue;
+      }
+      const last = view.lastIndexOf('/', end - 1);
+      if (last >= start && edge(view.slice(last + 1, end))) {
+        end = last;
+        continue;
+      }
+      break;
+    }
+    if (end - start >= 16 && looksLikeBase64ValueInPath(view.slice(start, end))) {
+      found.push({ from: start, to: end });
+    }
+  }
+  return found;
 }
 
 /** The digits of a text. */
@@ -605,6 +663,16 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
     find: (view) => all(BASE64_RUN, view, looksLikeBase64Value),
   },
   {
+    // In a path: a standard base64 run across segments (a `/` there usually
+    // separates names), taken whole when more than half of it does not read
+    // as names; a name or a short segment at either end, and a `/` there,
+    // stay (review 3B, S2).
+    name: 'base64_value_in_path',
+    marker: SAMPLE_MARKERS.longValue,
+    only: 'target',
+    find: findBase64ValueInPath,
+  },
+  {
     // A run shaped like a token (looksLikeToken), long or short, with `-` and `_` or without.
     name: 'token_shape',
     marker: SAMPLE_MARKERS.token,
@@ -618,14 +686,22 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
     find: (view) => all(/[0-9]{6,}/g, view),
   },
   {
-    // A phone number written with separators: groups of 2 to 4 digits, 9 digits or more.
+    // A phone or card number written with separators (`-`, `.`, a space,
+    // `+`, which is a space in a query, or `_`): groups of 2 to 5 digits, two
+    // to six of them, 9 digits or more (review 3B, S3).
     name: 'phone',
     marker: SAMPLE_MARKERS.number,
     find: (view) =>
       all(
-        /(?<![0-9])\+?\(?[0-9]{2,4}\)?(?:[-. ]\(?[0-9]{2,4}\)?){2,5}(?![0-9])/g,
+        /(?<![0-9])\+?\(?[0-9]{2,5}\)?(?:[-. +_]\(?[0-9]{2,5}\)?){1,5}(?![0-9])/g,
         view,
-        (text) => countDigits(text) >= 9,
+        (text) => {
+          // Two groups only when they hold ten digits (`12345-67890`), so a
+          // name such as `CVE-2021-44228-test` (nine) is kept.
+          const digits = countDigits(text);
+          const groups = text.match(/[0-9]+/g)?.length ?? 0;
+          return digits >= 9 && (groups >= 3 || digits >= 10);
+        },
       ),
   },
 ];
@@ -757,7 +833,8 @@ function removeSecretValues(
   const replace: Array<[number, number]> = [];
   for (const [from, end] of parts) {
     // Three dots at the end of a part are not part of its value: they may be
-    // the cut mark of an earlier scrub, and a second scrub must keep them.
+    // the cut mark of an earlier scrub, which a second scrub keeps. (A second
+    // scrub never shows more than the first; it can remove more: review 3B S9.)
     const to = endsInCutMark(pieces, from, end) ? end - SAMPLE_CUT_MARK.length : end;
     let eq = -1;
     for (let i = from; i < to; i++) {
@@ -832,7 +909,9 @@ export function scrubRequestTarget(pathname: string): string {
     for (const split of [isSeparator, isDecodedSeparator]) {
       const params: Array<[number, number]> = [];
       for (const [from, to] of partsOf(pieces, 0, pieces.length, '/', split)) {
-        params.push(...partsOf(pieces, from, to, ';', split).slice(1));
+        // At `;`, and at `?` and `&` too (an encoded query inside a segment:
+        // review 3B, S4).
+        params.push(...partsOf(pieces, from, to, ';?&', split).slice(1));
       }
       pieces = removeSecretValues(pieces, params, () => false, split);
     }

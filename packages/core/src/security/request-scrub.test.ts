@@ -339,6 +339,28 @@ function expectSafe(out: string, planted: Planted, max: number) {
   }
 }
 
+/**
+ * A second scrub never shows more than the first did: every run of six or
+ * more characters it keeps, outside the markers and the cut mark, is already
+ * in the first scrub's text. (It can remove more: a value that only reads as
+ * one once the first scrub's markers stand beside it, or a cut that leaves an
+ * address-shaped end: 21 of 400,000 hostile inputs, review 3B S9.)
+ */
+function revealsNothingNew(once: string, again: string): boolean {
+  const words = [
+    ...Object.values(SAMPLE_MARKERS),
+    SAMPLE_CUT_MARK,
+    SAMPLE_UNREADABLE_TARGET,
+    SAMPLE_OVERFLOW_TARGET,
+  ].sort((a, b) => b.length - a.length);
+  let runs = [again];
+  for (const word of words) runs = runs.flatMap((r) => r.split(word));
+  return runs.every((run) => {
+    for (let i = 0; i + 6 <= run.length; i++) if (!once.includes(run.slice(i, i + 6))) return false;
+    return true;
+  });
+}
+
 // ── The contract's words ────────────────────────────────────────────────────
 
 describe('the contract with migration 0479', () => {
@@ -680,7 +702,9 @@ describe('generated hostile inputs (seeded)', () => {
       const out = scrubRequestTarget(input);
       expect(isStorableTarget(out), `${input} -> ${out}`).toBe(true);
       expectSafe(out, planted, SAMPLE_TARGET_MAX);
-      expect(scrubRequestTarget(out), `scrubbed twice: ${input}`).toBe(out);
+      expect(revealsNothingNew(out, scrubRequestTarget(out)), `scrubbed twice: ${input}`).toBe(
+        true,
+      );
     }
     expect(kinds.size).toBe(19);
   });
@@ -695,7 +719,10 @@ describe('generated hostile inputs (seeded)', () => {
       if (out === null) continue;
       expect(isStorableSample(out), `${input} -> ${out}`).toBe(true);
       expectSafe(out, planted, SAMPLE_QUERY_MAX);
-      expect(scrubRequestSample(out), `scrubbed twice: ${input}`).toBe(out);
+      expect(
+        revealsNothingNew(out, scrubRequestSample(out) ?? ''),
+        `scrubbed twice: ${input}`,
+      ).toBe(true);
     }
     expect(kinds.size).toBe(20);
   });
@@ -971,6 +998,107 @@ describe('the ways through the scrub the independent review found are closed', (
     expect(t('/@vite/env')).toBe('/(at)vite/env');
     expect(t('/x/user%40host/.env')).toBe('/x/user(at)host/.env');
     expect(q('q=a@b')).toBe('q=a(at)b');
+  });
+
+  it('S2: a standard base64 value whose padding is followed by more is taken whole', () => {
+    expect(q('data=Zm9vYmFy+YmF6cXV4/LW1hZGUtdXAtdmFsdWU=x')).toBe('data=<long value>=x');
+    expect(q('data=Zm9vYmFy+YmF6cXV4/LW1hZGUtdXAtdmFsdWU===')).toBe('data=<long value>===');
+    expect(q('data=Zm9vYmFy+YmF6cXV4/LW1hZGUtdXAtdmFsdWU=')).toBe('data=<long value>');
+  });
+
+  it('S2: in a path, a standard base64 value of 32 or more is taken whole when most of it does not read as names', () => {
+    const B64 = `${UPPER}${LOWER}${DIGITS}+/`;
+    let slashed = 0;
+    let whole = 0;
+    let piece = 0;
+    for (let i = 0; i < 20_000; i++) {
+      const value = seq.text(B64, 32);
+      if (!value.includes('/')) continue;
+      slashed++;
+      const out = t(`/wp-admin/${value}`);
+      if (out.includes(value)) whole++;
+      else if (value.split('/').some((p) => p.length >= 10 && out.includes(p))) piece++;
+    }
+    // Measured (PROGRESS.md): of all 32-character values, about 0.02% kept
+    // whole and 0.07% a piece of 10+; it was 6.6% and 10.4%.
+    expect(slashed).toBeGreaterThan(7_000);
+    expect(whole / slashed).toBeLessThan(0.003);
+    expect(piece / slashed).toBeLessThan(0.005);
+    // Ordinary long paths are names: kept as sent.
+    for (const path of [
+      '/wordpress/wp/includes/blog/xmlrpc.php',
+      '/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php',
+      '/wp-content/themes/twentytwentyone/functions.php',
+      '/wp-content/plugins/contact-form-7/includes/js/index.js',
+    ]) {
+      expect(t(path)).toBe(path);
+    }
+  });
+
+  it('S9: a second scrub never shows more, on padded base64 followed by more and on texts cut near an address', () => {
+    const B64 = `${UPPER}${LOWER}${DIGITS}+/`;
+    const pieces = [
+      () =>
+        `${seq.text(B64, seq.int(30, 48))}${seq.pick(['=', '==', '==='])}${seq.text(LOWER, seq.int(1, 3))}`,
+      () =>
+        `${seq.text(HEX, seq.int(2, 6))}:${seq.text(HEX, seq.int(1, 4))}::${seq.text(HEX, seq.int(1, 6))}`,
+      () => `${seq.int(1, 299)}.${seq.int(1, 299)}.${seq.int(1, 299)}.${seq.int(1, 299)}`,
+      () => seq.text(BASE64URL, seq.int(10, 30)),
+      () =>
+        seq.pick(['<token>', '<removed>', '(at)', '...', '%25%25', '%0A', '&', ';', '=', '/', '@']),
+      () => seq.text(`${LOWER}.-_`, seq.int(1, 12)),
+    ];
+    let changed = 0;
+    for (let i = 0; i < 4_000; i++) {
+      let raw = '';
+      const want = seq.int(1, 3) === 1 ? seq.int(280, 330) : seq.int(20, 200);
+      while (raw.length < want) raw += seq.pick(pieces)();
+      const out = q(raw);
+      if (out !== null) {
+        const again = q(out) ?? '';
+        if (again !== out) changed++;
+        expect(isStorableSample(again)).toBe(true);
+        expect(revealsNothingNew(out, again), `${raw}\n -> ${out}\n -> ${again}`).toBe(true);
+      }
+      const path = t(`/wp-admin/${raw}`);
+      const pathAgain = t(path);
+      if (pathAgain !== path) changed++;
+      expect(isStorableTarget(pathAgain)).toBe(true);
+      expect(revealsNothingNew(path, pathAgain), `${raw}\n -> ${path}\n -> ${pathAgain}`).toBe(
+        true,
+      );
+    }
+    // Most are unchanged; the property above is what is promised, and it sees a leak.
+    expect(changed).toBeLessThan(400);
+    expect(revealsNothingNew('q=<token>', 'q=<token>')).toBe(true);
+    expect(revealsNothingNew('q=<token>', 'q=madeupvalue')).toBe(false);
+  });
+
+  it('S3: a card number or phone number in groups joined by `+`, `_`, spaces or dashes is a number', () => {
+    expect(q('q=4111+1111+1111+1111')).toBe('q=<number>');
+    expect(q('q=4111 1111 1111 1111')).toBe('q=<number>');
+    expect(q('q=4111-1111-1111-1111')).toBe('q=<number>');
+    expect(t('/wp-admin/1234_5678_9012_3456')).toBe('/wp-admin/<number>');
+    // Nineteen digits glued to its key: taken as a long value, gone either way.
+    expect(q('q=5555+5555+5555+4444+123')).not.toMatch(/[0-9]{3}/);
+    expect(q('q=555+010+4477')).toBe('q=<number>');
+    expect(q('q=12345-67890')).toBe('q=<number>');
+    // A date, a version, a size and an injection probe's numbers are not.
+    expect(t('/backup/2026-01-31-db/.env')).toBe('/backup/2026-01-31-db/.env');
+    expect(t('/wp-admin/v10.15.7/x')).toBe('/wp-admin/v10.15.7/x');
+    expect(q('id=1+UNION+SELECT+1,2,3--')).toBe('id=1+UNION+SELECT+1,2,3--');
+    expect(q('range=10-20&size=640+480')).toBe('range=10-20&size=640+480');
+  });
+
+  it('S4: in a path, a secret-named key after an encoded `?` or `&` loses its value', () => {
+    expect(t('/wp-admin/x.php%3Flog%3Dadmin%26pwd%3Dmadeup7')).toBe(
+      '/wp-admin/x.php%3Flog%3Dadmin%26pwd%3D<removed>',
+    );
+    expect(t('/wp-admin/x%3Fpassword%3Dmadeup7/y.php')).toBe(
+      '/wp-admin/x%3Fpassword%3D<removed>/y.php',
+    );
+    expect(t('/wp-admin/a&token=madeup7/x')).toBe('/wp-admin/a&token=<removed>/x');
+    expect(t('/wp-admin/a&b=c/x')).toBe('/wp-admin/a&b=c/x');
   });
 });
 

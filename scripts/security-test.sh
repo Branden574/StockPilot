@@ -3066,8 +3066,9 @@ CORE_TESTS=(
   # string is kept only as printable ASCII, cut to length, with anything that
   # reads as an email, an id, a number, an address, a long value or a token
   # (a 22-character invite token in every position) replaced by a fixed
-  # marker, and a secret-named key's value removed; a second scrub changes
-  # nothing; the last step is the table's own predicate. Generated hostile
+  # marker, and a secret-named key's value removed; a second scrub never
+  # shows more than the first; the last step is the table's own predicate; the
+  # ways through that the independent review found (3B) are pinned. Generated hostile
   # inputs; ordinary scanner shapes come out unchanged (apps/web's
   # probe-paths.test.ts holds every made-up scanner path to that too).
   src/security/request-scrub.test.ts
