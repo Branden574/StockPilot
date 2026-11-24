@@ -50,6 +50,34 @@ const MAX_BYTES = 10 * 1024 * 1024;
 // heic2any before the normal canvas pipeline.
 const ACCEPT = ['image/png', 'image/jpeg', 'image/webp', 'image/avif', 'image/heic', 'image/heif'];
 
+/** What became of one photo of a batch. */
+type PhotoOutcome = 'added' | 'refused' | 'unsent';
+
+/**
+ * The batch's last word (lab walk 5, F4): how many photos were added and how
+ * many were not, never "uploaded" for a photo the server refused. Each photo
+ * that was not added has had its own sentence already.
+ */
+function photoBatchSummary(outcomes: readonly PhotoOutcome[]): {
+  tone: 'success' | 'warning' | 'error';
+  text: string;
+} {
+  const count = (o: PhotoOutcome) => outcomes.filter((x) => x === o).length;
+  const added = count('added');
+  const refused = count('refused');
+  const unsent = count('unsent');
+  const notAdded = [
+    refused > 0 ? `${refused} ${refused === 1 ? 'was' : 'were'} refused.` : null,
+    unsent > 0 ? `${unsent} could not be sent.` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' ');
+  const addedText = `${added} ${added === 1 ? 'photo' : 'photos'} added.`;
+  if (!notAdded) return { tone: 'success', text: addedText };
+  if (added === 0) return { tone: 'error', text: `No photos were added. ${notAdded}` };
+  return { tone: 'warning', text: `${addedText} ${notAdded}` };
+}
+
 export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const router = useRouter();
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -114,7 +142,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // → PUT → record independently, so a failure on one doesn't
       // block the others (mirrors the prior `continue` semantics).
       const CONCURRENCY = 3;
-      async function processOne(original: File, index: number): Promise<void> {
+      async function processOne(original: File, index: number): Promise<PhotoOutcome> {
         // Validation already ran above, before the progress denominator was
         // fixed — every file reaching here is one we intend to upload.
         const progressKey = `${index}:${original.name}`;
@@ -124,7 +152,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
         const presign = await createImageUploadAction({ itemId, fileExt: ext });
         if (!presign.ok) {
           toast.error(presign.error.message);
-          return;
+          return 'refused';
         }
 
         // PUT master + thumb in parallel — the thumb is tiny (~5-15 KB)
@@ -165,7 +193,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           batch.settle(progressKey, false);
           publishProgress();
           toast.error(`Couldn't upload "${original.name}". Check your network and try again.`);
-          return;
+          return 'unsent';
         }
         batch.settle(progressKey, true);
         publishProgress();
@@ -186,8 +214,11 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           isFirst,
         });
         if (!record.ok) {
+          // The server's own sentence for this photo (a refusal, a limit).
           toast.error(record.error.message);
+          return 'refused';
         }
+        return 'added';
       }
 
       // Drain the list in waves of CONCURRENCY using a worker pool —
@@ -196,14 +227,22 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // isFirst index are both defined over the accepted files, so a rejected
       // file must not occupy a slot or shift an index.
       let cursor = 0;
+      const outcomes: PhotoOutcome[] = [];
       const workers = Array.from({ length: Math.min(CONCURRENCY, accepted.length) }, async () => {
         while (cursor < accepted.length) {
           const i = cursor++;
-          await processOne(accepted[i]!, i);
+          const file = accepted[i]!;
+          try {
+            outcomes.push(await processOne(file, i));
+          } catch {
+            toast.error(`Couldn't upload "${file.name}". Try again.`);
+            outcomes.push('unsent');
+          }
         }
       });
       await Promise.all(workers);
-      toast.success('Photos uploaded.');
+      const summary = photoBatchSummary(outcomes);
+      toast[summary.tone](summary.text);
       router.refresh();
     } finally {
       setUploading(false);
