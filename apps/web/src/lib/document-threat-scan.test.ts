@@ -2,7 +2,13 @@ import { deflateSync } from 'node:zlib';
 
 import { describe, expect, it } from 'vitest';
 
-import { scanDocumentBytes, THREAT_MESSAGES, type DocumentThreatCode } from './document-threat-scan';
+import {
+  SCAN_TIME_BUDGET_MS,
+  SCAN_WORK_BUDGET_BYTES,
+  scanDocumentBytes,
+  THREAT_MESSAGES,
+  type DocumentThreatCode,
+} from './document-threat-scan';
 import { sniffFile } from './file-signature';
 
 // ---------------------------------------------------------------------------
@@ -402,12 +408,126 @@ describe('the scanner and the sniffer agree on what they are looking at', () => 
       'pdf_encrypted',
       'pdf_scan_limit',
       'appended_payload',
+      'scan_budget',
     ];
+    expect(Object.keys(THREAT_MESSAGES).sort()).toEqual([...codes].sort());
     for (const code of codes) {
       expect(THREAT_MESSAGES[code], code).toBeTruthy();
       // The PDF refusals must name a way forward; a dead end turns a safe
       // refusal into a support ticket.
       if (code.startsWith('pdf_')) expect(THREAT_MESSAGES[code]).toMatch(/Print to PDF/);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PART 6: THE SCAN HAS A CLOCK AND A TOTAL-WORK CEILING.
+//
+// Every bound above caps an amount. None capped the time, and inflateSync is
+// synchronous, so a document built to be slow held the request for as long as
+// it liked. Now the scan reads a clock between steps and counts every byte it
+// reads; running out of either is the `scan_budget` verdict, refused like the
+// other bounds ("could not be checked" is never "clean"). The budgets are
+// overridable only so these tests can spend them without minutes of work.
+// ---------------------------------------------------------------------------
+describe('scanDocumentBytes: the time and total-work budgets (part 6)', () => {
+  /** A clock that moves `step` milliseconds every time it is read. */
+  const ticking = (step: number) => {
+    let t = 0;
+    return () => {
+      t += step;
+      return t;
+    };
+  };
+  /** A PDF of `n` small Flate streams with nothing active in them. */
+  const manyStreams = (n: number): Uint8Array => {
+    const body = deflateSync(Buffer.from('<< /Type /Page >>', 'latin1'));
+    return concat(
+      ascii('%PDF-1.7\n'),
+      ...Array.from({ length: n }, (_, i) =>
+        concat(
+          ascii(`${i + 1} 0 obj\n<< /Filter /FlateDecode >>\nstream\n`),
+          new Uint8Array(body),
+          ascii('\nendstream\nendobj\n'),
+        ),
+      ),
+      ascii('%%EOF\n'),
+    );
+  };
+
+  it('the budgets: four seconds, and 512 MiB of bytes read', () => {
+    expect(SCAN_TIME_BUDGET_MS).toBe(4_000);
+    expect(SCAN_WORK_BUDGET_BYTES).toBe(512 * 1024 * 1024);
+  });
+
+  it('a clock that runs out between streams is a refusal: could not be checked', () => {
+    const doc = manyStreams(40);
+    expect(scanDocumentBytes(doc, 'pdf')).toBeNull();
+    const threat = scanDocumentBytes(doc, 'pdf', { timeBudgetMs: 100, now: ticking(10) });
+    expect(threat?.code).toBe('scan_budget');
+    expect(threat?.detail).toBe('time budget spent');
+  });
+
+  it('a clock that does not run out changes nothing: the same verdicts as before', () => {
+    const still = () => 0;
+    expect(scanDocumentBytes(manyStreams(40), 'pdf', { now: still })).toBeNull();
+    expect(
+      scanDocumentBytes(pdfWithFlateStream('<< /S /JavaScript /JS (x) >>'), 'pdf', { now: still })
+        ?.code,
+    ).toBe('pdf_javascript');
+    expect(scanDocumentBytes(completePng(), 'png', { now: still })).toBeNull();
+  });
+
+  it('the work ceiling refuses a PDF, and an image whose trailer it cannot finish reading', () => {
+    const doc = manyStreams(5);
+    expect(scanDocumentBytes(doc, 'pdf', { workBudgetBytes: 10 })?.code).toBe('scan_budget');
+    // Enough for the document's own passes, not for its streams.
+    expect(
+      scanDocumentBytes(doc, 'pdf', { workBudgetBytes: doc.byteLength * 3 + 20 })?.detail,
+    ).toBe('total work budget spent');
+    const padded = concat(completePng(), new Uint8Array(4096).fill(0x20));
+    expect(scanDocumentBytes(padded, 'png')).toBeNull();
+    expect(
+      scanDocumentBytes(padded, 'png', { workBudgetBytes: padded.byteLength + 4096 * 2 })?.code,
+    ).toBe('scan_budget');
+    // A ceiling at least as large as the work: clean, as before.
+    expect(scanDocumentBytes(padded, 'png', { workBudgetBytes: padded.byteLength * 8 })).toBeNull();
+  });
+
+  it('a hidden payload is still found before the work runs out, when the ceiling allows', () => {
+    const zip = [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00];
+    const bad = concat(completePng(), zip);
+    expect(scanDocumentBytes(bad, 'png')?.code).toBe('appended_payload');
+  });
+
+  it('keywords with no endstream after them: the verdicts are the old ones, without the old cost', () => {
+    // A document whose last part is the word `stream` over and over, with no
+    // `endstream` after it: nothing more can be inflated. The old loop searched
+    // the rest of the document again for every keyword (the square of its
+    // size). The verdict is the same: fewer keywords than the stream ceiling
+    // is clean, more is refused (4,012 generated documents gave the old and the
+    // new module the same verdict, 2026-11-24, part-6-web/PROGRESS.md).
+    const few = concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(3000)), ascii('%%EOF\n'));
+    expect(scanDocumentBytes(few, 'pdf')).toBeNull();
+    const many = concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(5000)), ascii('%%EOF\n'));
+    expect(scanDocumentBytes(many, 'pdf')?.code).toBe('pdf_scan_limit');
+    // Right at the ceiling, as the old loop answered.
+    const at = (n: number) =>
+      scanDocumentBytes(concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(n))), 'pdf');
+    expect(at(4095)).toBeNull();
+    expect(at(4096)).toBeNull();
+    expect(at(4097)?.code).toBe('pdf_scan_limit');
+    // And it is quick: four megabytes of keywords is one pass, not thousands.
+    const big = concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(600_000)));
+    const started = performance.now();
+    expect(scanDocumentBytes(big, 'pdf')?.code).toBe('pdf_scan_limit');
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it('the refusal sentence gives a way forward and no detail of the check', () => {
+    expect(THREAT_MESSAGES.scan_budget).toBe(
+      'We could not finish checking this file safely, so it was not uploaded. Save a simpler copy and upload that.',
+    );
+    expect(THREAT_MESSAGES.scan_budget).not.toMatch(/\d|second|budget|limit|stream/i);
   });
 });

@@ -64,7 +64,10 @@ export type DocumentThreatCode =
   | 'pdf_rich_media'
   | 'pdf_encrypted'
   | 'pdf_scan_limit'
-  | 'appended_payload';
+  | 'appended_payload'
+  // The scan's own time or total-work budget ran out (part 6): the file could
+  // not be checked, which is refused like every other bound below.
+  | 'scan_budget';
 
 export type DocumentThreat = {
   code: DocumentThreatCode;
@@ -96,6 +99,8 @@ export const THREAT_MESSAGES: Record<DocumentThreatCode, string> = {
     'This PDF is too large or too complex for us to check safely. Open it and use Print to PDF to save a simpler copy, then upload that.',
   appended_payload:
     'This file has extra data hidden after the end of the image and could not be uploaded.',
+  scan_budget:
+    'We could not finish checking this file safely, so it was not uploaded. Save a simpler copy and upload that.',
 };
 
 // ───────────────────────── bounds ─────────────────────────
@@ -123,6 +128,62 @@ const MAX_INFLATED_BYTES_PER_STREAM = 32 * 1024 * 1024;
  *  our upload limits can reach it: the bulk of a large real PDF is image data,
  *  which is /DCTDecode or /CCITTFaxDecode and does not inflate here at all. */
 const MAX_TOTAL_INFLATED_BYTES = 256 * 1024 * 1024;
+
+/**
+ * The scan's TIME budget (part 6). Every bound above caps an amount; none
+ * capped the clock, and inflateSync is synchronous, so a hostile document
+ * could hold the request for as long as its streams took to inflate and
+ * read. The clock is read between steps (before each stream, before each
+ * trailer signature), so one step can run past it by at most what one step
+ * costs. Running out is a verdict (`scan_budget`), never a shrug, for the
+ * reason scanFlateStreams gives below. An honest document inside our upload
+ * limits is checked in milliseconds.
+ */
+export const SCAN_TIME_BUDGET_MS = 4_000;
+
+/**
+ * The scan's TOTAL-WORK budget (part 6): every byte any step reads counts
+ * once for each pass over it (the document's own text for each of its three
+ * passes, each stream's compressed bytes and what it inflated to, each
+ * image's bytes and its trailer once for each signature). Sized above what
+ * the bounds above already allow for the largest file any upload path takes
+ * (three passes over 25 MB, its streams, and the whole inflate budget), so
+ * it never refuses a document those bounds accept; it is the one ceiling on
+ * the whole scan whatever the file, the size or the caller. Running out is
+ * `scan_budget`.
+ */
+export const SCAN_WORK_BUDGET_BYTES = 512 * 1024 * 1024;
+
+/** What one scan may still spend, and the clock it reads. */
+interface ScanBudget {
+  deadline: number;
+  workLeft: number;
+  now: () => number;
+}
+
+/** Overrides for the two budgets and the clock: for tests, never for callers. */
+export interface ScanBudgetOptions {
+  timeBudgetMs?: number;
+  workBudgetBytes?: number;
+  now?: () => number;
+}
+
+function budgetOf(options: ScanBudgetOptions | undefined): ScanBudget {
+  const now = options?.now ?? (() => performance.now());
+  return {
+    deadline: now() + (options?.timeBudgetMs ?? SCAN_TIME_BUDGET_MS),
+    workLeft: options?.workBudgetBytes ?? SCAN_WORK_BUDGET_BYTES,
+    now,
+  };
+}
+
+/** Spends `units` of work and reads the clock: a verdict when either is spent, else null. */
+function spend(budget: ScanBudget, units: number): DocumentThreat | null {
+  budget.workLeft -= units;
+  if (budget.workLeft < 0) return { code: 'scan_budget', detail: 'total work budget spent' };
+  if (budget.now() > budget.deadline) return { code: 'scan_budget', detail: 'time budget spent' };
+  return null;
+}
 
 /**
  * PDF name tokens that mean active content, keyed by the DECODED name.
@@ -205,14 +266,21 @@ const APPENDED_PAYLOAD_SIGNATURES: ReadonlyArray<{
 export function scanDocumentBytes(
   data: Uint8Array,
   kind: SniffedFile['kind'],
+  options?: ScanBudgetOptions,
 ): DocumentThreat | null {
-  if (kind === 'pdf') return scanPdf(data);
-  return scanImageTrailer(data, kind);
+  const budget = budgetOf(options);
+  if (kind === 'pdf') return scanPdf(data, budget);
+  return scanImageTrailer(data, kind, budget);
 }
 
 // ───────────────────────── PDF ─────────────────────────
 
-function scanPdf(data: Uint8Array): DocumentThreat | null {
+function scanPdf(data: Uint8Array, budget: ScanBudget): DocumentThreat | null {
+  // The document's text is read twice below (the /Encrypt look and the
+  // active-content look), and the stream search walks it once more.
+  const over = spend(budget, data.byteLength * 3);
+  if (over) return over;
+
   // latin1 maps each byte to exactly one code unit and back, so the string is
   // a lossless view of the bytes. utf8 would MANGLE high bytes into U+FFFD and
   // silently destroy the very stream offsets we go on to slice.
@@ -231,7 +299,7 @@ function scanPdf(data: Uint8Array): DocumentThreat | null {
   if (direct) return direct;
 
   // …and again on what the compressed objects were hiding.
-  return scanFlateStreams(data, text);
+  return scanFlateStreams(data, text, budget);
 }
 
 function findActiveContent(text: string): DocumentThreat | null {
@@ -307,7 +375,11 @@ function decodePdfNameEscapes(raw: string): string {
  * case above. Under-matching is the failure mode that would matter, and this
  * does not under-match.
  */
-function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null {
+function scanFlateStreams(
+  data: Uint8Array,
+  text: string,
+  scanBudget: ScanBudget,
+): DocumentThreat | null {
   let budget = MAX_TOTAL_INFLATED_BYTES;
   let searchFrom = 0;
 
@@ -319,6 +391,10 @@ function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null
       return { code: 'pdf_scan_limit', detail: `more than ${MAX_STREAMS_INFLATED} streams` };
     }
 
+    // The clock, before each stream (part 6).
+    const late = spend(scanBudget, 0);
+    if (late) return late;
+
     // Skip the EOL the spec requires between `stream` and the data: CRLF or
     // LF, never a bare CR. Starting one byte late corrupts the zlib header,
     // the inflate throws Z_DATA_ERROR, and the stream is dropped as "not
@@ -328,8 +404,23 @@ function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null
     else if (text.charCodeAt(start) === 0x0a) start += 1;
 
     const end = text.indexOf('endstream', start);
-    searchFrom = end === -1 ? kw + 'stream'.length : end + 'endstream'.length;
-    if (end === -1 || end <= start) continue;
+    if (end === -1) {
+      // No `endstream` anywhere after this keyword, so none after any later
+      // one either: nothing more can be inflated. The loop used to step on,
+      // one keyword at a time, each step searching the rest of the document
+      // again for an `endstream` that is not there, which made a file of
+      // keywords cost the square of its size. The verdict is kept exactly:
+      // the keywords still ahead are counted once, and as many as the stream
+      // ceiling refuse the document as they always did.
+      // (The old loop refused at its step MAX_STREAMS_INFLATED, which it
+      // reached when that many keywords, less this step's n, lay ahead.)
+      const ahead = MAX_STREAMS_INFLATED - n;
+      return countKeywordsFrom(text, kw + 'stream'.length, ahead) >= ahead
+        ? { code: 'pdf_scan_limit', detail: `more than ${MAX_STREAMS_INFLATED} streams` }
+        : null;
+    }
+    searchFrom = end + 'endstream'.length;
+    if (end <= start) continue;
 
     // ═══ THE BUDGET IS A VERDICT BEFORE IT IS A NUMBER ═══
     //
@@ -372,9 +463,29 @@ function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null
     }
 
     budget -= inflated.byteLength;
+    // What this stream cost: its compressed bytes, and what it inflated to,
+    // read by the name scan below.
+    const over = spend(scanBudget, end - start + inflated.byteLength);
+    if (over) return over;
     const hit = findActiveContent(inflated.toString('latin1'));
     if (hit) return { ...hit, detail: `${hit.detail} (inside a compressed stream)` };
   }
+}
+
+/**
+ * How many `stream` keywords start at or after `from`, counting at most
+ * `cap` (one pass, never more than the text once).
+ */
+function countKeywordsFrom(text: string, from: number, cap: number): number {
+  let count = 0;
+  let at = from;
+  while (count < cap) {
+    const kw = text.indexOf('stream', at);
+    if (kw === -1) break;
+    count += 1;
+    at = kw + 'stream'.length;
+  }
+  return count;
 }
 
 // ───────────────────────── images ─────────────────────────
@@ -391,7 +502,11 @@ function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null
 function scanImageTrailer(
   data: Uint8Array,
   kind: Exclude<SniffedFile['kind'], 'pdf'>,
+  budget: ScanBudget,
 ): DocumentThreat | null {
+  // Finding the image's end reads it once, back from its last byte.
+  const over = spend(budget, data.byteLength);
+  if (over) return over;
   const end = imageDataEnd(data, kind);
   // null = we do not know where this format ends, so we cannot say anything
   // about what follows it. Reporting "clean" would be a guess; reporting a
@@ -401,6 +516,9 @@ function scanImageTrailer(
 
   const trailer = data.subarray(end);
   for (const sig of APPENDED_PAYLOAD_SIGNATURES) {
+    // Each signature reads the trailer once more (part 6).
+    const spent = spend(budget, trailer.byteLength);
+    if (spent) return spent;
     const at = sig.atStartOnly
       ? startsWith(trailer, sig.magic)
         ? 0
