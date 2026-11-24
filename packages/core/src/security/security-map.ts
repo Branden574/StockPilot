@@ -1949,10 +1949,14 @@ export function securityMapTallyWords(reason: string, counted: number | null): s
   if (reason === TALLY_NUMBER_SAID && counted !== null) {
     return SECURITY_MAP_WORDS.tallyTooManyForms(counted);
   }
-  if (reason === 'unrecorded_server_form_password')
-    return SECURITY_MAP_WORDS.tallyUnrecordedPassword;
-  if (reason === 'unrecorded_server_form_code') return SECURITY_MAP_WORDS.tallyUnrecordedCode;
-  return SECURITY_MAP_WORDS.tallyOther;
+  switch (reason) {
+    case 'unrecorded_server_form_password':
+      return SECURITY_MAP_WORDS.tallyUnrecordedPassword;
+    case 'unrecorded_server_form_code':
+      return SECURITY_MAP_WORDS.tallyUnrecordedCode;
+    default:
+      return SECURITY_MAP_WORDS.tallyOther;
+  }
 }
 
 /** The words where the map and the table have nothing to show. Null when they have. */
