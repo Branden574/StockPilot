@@ -12,6 +12,7 @@ import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import {
   assertPermission,
   mfaGateError,
@@ -1970,6 +1971,20 @@ const identifyFromPhotoTool: ToolExecutor = {
     } finally {
       clearTimeout(timer);
     }
+
+    // Part 6: the bytes go to the model, so they pass the one upload check
+    // first, as on the photo route: the kind is read from the bytes (never
+    // the response's content-type), a file hidden after the picture is
+    // refused, and a refusal is recorded as a security event in this
+    // organization. The model is handed the kind the bytes are.
+    const checked = await checkUploadBytes(new Uint8Array(bytes), {
+      surface: 'identify_photo',
+      accept: ['png', 'jpeg', 'webp', 'avif', 'heic'],
+      organizationId: ctx.organizationId,
+      wrongTypeMessage: PHOTO_NOT_AN_IMAGE,
+    });
+    if (!checked.ok) throw new ToolRefusal(checked.message);
+    mimeType = checked.mime;
 
     const base64 = Buffer.from(bytes).toString('base64');
     const responseSchema: ResponseSchema = {

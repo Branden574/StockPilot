@@ -122,7 +122,10 @@ vi.mock('@/lib/ai/embeddings', () => ({
 vi.mock('@/lib/env', () => ({ env: envMock }));
 vi.mock('./provider', () => ({ resolveAiProvider: () => 'gemini' }));
 
+import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
+import { recordSecurityEvent } from '@/server/security/events';
+import { HTML_PAGE, PNG_WITH_ARCHIVE, TINY_JPEG, TINY_PNG } from '@/test/upload-fixtures';
 
 import { classifyToolErrorMessage, executeToolCall } from './chat';
 import {
@@ -543,9 +546,15 @@ describe('S30: identifyFromPhoto fails by type, with a fixed sentence', () => {
     return new Response(status === 204 ? null : body, { status, statusText: 'Status Text', headers });
   }
 
-  /** HEAD and GET both answer a small image, so the call reaches the model. */
-  function imageDownloads() {
-    safeFetchMock.mockImplementation(async () => answer(200, { 'content-type': 'image/jpeg' }));
+  /** HEAD and GET both answer a small image (a real, tiny, made-up JPEG), so the call reaches the model. */
+  function imageDownloads(body: Uint8Array = TINY_JPEG, type = 'image/jpeg') {
+    safeFetchMock.mockImplementation(
+      async () =>
+        new Response(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer, {
+          status: 200,
+          headers: { 'content-type': type },
+        }),
+    );
   }
 
   /** A refusal in fixed words that names nothing from the failure. */
@@ -682,6 +691,35 @@ describe('S30: identifyFromPhoto fails by type, with a fixed sentence', () => {
     };
     expect(out.title).toContain('Field Guide');
     expect(out.confidence).toContain('high');
+  });
+
+  it('part 6: the bytes are checked before the model sees them, and the model is told their real kind', async () => {
+    const record = vi.mocked(recordSecurityEvent);
+    // A web page served as a JPEG: refused in the tool's words, recorded once, never sent.
+    imageDownloads(HTML_PAGE);
+    expectRefusal(await identify(), 'That address did not return an image.');
+    expect(generateContentMock).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record.mock.calls[0]![0]).toMatchObject({
+      category: 'malware',
+      outcome: 'blocked',
+      reason: 'upload_wrong_type',
+      organizationId: ORG,
+    });
+    // A picture with an archive after it.
+    record.mockClear();
+    imageDownloads(PNG_WITH_ARCHIVE, 'image/png');
+    expectRefusal(await identify(), THREAT_MESSAGES.appended_payload);
+    expect(record.mock.calls[0]![0]).toMatchObject({ reason: 'upload_hidden_file' });
+    expect(generateContentMock).not.toHaveBeenCalled();
+    // A PNG served as a JPEG reaches the model as a PNG.
+    imageDownloads(TINY_PNG, 'image/jpeg');
+    generateContentMock.mockResolvedValueOnce({
+      response: { text: () => '{"title":"Field Guide","confidence":"high"}' },
+    });
+    await TOOL_CATALOG.identifyFromPhoto!.execute({ imageUrl: URL }, ctxFor());
+    const parts = generateContentMock.mock.calls[0]![0] as Array<{ inlineData?: { mimeType: string } }>;
+    expect(parts.find((p) => p.inlineData)?.inlineData?.mimeType).toBe('image/png');
   });
 });
 
