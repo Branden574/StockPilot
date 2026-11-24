@@ -259,9 +259,9 @@ describe('cover rehost — the legitimate flow still works', () => {
 // Security invariant (part 6, stage 6a): the cover's type comes from its
 // BYTES, through the one upload check. The remote server's content-type no
 // longer picks the extension or the stored type; a cover that is not a
-// picture, or hides a file after the picture, is not stored, the book still
-// imports, and exactly one malware / blocked event is recorded in the
-// organization, with no link and no path.
+// picture, or hides a file after the picture, is not stored and the book
+// still imports. Nothing is recorded (review round 2, Q22): nobody sent the
+// cover, so it is not a refused upload.
 // ---------------------------------------------------------------------------
 describe('cover rehost — the upload check', () => {
   const COVER_URL = 'https://books.google.com/books/content?id=abc&printsec=frontcover';
@@ -295,28 +295,12 @@ describe('cover rehost — the upload check', () => {
   });
 
   it.each([
-    ['a web page served as a picture', new TextEncoder().encode('<!DOCTYPE html><p>no</p>'), 'upload_wrong_type'],
-    ['an archive after the picture', new Uint8Array([...TINY_JPEG, 0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]), 'upload_hidden_file'],
-  ])('%s: not stored, no row, the book still imports, one event', async (_what, body, reason) => {
+    ['a web page served as a picture', new TextEncoder().encode('<!DOCTYPE html><p>no</p>')],
+    ['an archive after the picture', new Uint8Array([...TINY_JPEG, 0x50, 0x4b, 0x03, 0x04, 0x14, 0x00])],
+  ])('%s: not stored, no row, the book still imports, nothing recorded', async (_what, body) => {
     const { upload, rows } = await importWithStorage(body);
     expect(upload).not.toHaveBeenCalled();
     expect(rows.length).toBe(0);
-    const rec = await record();
-    expect(rec).toHaveBeenCalledTimes(1);
-    expect(rec.mock.calls[0]![0]).toEqual({
-      category: 'malware',
-      outcome: 'blocked',
-      reason,
-      source: 'web',
-      organizationId: 'org-test',
-    });
-    expect(JSON.stringify(rec.mock.calls[0])).not.toContain('books.google.com');
-  });
-
-  it('a recorder that fails: the cover is still not stored', async () => {
-    (await record()).mockRejectedValueOnce(new Error('recorder down'));
-    const { upload, rows } = await importWithStorage(new TextEncoder().encode('<html></html>'));
-    expect(upload).not.toHaveBeenCalled();
-    expect(rows.length).toBe(0);
+    expect(await record()).not.toHaveBeenCalled();
   });
 });

@@ -222,7 +222,8 @@ class FakeBucket {
   async remove(paths: string[]) {
     this.calls.remove.push([...paths]);
     for (const p of paths) this.objects.delete(p);
-    return { data: [], error: null };
+    // As storage answers: the objects it deleted.
+    return { data: paths.map((name) => ({ name })), error: null };
   }
   async createSignedUrls() {
     return { data: [], error: null };

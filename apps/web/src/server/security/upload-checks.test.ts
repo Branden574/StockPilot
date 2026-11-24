@@ -91,6 +91,11 @@ beforeEach(() => {
   record.mockImplementation(async () => undefined);
 });
 
+/** A storage remove that deletes what it is asked to, and lists it, as storage answers. */
+function deletes() {
+  return vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
+}
+
 function onlyEvent() {
   expect(record).toHaveBeenCalledTimes(1);
   const [event, headers] = record.mock.calls[0]!;
@@ -111,6 +116,16 @@ describe('checkUploadBytes: one event on a refusal, none on a clean file', () =>
       height: 3,
     });
     expect(await checkUploadBytes(PDF, { ...base, accept: ['pdf'] })).toMatchObject({ ok: true });
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a file nobody sent (a cover the server fetched) is refused the same way and recorded nowhere (review round 2, Q22)', async () => {
+    const out = await checkUploadBytes(HTML, { ...base, accept: ['png'], notRecorded: 'server_fetched_cover' });
+    expect(out).toMatchObject({ ok: false, family: 'wrong_type' });
+    expect(await checkUploadBytes(PNG_WITH_ARCHIVE, { ...base, accept: ['png'], notRecorded: 'server_fetched_cover' })).toMatchObject({
+      ok: false,
+      family: 'hidden_file',
+    });
     expect(record).not.toHaveBeenCalled();
   });
 
@@ -182,15 +197,20 @@ describe('checkUploadBytes: one event on a refusal, none on a clean file', () =>
   });
 });
 
-/** The one audit line of a removal: who, which path's surface, why, how many; never a path. */
-function onlyRemovalLine(surface: string, why: string, objects: number) {
+/** The one audit line of what was done with the objects: who, which path's surface, why, how many; never a path. */
+function onlyRemovalLine(
+  surface: string,
+  why: string,
+  objects: number,
+  as: { event: string; extra?: Record<string, unknown> } = { event: 'security.upload_refused_removed' },
+) {
   expect(auditMock).toHaveBeenCalledTimes(1);
   const [payload, ctx] = auditMock.mock.calls[0]!;
   expect(payload).toEqual({
-    event: 'security.upload_refused_removed',
+    event: as.event,
     entityType: 'upload',
     entityId: null,
-    extra: { surface, why, objects },
+    extra: { surface, why, objects, ...as.extra },
   });
   expect(ctx).toMatchObject({ organizationId: ORG, userId: USER });
   expect(JSON.stringify(payload)).not.toContain(NAME);
@@ -199,7 +219,7 @@ function onlyRemovalLine(surface: string, why: string, objects: number) {
 
 describe('checkStoredUpload: the finalize of an object a client put in storage', () => {
   function bucket() {
-    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const remove = deletes();
     const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
     return { store, remove };
   }
@@ -317,24 +337,84 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
     expect(third.remove).not.toHaveBeenCalled();
   });
 
-  it('nothing a record still names is ever removed: the refusal stands, the event is recorded, no audit line', async () => {
+  it('nothing a record still names is ever removed: the refusal stands, a "kept" line, and the event says the file is still in use (review round 2, F1)', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
     stillNamed.mockResolvedValue(true);
     const { store, remove } = bucket();
     expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: 'wrong_type' });
     expect(stillNamed).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
     expect(remove).not.toHaveBeenCalled();
-    expect(auditMock).not.toHaveBeenCalled();
-    expect(onlyEvent().event.reason).toBe('upload_wrong_type');
+    onlyRemovalLine('po_attachment', 'wrong_type', 2, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'still_named' },
+    });
+    expect(onlyEvent().event).toMatchObject({
+      category: 'malware',
+      outcome: 'flagged',
+      reason: 'upload_refused_in_use',
+      organizationId: ORG,
+    });
   });
 
-  it('a look that fails keeps the objects too; the look comes before any removal', async () => {
+  it('a look that fails keeps the objects too, with a "kept" line; the look comes before any removal', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: MAX * 2, overLimit: true });
     stillNamed.mockRejectedValue(new Error('look failed'));
     const { store, remove } = bucket();
     expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: null });
     expect(remove).not.toHaveBeenCalled();
-    expect(auditMock).not.toHaveBeenCalled();
+    onlyRemovalLine('po_attachment', 'too_large', 2, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'look_failed' },
+    });
+  });
+
+  it('a verdict whose look fails keeps the objects and records the ordinary event (not "in use": nobody knows)', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    stillNamed.mockRejectedValue(new Error('look failed'));
+    const { store, remove } = bucket();
+    expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: 'wrong_type' });
+    expect(remove).not.toHaveBeenCalled();
+    expect(onlyEvent().event).toMatchObject({ outcome: 'blocked', reason: 'upload_wrong_type' });
+  });
+
+  it('the line says "removed" only when storage lists what it deleted (review round 2, F4)', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    // Storage answers an error in the value: the line names its code, never its message.
+    const refused = bucket();
+    refused.remove.mockResolvedValue({ data: null, error: { name: 'StorageApiError', statusCode: '403', status: 403, message: `denied ${PATH}` } } as never);
+    await checkStoredUpload(refused.store, PATH, stored);
+    onlyRemovalLine('po_attachment', 'wrong_type', 2, {
+      event: 'security.upload_refused_removal_failed',
+      extra: { code: '403' },
+    });
+    expect(JSON.stringify(auditMock.mock.calls)).not.toContain('denied');
+    // A rule that matches no object deletes nothing and answers an empty list.
+    auditMock.mockClear();
+    record.mockClear();
+    const none = bucket();
+    none.remove.mockResolvedValue({ data: [], error: null } as never);
+    await checkStoredUpload(none.store, PATH, stored);
+    onlyRemovalLine('po_attachment', 'wrong_type', 2, {
+      event: 'security.upload_refused_removal_failed',
+      extra: { code: 'nothing_removed' },
+    });
+    // A removal that throws.
+    auditMock.mockClear();
+    record.mockClear();
+    const threw = bucket();
+    threw.remove.mockRejectedValue(new Error(`no route to ${PATH}`));
+    await checkStoredUpload(threw.store, PATH, stored);
+    onlyRemovalLine('po_attachment', 'wrong_type', 2, {
+      event: 'security.upload_refused_removal_failed',
+      extra: { code: 'Error' },
+    });
+    // Storage lists one of the two (the thumbnail was never uploaded): removed, one object.
+    auditMock.mockClear();
+    record.mockClear();
+    const one = bucket();
+    one.remove.mockResolvedValue({ data: [{ name: 'x' }], error: null } as never);
+    await checkStoredUpload(one.store, PATH, stored);
+    onlyRemovalLine('po_attachment', 'wrong_type', 1);
   });
 
   it('a path named twice is removed once, as one object', async () => {
@@ -380,7 +460,7 @@ describe('checkStoredUploadSignature: a video, by its container only', () => {
   });
   it('reads the leading window only, with the ceiling, never the whole video', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: MP4, totalSize: 900_000_000 });
-    const remove = vi.fn();
+    const remove = deletes();
     const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
     expect(await checkStoredUploadSignature(store, PATH, input)).toMatchObject({ ok: true, kind: 'mp4' });
     expect(fetchObjectWindowMock).toHaveBeenCalledWith(store, PATH, expect.any(Function), {
@@ -393,7 +473,7 @@ describe('checkStoredUploadSignature: a video, by its container only', () => {
 
   it('a video over the ceiling is refused from its stated size and removed, with an audit line', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: 2 ** 31, overLimit: true });
-    const remove = vi.fn(async () => ({}));
+    const remove = deletes();
     const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
     expect(await checkStoredUploadSignature(store, PATH, input)).toEqual({
       ok: false,
@@ -407,7 +487,7 @@ describe('checkStoredUploadSignature: a video, by its container only', () => {
 
   it('a file that is not a video is refused, the video and its poster removed, one event, one audit line', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
-    const remove = vi.fn(async () => ({}));
+    const remove = deletes();
     const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
     expect(await checkStoredUploadSignature(store, PATH, input)).toMatchObject({ ok: false, family: 'wrong_type' });
     expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.poster.jpg`]);
@@ -415,13 +495,17 @@ describe('checkStoredUploadSignature: a video, by its container only', () => {
     onlyRemovalLine('procedure_video', 'wrong_type', 2);
   });
 
-  it('a video a record still names is never removed', async () => {
+  it('a video a record still names is never removed: a "kept" line, and the event says it is in use', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
     stillNamed.mockResolvedValue(true);
-    const remove = vi.fn(async () => ({}));
+    const remove = deletes();
     const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
     expect(await checkStoredUploadSignature(store, PATH, input)).toMatchObject({ ok: false });
     expect(remove).not.toHaveBeenCalled();
-    expect(auditMock).not.toHaveBeenCalled();
+    onlyRemovalLine('procedure_video', 'wrong_type', 2, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'still_named' },
+    });
+    expect(onlyEvent().event).toMatchObject({ outcome: 'flagged', reason: 'upload_refused_in_use' });
   });
 });

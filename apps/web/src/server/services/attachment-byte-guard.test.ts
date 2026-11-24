@@ -24,7 +24,7 @@ const { createAdminClientMock } = vi.hoisted(() => ({
   // createAdminClient() at import, so a mock that yields undefined until a
   // test arms it fails the whole file at collection rather than in a test.
   createAdminClientMock: vi.fn(() => ({
-    storage: { from: () => ({ remove: async () => ({ data: null, error: null }) }) },
+    storage: { from: () => ({ remove: async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }) }) },
   })),
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMock }));
@@ -85,7 +85,7 @@ function armStorage(body: Uint8Array | null) {
     body ? { prefix: body, totalSize: body.byteLength } : null,
   );
   fetchObjectWholeMock.mockImplementation(async () => null);
-  remove = vi.fn(async () => ({ data: null, error: null }));
+  remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
   const api = {
     remove,
     createSignedUrl: vi.fn(async () => ({ data: null, error: null })),
@@ -107,7 +107,7 @@ function armStorageLarge(full: Uint8Array, whole: Uint8Array | null) {
     totalSize: full.byteLength,
   }));
   fetchObjectWholeMock.mockImplementation(async () => whole);
-  remove = vi.fn(async () => ({ data: null, error: null }));
+  remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
   const api = {
     remove,
     createSignedUrl: vi.fn(async () => ({ data: null, error: null })),

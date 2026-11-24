@@ -48,13 +48,18 @@ export type AuditEvent =
    */
   | 'security.export_rate_limited'
   /**
-   * Part 6: the objects of an upload the upload checks refused were removed
-   * from storage (server/security/upload-checks.ts and the paths with their
-   * own removal). One row per removal, no entity; extra {surface, why
-   * (the refusal's family or too_large), objects (how many)}. Never a path or
-   * a file name. user_id is the person whose finalize removed them.
+   * Part 6: what was done with the objects of an upload the upload checks
+   * refused (server/security/upload-checks.ts and the paths with their own
+   * removal): removed (storage listed them as deleted), kept (a record still
+   * names one, or that look failed: extra.because), or a removal storage did
+   * not confirm (extra.code, the storage error's own code). One row each, no
+   * entity; extra {surface, why (the refusal's family, too_large or
+   * path_refusal), objects (how many)}. Never a path or a file name. user_id
+   * is the person whose finalize it was.
    */
   | 'security.upload_refused_removed'
+  | 'security.upload_refused_kept'
+  | 'security.upload_refused_removal_failed'
   /**
    * Part 3 (sign-in alerts): a member said a sign-in alert was not them
    * (server/services/sign-in-alert-report.ts). One row per organization the

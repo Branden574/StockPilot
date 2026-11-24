@@ -114,6 +114,8 @@ interface Found {
   passThrough: Set<string>;
   /** The module names this file imports from, as written. */
   imports: string[];
+  /** "line" of each check call handed `notRecorded` (a refusal recorded nowhere). */
+  notRecorded: number[];
 }
 
 function calleeName(call: ts.CallExpression): string | null {
@@ -126,7 +128,14 @@ function calleeName(call: ts.CallExpression): string | null {
 /** The sites, the checks and the organization problems of one file's source. */
 export function readSource(source: string, fileName: string, outsideSecurity = true): Found {
   const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, fileName.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
-  const found: Found = { sites: {}, calls: new Set(), organizationProblems: [], passThrough: new Set(), imports: [] };
+  const found: Found = {
+    sites: {},
+    calls: new Set(),
+    organizationProblems: [],
+    passThrough: new Set(),
+    imports: [],
+    notRecorded: [],
+  };
   const add = (site: Site) => {
     found.sites[site] = (found.sites[site] ?? 0) + 1;
   };
@@ -189,6 +198,14 @@ export function readSource(source: string, fileName: string, outsideSecurity = t
       if (name && ts.isIdentifier(e) && (CHECK_NAMES as readonly string[]).includes(name)) {
         const check = name as CheckName;
         found.calls.add(check);
+        const handed = node.arguments.find(ts.isObjectLiteralExpression);
+        if (
+          handed?.properties.some(
+            (p) => (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) && p.name.getText(sf) === 'notRecorded',
+          )
+        ) {
+          found.notRecorded.push(lineOf(node));
+        }
         if (outsideSecurity) {
           if (check === 'verifyStoredDocumentOrDelete') {
             const first = node.arguments[0];
@@ -713,6 +730,11 @@ describe('every way a file comes in is listed with its check (part 6)', () => {
     expect(problems).toEqual([]);
   });
 
+  it("a refusal is recorded everywhere but the server's own cover fetch (nobody sent that file)", () => {
+    const unrecorded = web.filter((w) => w.found.notRecorded.length > 0).map((w) => w.file);
+    expect(unrecorded).toEqual([`${W}server/services/books-import.ts`]);
+  });
+
   it('every check call outside server/security is handed a server-built organization', () => {
     const problems = web.flatMap((w) => w.found.organizationProblems.map((p) => `${w.file}:${p}`));
     expect(problems).toEqual([]);
@@ -795,13 +817,17 @@ describe('every upload reason code has a producer (part 6)', () => {
   );
   const UPLOAD_REASONS = Object.keys(UPLOAD_SECURITY_EVENT_REASON_LABELS).sort();
 
-  it('the four reasons, each with words', () => {
-    expect(UPLOAD_REASONS).toEqual(
-      ['upload_active_content', 'upload_could_not_check', 'upload_hidden_file', 'upload_wrong_type'],
-    );
+  it('the five reasons, each with words', () => {
+    expect(UPLOAD_REASONS).toEqual([
+      'upload_active_content',
+      'upload_could_not_check',
+      'upload_hidden_file',
+      'upload_refused_in_use',
+      'upload_wrong_type',
+    ]);
   });
 
-  it('each one is written, as a literal, by the one upload check: malware, blocked, straight to recordSecurityEvent', () => {
+  it('each one is written, as a literal, by the one upload check: malware, blocked (flagged for a file kept in use), straight to recordSecurityEvent', () => {
     for (const reason of UPLOAD_REASONS) {
       const producers = sites.filter((s) => s.reason === reason);
       expect(producers.length, `${reason} has no producer: a label must never stand for a kind nothing records`).toBeGreaterThan(0);
@@ -809,7 +835,7 @@ describe('every upload reason code has a producer (part 6)', () => {
         expect(p, reason).toMatchObject({
           file: `${W}server/security/upload-checks.ts`,
           category: 'malware',
-          outcome: 'blocked',
+          outcome: reason === 'upload_refused_in_use' ? 'flagged' : 'blocked',
           recorded: true,
         });
       }

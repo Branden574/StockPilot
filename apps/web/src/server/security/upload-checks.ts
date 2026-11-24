@@ -35,7 +35,10 @@ import { recordSecurityEvent, type SecurityEventHeaders } from './events';
  *   - category malware, outcome blocked;
  *   - the reason is the verdict's family, one of four, each written out as a
  *     literal below: upload_wrong_type, upload_active_content,
- *     upload_hidden_file, upload_could_not_check;
+ *     upload_hidden_file, upload_could_not_check; or, for a stored object a
+ *     record the organization already has still points at (so it is kept),
+ *     upload_refused_in_use, outcome flagged: the file is refused, and is
+ *     still there;
  *   - the organization of the caller's server-built context when there is one
  *     (each call site's source of it is pinned by
  *     upload-checks.registry.guard.test.ts: never a value a request carried);
@@ -48,6 +51,11 @@ import { recordSecurityEvent, type SecurityEventHeaders } from './events';
  * is recorded, the recording is inside its own try, and a clean file records
  * nothing at all: so a failed record can neither accept a refused file nor
  * refuse a clean one.
+ *
+ * A FILE NOBODY SENT is not an upload: a cover picture the server fetched
+ * itself is checked the same way and left out when refused, with nothing
+ * recorded (`notRecorded: 'server_fetched_cover'`, which only books-import.ts
+ * passes: the registry guard pins it).
  *
  * A CLEAN FILE BEHAVES EXACTLY AS BEFORE. Nothing here changes a byte that is
  * stored; the callers keep every permission check, limit and sentence they
@@ -91,6 +99,11 @@ export interface UploadCheckInput extends UploadInspectOptions {
   headers?: SecurityEventHeaders | null;
   /** The path's own sentence for a file of the wrong type, as it always answered. */
   wrongTypeMessage?: string;
+  /**
+   * Set only for a file no person sent (a cover picture the server fetched
+   * itself): a refusal is answered as usual and recorded nowhere.
+   */
+  notRecorded?: 'server_fetched_cover';
 }
 
 export type UploadCheckResult =
@@ -134,14 +147,21 @@ function sourceOf(headers: SecurityEventHeaders | null): 'web' | 'phone' {
  * (recordSecurityEvent returns once the event is in it).
  */
 async function recordRefusal(
-  family: UploadRefusalFamily,
+  family: UploadRefusalFamily | 'in_use',
   organizationId: string | null,
   given: SecurityEventHeaders | null | undefined,
 ): Promise<void> {
   try {
     const headers = given ?? (await headersOfThisRequest());
     const source = sourceOf(headers);
-    if (family === 'wrong_type') {
+    if (family === 'in_use') {
+      // Refused, and kept: a record the organization already has still points
+      // at this object. Flagged, not blocked: the file is still there.
+      await recordSecurityEvent(
+        { category: 'malware', outcome: 'flagged', reason: 'upload_refused_in_use', source, organizationId },
+        headers,
+      );
+    } else if (family === 'wrong_type') {
       await recordSecurityEvent(
         { category: 'malware', outcome: 'blocked', reason: 'upload_wrong_type', source, organizationId },
         headers,
@@ -167,7 +187,8 @@ async function recordRefusal(
   }
 }
 
-async function answer(inspection: UploadInspection, input: UploadCheckInput): Promise<UploadCheckResult> {
+/** The answer to a verdict, with nothing recorded yet. */
+function judged(inspection: UploadInspection, input: UploadCheckInput): UploadCheckResult {
   if (inspection.ok) {
     return {
       ok: true,
@@ -177,12 +198,19 @@ async function answer(inspection: UploadInspection, input: UploadCheckInput): Pr
       height: inspection.height,
     };
   }
-  await recordRefusal(inspection.family, input.organizationId, input.headers);
   return {
     ok: false,
     family: inspection.family,
     message: messageFor(inspection.code, inspection.family, input),
   };
+}
+
+async function answer(inspection: UploadInspection, input: UploadCheckInput): Promise<UploadCheckResult> {
+  const result = judged(inspection, input);
+  if (!result.ok && input.notRecorded !== 'server_fetched_cover') {
+    await recordRefusal(result.family, input.organizationId, input.headers);
+  }
+  return result;
 }
 
 /**
@@ -275,24 +303,79 @@ export interface StoredUploadInput extends UploadCheckInput {
 export const UPLOAD_TOO_LARGE_MESSAGE = 'This file is too large to upload. Pick a smaller one.';
 
 /**
+ * What became of a refused upload's objects: removed (storage listed them as
+ * deleted), kept (a record still names one, or that look failed), or a
+ * removal storage did not confirm (its error's code, or "nothing_removed"
+ * when it answered with no object deleted).
+ */
+export type UploadRemovalOutcome =
+  | { done: 'removed'; objects: number }
+  | { done: 'kept'; objects: number; because: 'still_named' | 'look_failed' }
+  | { done: 'removal_failed'; objects: number; code: string };
+
+/** A storage error's own code, as a short token (never its message, which can name the object). */
+function storageErrorCode(error: unknown): string {
+  const e = (error ?? {}) as { statusCode?: unknown; status?: unknown; name?: unknown };
+  const raw =
+    typeof e.statusCode === 'string' && e.statusCode
+      ? e.statusCode
+      : typeof e.status === 'number'
+        ? String(e.status)
+        : typeof e.name === 'string'
+          ? e.name
+          : '';
+  return /^[A-Za-z0-9_.-]{1,40}$/.test(raw) ? raw : 'storage_error';
+}
+
+/**
+ * Removes the objects and writes the one audit line of what storage
+ * answered: "removed" only when storage lists the objects it deleted (an
+ * answer with none, as a storage rule that matches nothing gives, or an
+ * error, is a removal that failed). Best-effort on purpose (the rule of
+ * upload-verification.ts): a failed cleanup must not turn "this file was
+ * refused" into an internal error.
+ */
+export async function removeAndAudit(
+  store: { remove(paths: string[]): Promise<unknown> },
+  paths: readonly string[],
+  surface: UploadSurface,
+  why: UploadRemovalWhy,
+  by: UploadRemovedBy,
+): Promise<UploadRemovalOutcome> {
+  let outcome: UploadRemovalOutcome;
+  try {
+    const answered = (await store.remove([...paths])) as { data?: unknown; error?: unknown } | null | undefined;
+    if (answered?.error) {
+      outcome = { done: 'removal_failed', objects: paths.length, code: storageErrorCode(answered.error) };
+    } else if (Array.isArray(answered?.data) && answered.data.length > 0) {
+      outcome = { done: 'removed', objects: answered.data.length };
+    } else {
+      outcome = { done: 'removal_failed', objects: paths.length, code: 'nothing_removed' };
+    }
+  } catch (e) {
+    outcome = { done: 'removal_failed', objects: paths.length, code: storageErrorCode(e) };
+  }
+  await auditRemoval(surface, why, outcome, by);
+  return outcome;
+}
+
+/**
  * The removal of a refused upload's objects. Never while a record names one
  * of them (the look first; a failed look keeps them), always with one audit
- * line naming who and why (never a path or a name), and best-effort on
- * purpose (the rule of upload-verification.ts): a failed cleanup must not
- * turn "this file was refused" into an internal error.
+ * line naming who, why and what was done (never a path or a name).
  */
 async function removeRefused(
   store: StoredUploadBucket,
   input: StoredUploadInput,
   why: UploadRemovalWhy,
-): Promise<void> {
-  await removeUnlessNamed(store, input.removeOnRefusal, input.stillNamed, input.surface, why, input.removedBy);
+): Promise<UploadRemovalOutcome | null> {
+  return removeUnlessNamed(store, input.removeOnRefusal, input.stillNamed, input.surface, why, input.removedBy);
 }
 
 /**
  * The same removal for a path that refuses a file on a rule of its own
- * (the logo's pixel limit): the look first, then the removal and its one
- * audit line. True when the objects were removed.
+ * (the logo's pixel limit): the look first, then the removal, and one audit
+ * line either way. Null when there was nothing to remove.
  */
 export async function removeUnlessNamed(
   store: { remove(paths: string[]): Promise<unknown> },
@@ -301,45 +384,90 @@ export async function removeUnlessNamed(
   surface: UploadSurface,
   why: UploadRemovalWhy,
   by: UploadRemovedBy,
-): Promise<boolean> {
+): Promise<UploadRemovalOutcome | null> {
   const paths = [...new Set(objects)];
-  if (paths.length === 0) return false;
-  let named: boolean;
+  if (paths.length === 0) return null;
+  let because: 'still_named' | 'look_failed' | null;
   try {
-    named = await stillNamed(paths);
+    because = (await stillNamed(paths)) ? 'still_named' : null;
   } catch {
-    named = true;
+    because = 'look_failed';
   }
-  if (named) return false;
-  try {
-    await store.remove(paths);
-  } catch {
-    // Deliberately swallowed: no row points at the object.
+  if (because) {
+    const kept: UploadRemovalOutcome = { done: 'kept', objects: paths.length, because };
+    await auditRemoval(surface, why, kept, by);
+    return kept;
   }
-  await auditRemoval(surface, why, paths.length, by);
-  return true;
+  return removeAndAudit(store, paths, surface, why, by);
 }
 
-/** One audit line for a removal: the surface, the kind of refusal and how many objects. */
+/**
+ * The one audit line of what was done with a refused upload's objects: the
+ * surface, the kind of refusal, how many objects, and why they were kept or
+ * the storage error's code. Never a path or a name.
+ */
 export async function auditRemoval(
   surface: UploadSurface,
   why: UploadRemovalWhy,
-  objects: number,
+  outcome: UploadRemovalOutcome,
   by: UploadRemovedBy,
 ): Promise<void> {
   try {
-    await audit(
-      {
-        event: 'security.upload_refused_removed',
-        entityType: 'upload',
-        entityId: null,
-        extra: { surface, why, objects },
-      },
-      { organizationId: by.organizationId, userId: by.userId } as ServiceContext,
-    );
+    const ctx = { organizationId: by.organizationId, userId: by.userId } as ServiceContext;
+    if (outcome.done === 'removed') {
+      await audit(
+        {
+          event: 'security.upload_refused_removed',
+          entityType: 'upload',
+          entityId: null,
+          extra: { surface, why, objects: outcome.objects },
+        },
+        ctx,
+      );
+    } else if (outcome.done === 'kept') {
+      await audit(
+        {
+          event: 'security.upload_refused_kept',
+          entityType: 'upload',
+          entityId: null,
+          extra: { surface, why, objects: outcome.objects, because: outcome.because },
+        },
+        ctx,
+      );
+    } else {
+      await audit(
+        {
+          event: 'security.upload_refused_removal_failed',
+          entityType: 'upload',
+          entityId: null,
+          extra: { surface, why, objects: outcome.objects, code: outcome.code },
+        },
+        ctx,
+      );
+    }
   } catch {
     // audit() never rejects; this is belt and braces.
   }
+}
+
+/**
+ * A refusal of a stored upload's verdict: the look and the removal first,
+ * then its one event, in the words of what was done (a file a record still
+ * points at is kept, and its event says so).
+ */
+async function refuseStored(
+  store: StoredUploadBucket,
+  input: StoredUploadInput,
+  inspection: Extract<UploadInspection, { ok: false }>,
+): Promise<StoredUploadResult> {
+  const outcome = await removeRefused(store, input, inspection.family);
+  const inUse = outcome?.done === 'kept' && outcome.because === 'still_named';
+  await recordRefusal(inUse ? 'in_use' : inspection.family, input.organizationId, input.headers);
+  return {
+    ok: false,
+    family: inspection.family,
+    message: messageFor(inspection.code, inspection.family, input),
+  };
 }
 
 /** A window an image sniff cannot decide (a JPEG whose frame header sits past it). */
@@ -370,11 +498,8 @@ export async function checkStoredUpload(
   }
   const prefixKinds = input.accept.filter((k) => k !== 'text' && k !== 'docx' && k !== 'xlsx');
   if (prefixKinds.length === input.accept.length && !windowUndecided(head)) {
-    const first = await checkUploadPrefix(head.prefix, input);
-    if (!first.ok) {
-      await removeRefused(store, input, first.family);
-      return first;
-    }
+    const first = inspectUploadPrefix(head.prefix, input);
+    if (!first.ok) return refuseStored(store, input, first);
   }
   const whole =
     head.totalSize > head.prefix.byteLength
@@ -385,12 +510,10 @@ export async function checkStoredUpload(
     // recorded. The person is asked to try again.
     return { ok: false, family: null, message: input.unreadableMessage };
   }
-  const verdict = await checkUploadBytes(whole, input);
-  if (!verdict.ok) {
-    await removeRefused(store, input, verdict.family);
-    return verdict;
-  }
-  return { ...verdict, bytes: whole };
+  const verdict = inspectUpload(whole, input);
+  if (!verdict.ok) return refuseStored(store, input, verdict);
+  const clean = judged(verdict, input);
+  return clean.ok ? { ...clean, bytes: whole } : clean;
 }
 
 /**
@@ -411,10 +534,8 @@ export async function checkStoredUploadSignature(
     await removeRefused(store, input, 'too_large');
     return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
   }
-  const verdict = await checkUploadPrefix(head.prefix, input);
-  if (!verdict.ok) {
-    await removeRefused(store, input, verdict.family);
-    return verdict;
-  }
-  return { ...verdict, bytes: head.prefix };
+  const verdict = inspectUploadPrefix(head.prefix, input);
+  if (!verdict.ok) return refuseStored(store, input, verdict);
+  const clean = judged(verdict, input);
+  return clean.ok ? { ...clean, bytes: head.prefix } : clean;
 }

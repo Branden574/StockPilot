@@ -55,7 +55,7 @@ import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { isValidStoragePath, poImportPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { auditRemoval, checkUploadBytes } from '@/server/security/upload-checks';
+import { auditRemoval, checkUploadBytes, removeAndAudit } from '@/server/security/upload-checks';
 import {
   encodedInValueLength,
   IN_FILTER_MAX_ENCODED_CHARS,
@@ -240,7 +240,8 @@ const PO_SCAN_KINDS: readonly UploadKind[] = ['jpeg', 'png', 'webp', 'heic', 'pd
  * organization names the same object (a scan's file is keyed by its hash and
  * shared with a cancelled earlier import of the same document). Removing it
  * then would break that other import's document link, so it is kept, and it
- * is kept when that look fails too. A removal leaves one audit line.
+ * is kept when that look fails too. Each leaves one audit line: removed (as
+ * storage answered), or kept and why.
  * Best-effort: the refusal stands either way, and nothing serves this bucket.
  */
 async function removeRefusedImportFile(
@@ -258,9 +259,16 @@ async function removeRefusedImportFile(
       .eq('storage_path', path)
       .neq('id', importId)
       .limit(1);
-    if (error || !Array.isArray(others) || others.length > 0) return;
-    await admin.storage.from('po-imports').remove([path]);
-    await auditRemoval('po_import_file', why, 1, { organizationId: ctx.organizationId, userId: ctx.userId });
+    const by = { organizationId: ctx.organizationId, userId: ctx.userId };
+    if (error || !Array.isArray(others)) {
+      await auditRemoval('po_import_file', why, { done: 'kept', objects: 1, because: 'look_failed' }, by);
+      return;
+    }
+    if (others.length > 0) {
+      await auditRemoval('po_import_file', why, { done: 'kept', objects: 1, because: 'still_named' }, by);
+      return;
+    }
+    await removeAndAudit(admin.storage.from('po-imports'), [path], 'po_import_file', why, by);
   } catch {
     // Deliberately swallowed.
   }

@@ -242,7 +242,7 @@ function setup(
         ? { data: null, error: { message: 'write failed' } }
         : { data: { path: _path }, error: null },
     ),
-    remove: vi.fn(async () => ({ data: null, error: null })),
+    remove: vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null })),
     createSignedUrls: vi.fn(),
   };
   admin.client.storage.from = vi.fn(() => storage);

@@ -683,7 +683,7 @@ describe('ItemImagesService.record — thumb sidecar verification (SP-135)', () 
    *  call, so a `remove` spy taken from it can never be asserted against.
    *  Pin one bucket for the whole call. */
   function pinBucket(stub: ReturnType<typeof makeSupabaseStub>) {
-    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     const bucket = {
       remove,
       createSignedUrl: vi.fn(async () => ({
@@ -788,7 +788,7 @@ describe('ItemImagesService.remove — thumb sidecar cleanup (SP-135)', () => {
       },
       'item_images.delete': { data: null, error: null },
     });
-    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     stub.client.storage.from = vi.fn(() => ({ remove }));
     const svc = new ItemImagesService(
       makeServiceContext(stub.client, { organizationId: 'org-1' }),
@@ -813,7 +813,7 @@ describe('ItemImagesService.remove — thumb sidecar cleanup (SP-135)', () => {
       },
       'item_images.delete': { data: null, error: null },
     });
-    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     stub.client.storage.from = vi.fn(() => ({ remove }));
     const svc = new ItemImagesService(
       makeServiceContext(stub.client, { organizationId: 'org-1' }),
@@ -842,7 +842,7 @@ describe('ItemImagesService.remove — objects shared with a duplicated item (L6
       },
       'item_images.delete': { data: null, error: null },
     });
-    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     stub.client.storage.from = vi.fn(() => ({ remove }));
     return { stub, remove };
   }
@@ -1034,7 +1034,7 @@ describe('ItemImagesService — item-level authorization of every image read', (
   it('remove(): the image of an item the caller cannot read is "not found", and nothing is deleted', async () => {
     const w = world();
     const { stub, service } = serviceFor(STAFF, w);
-    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     stub.client.storage.from = vi.fn(() => ({ remove }));
     const outImage = w.images.find((r) => r.item_id === w.items.otherWarehouse.id)!;
 
@@ -1048,7 +1048,7 @@ describe('ItemImagesService — item-level authorization of every image read', (
     const { stub, service } = serviceFor(STAFF, w, {
       'item_images.delete': { data: null, error: null },
     });
-    const remove = vi.fn(async () => ({ data: null, error: null }));
+    const remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     stub.client.storage.from = vi.fn(() => ({ remove }));
     const inImage = w.images.find((r) => r.item_id === w.items.inScope.id)!;
 

@@ -17,7 +17,7 @@ const { mockAudit, mockParsePoFile, mockExtract, mockAdmin, adminRemove, mockUpl
     mockParsePoFile: vi.fn(),
     mockExtract: vi.fn(),
     mockAdmin: vi.fn(),
-    adminRemove: vi.fn(async (_paths: string[]) => ({ error: null })),
+    adminRemove: vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null })),
     mockUpload: vi.fn(async () => ({ data: { path: 'p' }, error: null })),
   }),
 );

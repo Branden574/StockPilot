@@ -17,7 +17,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
-import { auditRemoval, checkUploadBytes, checkUploadPrefix } from '@/server/security/upload-checks';
+import { checkUploadBytes, checkUploadPrefix, removeAndAudit } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
@@ -469,8 +469,7 @@ export class MaintenanceAttachmentsService {
       throw new ServiceError('conflict', ALREADY_RECORDED);
     }
     if (recordedPaths.length > 0) {
-      await store.remove([args.path]);
-      await auditRemoval('maintenance_photo', 'path_refusal', 1, {
+      await removeAndAudit(store, [args.path], 'maintenance_photo', 'path_refusal', {
         organizationId: this.ctx.organizationId,
         userId: this.ctx.userId,
       });
@@ -524,9 +523,9 @@ export class MaintenanceAttachmentsService {
       }
       if (recorded.includes(args.path)) throw new ServiceError('conflict', ALREADY_RECORDED);
       const removing = recorded.length > 0 ? [args.path] : [args.path, thumbPath];
-      await store.remove(removing);
-      // Part 6: every removal of a refused upload leaves one audit line.
-      await auditRemoval('maintenance_photo', 'path_refusal', removing.length, {
+      // Part 6: every removal of a refused upload leaves one audit line, of
+      // what storage answered.
+      await removeAndAudit(store, removing, 'maintenance_photo', 'path_refusal', {
         organizationId: this.ctx.organizationId,
         userId: this.ctx.userId,
       });

@@ -144,14 +144,17 @@ async function rehostCover(
     if (!arr || arr.byteLength === 0) return null;
     // Part 6: the cover's type comes from its BYTES, never from the remote
     // server's content-type (which used to pick the extension, with anything
-    // unrecognised stored as a JPEG). The one upload check reads the kind,
-    // looks for a file hidden after the picture, and records a refusal as a
-    // security event in this organization. A refused cover is skipped like
-    // any other failed cover: the book keeps its original link.
+    // unrecognised stored as a JPEG). The one upload check reads the kind and
+    // looks for a file hidden after the picture. A refused cover is skipped
+    // like any other failed cover (the book keeps its original link) and is
+    // recorded nowhere: nobody sent it, so it is not a refused upload (a
+    // cover host answers a missing cover with a small placeholder picture of
+    // another kind). The backfill's own count of failed covers includes it.
     const checked = await checkUploadBytes(arr, {
       surface: 'book_cover',
       accept: ['png', 'webp', 'jpeg'],
       organizationId: ctx.organizationId,
+      notRecorded: 'server_fetched_cover',
     });
     if (!checked.ok) return null;
     const ext = checked.kind === 'png' ? 'png' : checked.kind === 'webp' ? 'webp' : 'jpg';

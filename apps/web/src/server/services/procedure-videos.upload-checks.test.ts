@@ -15,7 +15,7 @@ const h = vi.hoisted(() => ({
   objects: {} as Record<string, Uint8Array>,
   /** A size storage states other than the bytes' own, for an object too large to build here. */
   sizes: {} as Record<string, number>,
-  remove: vi.fn(async (_paths: string[]) => ({ data: null, error: null })),
+  remove: vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null })),
   stillNamed: vi.fn(async (_t: string, _c: readonly string[], _p: readonly string[]) => false),
   checkRateLimit: vi.fn(async () => ({ allowed: true, failed: false })),
   whole: vi.fn(),

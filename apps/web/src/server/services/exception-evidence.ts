@@ -32,7 +32,7 @@ import {
 } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
-import { auditRemoval, checkUploadBytes } from '@/server/security/upload-checks';
+import { checkUploadBytes, removeAndAudit } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, type ServiceContext } from './context';
@@ -477,14 +477,12 @@ export class ExceptionEvidenceService {
     const by = { organizationId: this.ctx.organizationId, userId: this.ctx.userId };
     if (row && row.storage_path === path) {
       if (thumb && row.thumbnail_path !== thumb) {
-        await removeQuietly(store, [thumb]);
-        await auditRemoval('exception_evidence', 'path_refusal', 1, by);
+        await removeAndAudit(store, [thumb], 'exception_evidence', 'path_refusal', by);
       }
       return recordedWins ? alreadyRecordedError() : err;
     }
     const removing = thumb ? [path, thumb] : [path];
-    await removeQuietly(store, removing);
-    await auditRemoval('exception_evidence', 'path_refusal', removing.length, by);
+    await removeAndAudit(store, removing, 'exception_evidence', 'path_refusal', by);
     return err;
   }
 
@@ -609,16 +607,6 @@ async function downloadWhole(store: AdminStore, path: string): Promise<Uint8Arra
     return new Uint8Array(await data.arrayBuffer());
   } catch {
     return null;
-  }
-}
-
-/** Best-effort on purpose: a failed cleanup must not turn a clear refusal
- *  into an internal error (upload-verification.ts's removeQuietly). */
-async function removeQuietly(store: AdminStore, paths: string[]): Promise<void> {
-  try {
-    await store.remove(paths);
-  } catch {
-    // Deliberately swallowed.
   }
 }
 

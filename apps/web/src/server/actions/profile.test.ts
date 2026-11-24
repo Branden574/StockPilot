@@ -152,7 +152,12 @@ const {
     adminTables: { from: null as null | ((table: string) => unknown) },
     logoStorage: {
       body: null as Uint8Array | null,
-      remove: vi.fn(),
+      remove: vi.fn(
+        async (paths: string[]): Promise<{ data: Array<{ name: string }> | null; error: { message: string } | null }> => ({
+          data: paths.map((name) => ({ name })),
+          error: null,
+        }),
+      ),
     },
     fetchObjectWindowMock: vi.fn(),
     /** Part 6: the whole read after the window, and the look for a saved picture. */
@@ -203,7 +208,10 @@ const {
         data: [] as Array<{ name: string }> | null,
         error: null as { message: string } | null,
       })),
-      remove: vi.fn(async (_paths: string[]) => ({ data: [] as unknown, error: null as { message: string } | null })),
+      remove: vi.fn(async (paths: string[]) => ({
+        data: paths.map((name) => ({ name })) as unknown,
+        error: null as { message: string } | null,
+      })),
     },
   }));
 
@@ -369,7 +377,7 @@ beforeEach(() => {
   platformAdmin.getVerifiedEmail.mockImplementation(async () => 'u@example.test');
   platformAdmin.isPlatformAdmin.mockImplementation(() => false);
   avatarStorage.list.mockImplementation(async () => ({ data: [], error: null }));
-  avatarStorage.remove.mockImplementation(async () => ({ data: [], error: null }));
+  avatarStorage.remove.mockImplementation(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
 });
 
 describe('updateProfileNameAction', () => {
@@ -495,7 +503,7 @@ describe('setOrgLogoUrlAction', () => {
         ? { prefix: logoStorage.body, totalSize: logoStorage.body.byteLength }
         : null,
     );
-    logoStorage.remove.mockImplementation(async () => ({ data: null, error: null }));
+    logoStorage.remove.mockImplementation(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     stubHolder.stub = makeSupabaseStub({
       'organizations.select': {
         data: [{ logo_url: 'https://old/logo.png' }],
@@ -704,7 +712,10 @@ describe('setOrgLogoUrlAction', () => {
         expect(result.ok).toBe(false);
         expect(stillNamedMock.mock.calls).toEqual([['organizations', ['logo_url'], [`${LOGO_URL_BASE}logo-big.png`]]]);
         expect(logoStorage.remove).not.toHaveBeenCalled();
-        expect(audit).not.toHaveBeenCalled();
+        // Kept, and the audit line says so (review round 2, F1).
+        expect(vi.mocked(audit).mock.calls.map((c) => [c[0].event, c[0].extra])).toEqual([
+          ['security.upload_refused_kept', { surface: 'org_logo', why: 'too_large', objects: 1, because: 'still_named' }],
+        ]);
       },
     );
 
@@ -877,7 +888,7 @@ describe('setOrgLogoUrlAction', () => {
 
     it('the answer and the audit row do not wait for the removal', async () => {
       withPrevious(`${LOGO_URL_BASE}logo-100.png`);
-      let settleRemoval: (value: { data: null; error: null }) => void = () => {};
+      let settleRemoval: (value: { data: Array<{ name: string }> | null; error: null }) => void = () => {};
       logoStorage.remove.mockImplementation(
         () => new Promise((resolve) => { settleRemoval = resolve; }),
       );
@@ -2339,7 +2350,7 @@ describe('avatar and logo finalize: the upload check (part 6)', () => {
       const body = objects[path];
       return body ? { prefix: body, totalSize: body.byteLength } : null;
     });
-    logoStorage.remove.mockImplementation(async () => ({ data: null, error: null }));
+    logoStorage.remove.mockImplementation(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
     stubHolder.stub = makeSupabaseStub({
       'user_profiles.select': { data: [{ avatar_url: null }], error: null },
       'user_profiles.update': { data: null, error: null },
@@ -2466,7 +2477,15 @@ describe('avatar and logo finalize: the upload check (part 6)', () => {
     ]);
     expect(avatarStorage.remove).not.toHaveBeenCalled();
     expect(logoStorage.remove).not.toHaveBeenCalled();
-    expect(audit).not.toHaveBeenCalled();
+    // Kept, each with a "kept" line, and each event says the file is still in use (review round 2, F1).
+    expect(vi.mocked(audit).mock.calls.map((c) => [c[0].event, c[0].extra])).toEqual([
+      ['security.upload_refused_kept', { surface: 'avatar', why: 'wrong_type', objects: 1, because: 'still_named' }],
+      ['security.upload_refused_kept', { surface: 'org_logo', why: 'wrong_type', objects: 1, because: 'still_named' }],
+    ]);
+    expect(vi.mocked(recordSecurityEvent).mock.calls.map((c) => [c[0].outcome, c[0].reason])).toEqual([
+      ['flagged', 'upload_refused_in_use'],
+      ['flagged', 'upload_refused_in_use'],
+    ]);
     stillNamedMock.mockResolvedValue(false);
   });
 
