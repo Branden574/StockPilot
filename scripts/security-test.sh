@@ -1129,19 +1129,29 @@ PGTAP_TESTS=(
   # (shown with the grant made inside a savepoint), and even then the second
   # lock in each body refuses a signed-in member and a signed-out caller.
   # Every write takes this file's own advisory lock, never the security
-  # events' or the samples'; the reads take none. The inputs count 8 hours of
-  # the record as the map counts it (folded, tallies apart; worked out by hand
-  # for a made-up record), never give a source hash, and say when the row
-  # ceiling cut the window. The claim keeps one row per alert however often
-  # it is claimed (a subject of null and '' the same; the key from the
-  # event's hour, not the run's clock), hands an alert with no result out once
-  # more after 5 minutes and then marks it not_sent; serious flags have their
-  # own 6 pushes an hour, then email only; volume and record alerts 8 a day
-  # together and 4 for one rule and subject; a planned check holds those and
-  # never a serious flag; with both switches off an alert is still recorded.
-  # Every refusal of all nine is a fixed word, never raised. The result, the
-  # heartbeat (missed runs, three failures reported once), the set (ranges,
-  # compare-and-set, a change row for every change), the console's list, the
+  # events' or the samples', before its first read of the alerts tables (a
+  # text pin); the reads take none. The inputs count 8 hours of the record as
+  # the map counts it (folded, tallies apart; worked out by hand for a
+  # made-up record), never give a source hash, say when the row ceiling cut
+  # the window, and list the serious flags due their retry apart from the
+  # others. The claim keeps one row per alert however often it is claimed (a
+  # subject of null and '' the same; the key from the event's hour, not the
+  # run's clock), hands an alert with no result out once more after 5
+  # minutes and then marks it not_sent; a serious flag's retry is never lost
+  # (not swept for 10 hours, taken after its hour left the window); serious
+  # flags have their own 6 pushes an hour and 4 a day for one reason, then go
+  # by email even with email alerts off (the row says why), and by push and
+  # email as far as the switches go; volume and record alerts 8 pushes a day
+  # together and 4 for one rule and subject, 24 emails a day together, then
+  # held for the summary; a start with an ended state's key is refused; a
+  # planned check holds volume and record alerts and never a serious flag,
+  # and is refused while one is on, within 30 minutes of the last and past 4
+  # a day; with both switches off an alert is still recorded. Every refusal
+  # of all nine is a fixed word, never raised. The result (a serious push that
+  # reached no one owes its email), the heartbeat (missed runs, three
+  # failures reported at most once in 6 hours, a run that could not check
+  # fully), the set (ranges, compare-and-set, a change row for every change),
+  # the console's list (the latest change of every setting however old), the
   # baseline (the 99th percentile of a week's buckets, worked out by hand),
   # the purge (400 days, 5,000 a call, change rows kept) and the push
   # recipients (a confirmed sign-in email, no disabled, banned, deleted, SSO
