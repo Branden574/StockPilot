@@ -946,6 +946,34 @@ describe('a JWT, a hex value of 32 or more and a base64 value of 32 or more alwa
   });
 });
 
+// ── The independent review of 3b (REVIEW-3B.md): each way through it found ─
+
+describe('the ways through the scrub the independent review found are closed', () => {
+  const t = scrubRequestTarget;
+  const q = scrubRequestSample;
+  const seq = sequence(0x3b3b01);
+
+  it('M1: an email address with a `-`, a digit or an encoded `-` glued after it is still an email address', () => {
+    expect(t('/wp-admin/a-jane.doe@school.example-b')).toBe('/wp-admin/<email>');
+    expect(t('/wp-admin/jane.doe@school.example1')).toBe('/wp-admin/<email>');
+    expect(t('/wp-admin/jane.doe%40school.example%2Dold')).toBe('/wp-admin/<email>');
+    expect(q('q=jane.doe@school.example-old')).toBe('q=<email>');
+    const TAILS = ['-b', '-', '1', '-2024', '--', '2x', '-old.x', '%2Dold', '_x', '.example-1'];
+    for (let i = 0; i < 2_000; i++) {
+      const local = seq.text(LOWER, seq.int(3, 9));
+      const tail = seq.pick(TAILS);
+      const address = `${local}@school.example${tail}`;
+      for (const out of [t(`/wp-admin/${address}/x.php`), q(`q=${address}&page=2`) ?? '']) {
+        expect(out.includes(local) || out.includes('school'), `${address} -> ${out}`).toBe(false);
+      }
+    }
+    // An `@` with no address around it still reads `(at)`.
+    expect(t('/@vite/env')).toBe('/(at)vite/env');
+    expect(t('/x/user%40host/.env')).toBe('/x/user(at)host/.env');
+    expect(q('q=a@b')).toBe('q=a(at)b');
+  });
+});
+
 // ── Cost ────────────────────────────────────────────────────────────────────
 
 describe('every rule runs in about linear time (review S2)', () => {

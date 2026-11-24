@@ -389,8 +389,13 @@ function all(re: RegExp, view: string, keep?: (text: string) => boolean): Found[
 const EMAIL_WORD = /[A-Za-z0-9!$%'*+^_`{|}~.-]/;
 const AT_SIGN = /@|%(?:25)*40/gi;
 
-/** What follows the `@` of an email address: a domain with a dot and a top-level name of letters. */
-const EMAIL_DOMAIN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![A-Za-z0-9-])/;
+/**
+ * What follows the `@` of an email address: a domain with a dot and a
+ * top-level name of letters. Whatever is glued after it (`-old`, `1`, an
+ * encoded `-`) goes with the address: the walk takes the whole word around
+ * the `@` (review 3B, M1: a lookahead here once let such an address through).
+ */
+const EMAIL_DOMAIN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
 
 /**
  * An email address (something@something.tld, its `@` sent as itself or
