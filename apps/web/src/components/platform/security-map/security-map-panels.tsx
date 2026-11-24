@@ -12,6 +12,7 @@ import {
   SECURITY_MAP_WORDS,
   SECURITY_RESPONSE_GENERAL_CARD,
   SECURITY_RESPONSE_SIGN_IN_ALERT_CARD,
+  isSecurityProbeKind,
   securityConsoleCategoryLabel,
   securityEventReasonLabel,
   securityEventSourceLabel,
@@ -493,11 +494,15 @@ export function SecurityMapTicker({
 function KindResponse({
   cardId,
   label,
+  asked = false,
 }: {
   /** The general card of the kind (core's SECURITY_RESPONSE_GENERAL_CARD); none for a kind with none. */
   cardId: SecurityResponseCardId | null;
   label: string;
+  /** The exploit kind: its card says what was asked for, of every probe kind, in the last 24 hours. */
+  asked?: boolean;
 }) {
+  const zone = React.useContext(SecurityMapZone);
   if (cardId === null) return null;
   return (
     <div className="mt-1.5">
@@ -508,6 +513,7 @@ function KindResponse({
           what: label,
           context: { kind: label, place: null, time: null, organization: null },
           organizationId: null,
+          asked: asked ? { reason: null, at: null, country: null, timeZone: zone } : null,
         }}
       />
     </div>
@@ -533,6 +539,7 @@ export function SecurityMapLegend({ items }: { items: readonly SecurityMapLegend
               <KindResponse
                 cardId={SECURITY_RESPONSE_GENERAL_CARD[item.category]}
                 label={item.label}
+                asked={item.category === 'exploit'}
               />
             </li>
           );
@@ -675,6 +682,16 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
               },
               organizationId: w.organizationId,
               organizations: w.organizations,
+              // An exploit attempt of a probe kind: what was asked for in its hour.
+              asked:
+                w.category === 'exploit' && isSecurityProbeKind(w.reason)
+                  ? {
+                      reason: w.reason,
+                      at: w.at,
+                      country: w.flood ? null : w.country,
+                      timeZone: zone,
+                    }
+                  : null,
             }}
           />
         </div>
@@ -955,6 +972,15 @@ export function SecurityMapFlaggedList({
                           },
                           organizationId: w.organizationId,
                           organizations: w.organizations,
+                          asked:
+                            w.category === 'exploit' && isSecurityProbeKind(row[5])
+                              ? {
+                                  reason: row[5],
+                                  at: w.at,
+                                  country: w.flood ? null : w.country,
+                                  timeZone: zone,
+                                }
+                              : null,
                         }}
                       />
                     </span>

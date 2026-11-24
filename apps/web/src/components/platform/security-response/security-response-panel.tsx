@@ -25,13 +25,16 @@ import {
 
 import type { SecurityResponsePanelProps } from './security-response-host';
 import { SecurityResponseLevelBadge } from './security-response-level';
+import { SecurityResponseSamples } from './security-response-samples';
 
 /**
  * THE HOW-TO-RESPOND PANEL: one card in a dialog over the right side of the
  * page (the app's Sheet, so it has the page's own look in Classic and in
  * Liquid Glass, which styles every sheet by its data-glass mark). On top,
- * the entry it was opened from, in the words that entry already shows; then
- * the card's five parts. An Act now card shows "If one got through" first.
+ * the entry it was opened from, in the words that entry already shows; then,
+ * for an exploit-attempt entry, "What was asked for" (security-response-samples.tsx,
+ * read once when the panel opens); then the card's five parts. An Act now card
+ * shows "If one got through" first.
  *
  * The only module that imports the cards' text (core's
  * security-response-cards.ts). It is loaded by the host on the first press,
@@ -352,6 +355,13 @@ export function SecurityResponsePanel({
           data-testid="security-response-body"
           className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-5 sm:px-6"
         >
+          {request.asked ? (
+            // The entry's own evidence, read once when the panel opens: kept
+            // (hidden) while another card is shown, so Back reads nothing again.
+            <div hidden={trail.length > 1}>
+              <SecurityResponseSamples entry={request.asked} />
+            </div>
+          ) : null}
           {order}
           {usesActAs(card) ? (
             <p
