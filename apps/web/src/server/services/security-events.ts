@@ -45,15 +45,6 @@ export const SECURITY_ACTIVITY_ROW_LIMIT = 100;
 /** The totals' window: the functions' default, the last 7 days up to now. */
 export const SECURITY_ACTIVITY_TOTALS_DAYS = 7;
 
-/**
- * Kinds an organization's own Blocked activity page leaves out (part 6, stage
- * 6a): the upload checks record a refused file as malware in the
- * organization, for the platform console. This page stays as it was (its
- * words are about wrong passwords and codes), and the person who sent the
- * file was already told in a plain sentence. Showing it here is one line.
- */
-export const SECURITY_ACTIVITY_HIDDEN_CATEGORIES: ReadonlySet<string> = new Set(['malware']);
-
 export interface SecurityActivityRow {
   id: string;
   /** The start of the UTC minute the events happened in. */
@@ -189,7 +180,6 @@ export class SecurityEventsService {
     const rows = ((rowsRes.data ?? []) as Array<Record<string, unknown>>)
       .map(rowOf)
       .filter((r): r is SecurityActivityRow => r !== null)
-      .filter((r) => !SECURITY_ACTIVITY_HIDDEN_CATEGORIES.has(r.category))
       .slice(0, SECURITY_ACTIVITY_ROW_LIMIT);
 
     if (totalsUnavailable) return { totals: null, rows };
@@ -198,7 +188,6 @@ export class SecurityEventsService {
     for (const raw of (totalsRes.data ?? []) as Array<Record<string, unknown>>) {
       const events = countOf(raw.events);
       if (!isSecurityEventCategory(raw.category) || events === null) continue;
-      if (SECURITY_ACTIVITY_HIDDEN_CATEGORIES.has(raw.category)) continue;
       sums.set(raw.category, (sums.get(raw.category) ?? 0) + events);
     }
     const totals = SECURITY_EVENT_CATEGORIES.flatMap((category) => {

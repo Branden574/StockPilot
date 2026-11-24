@@ -253,7 +253,7 @@ describe('what an owner or admin sees', () => {
     // which are not sign-in attempts: its one line says passwords and codes.
     expect(
       screen.getByText(
-        'Wrong passwords and codes the app refused for the accounts in your organization. Kept for 90 days.',
+        'Wrong passwords and codes the app refused for the accounts in your organization, and files it refused at upload. Kept for 90 days.',
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/Sign-in attempts the app refused/)).toBeNull();
@@ -294,6 +294,29 @@ describe('what an owner or admin sees', () => {
     expect(screen.getByText('Nothing was blocked in the last 7 days.')).toBeTruthy();
     expect(screen.getByText('No blocked activity yet.')).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  // Part 6: a file the upload checks refused is a row here like any other, in
+  // plain words, never with the file's name or which check it met.
+  it('a refused file is a row in plain words, and its kind is in the totals', async () => {
+    h.role = 'owner';
+    h.activity.mockResolvedValueOnce({
+      totals: [{ category: 'malware', events: 2 }],
+      rows: [
+        { ...ACTIVITY.rows[0]!, id: 'u1', category: 'malware', reason: 'upload_active_content', country: null, city: null, count: 1 },
+        { ...ACTIVITY.rows[0]!, id: 'u2', category: 'malware', reason: 'upload_could_not_check', source: 'phone', count: 1 },
+      ],
+    });
+    await renderPage();
+    const totals = screen.getByRole('region', { name: 'Last 7 days' });
+    expect(within(totals).getByText('Malware')).toBeTruthy();
+    const rows = screen.getAllByRole('row').slice(1);
+    const what = rows.map((r) => within(r).getAllByRole('cell')[1]!.textContent);
+    expect(what).toEqual([
+      'A file that could run something when opened was refusedMalware · Blocked',
+      'A file that could not be checked was refusedMalware · Blocked',
+    ]);
+    expect(document.body.textContent).not.toMatch(/upload_|javascript|macro|\.pdf|\.png/i);
   });
 
   // The platform console says "Sign-in alert" for this category (lab walk 3, F1); an
