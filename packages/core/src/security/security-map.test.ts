@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { SECURITY_EVENT_CATEGORIES, type SecurityEventCategory } from './security-events';
+import {
+  SECURITY_EVENT_CATEGORIES,
+  SECURITY_EVENT_REASON_LABELS,
+  type SecurityEventCategory,
+} from './security-events';
 import {
   SECURITY_MAP_FIXTURE_EXPECTED,
   SECURITY_MAP_FIXTURE_ROWS,
@@ -21,6 +25,7 @@ import {
   SECURITY_MAP_REFUSALS,
   SECURITY_MAP_ROWS_PER_SIGN_IN,
   SECURITY_MAP_STEP_MS,
+  SECURITY_MAP_FLAGGED_UNKNOWN_REASON,
   SECURITY_MAP_TALLY_REASONS,
   SECURITY_MAP_WORDS,
   isSecurityMapFloorName,
@@ -43,6 +48,7 @@ import {
   securityMapFeedWords,
   securityMapFlaggedFeedLeavesOut,
   securityMapFlaggedListWords,
+  securityMapFlaggedReasonWords,
   securityMapHealthAfter,
   securityMapIsFloor,
   securityMapLegend,
@@ -814,7 +820,11 @@ describe('securityMapViewOf: what leaves the server', () => {
     ]);
     expect(view.feed.some((row) => row[1] === phishing)).toBe(false);
     expect(view.feed).toHaveLength(2);
-    expect(JSON.stringify(view)).not.toContain('Example Harbour');
+    // Its flagged sign-in alert is in the flagged feed only, never in any drawing or the plain feed.
+    expect(view.flaggedFeed.filter((row) => row[1] === phishing).map((row) => row[6])).toEqual([
+      'Example Harbour',
+    ]);
+    expect(JSON.stringify({ ...view, flaggedFeed: [] })).not.toContain('Example Harbour');
   });
 
   it("its events are counted for one line of words, and stay in the window's sums", () => {
@@ -915,7 +925,7 @@ describe('securityMapViewOf: what leaves the server', () => {
     expect(r.whole).toBeNull();
     expect(r.live).toEqual([['US', 0, 0, 7]]);
     expect(r.feed).toHaveLength(2);
-    expect(r.flaggedFeed).toHaveLength(1);
+    expect(r.flaggedFeed).toHaveLength(2);
     expect(Object.keys(r).sort()).toEqual([
       'askedFrom',
       'feed',
@@ -933,8 +943,22 @@ describe('securityMapViewOf: what leaves the server', () => {
     ]);
   });
 
-  it('the flagged feed: the shown kinds only, flagged only, each with its own "at least"', () => {
+  it('the flagged feed: every kind, the hidden ones too, flagged only, each with its own "at least"', () => {
     expect(view.flaggedFeed).toEqual([
+      [
+        '2026-11-23T21:59:00+00:00',
+        SECURITY_EVENT_CATEGORIES.indexOf('phishing'),
+        1,
+        'sign_in_new_country',
+        'web',
+        'PT',
+        'Example Harbour',
+        1,
+        true,
+        null,
+        null,
+        3,
+      ],
       [
         '2026-11-23T03:20:00+00:00',
         0,
@@ -1028,7 +1052,20 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       null,
       3,
     ];
-    expect(readSecurityMapView({ ...view, flaggedFeed: [phishingFlagged] })).toBeNull();
+    // In the flagged feed a hidden kind is read: the flagged sign-in alerts are listed.
+    expect(readSecurityMapView({ ...view, flaggedFeed: [phishingFlagged] })).not.toBeNull();
+    expect(
+      readSecurityMapView({
+        ...view,
+        flaggedFeed: [[...phishingFlagged.slice(0, 2), 0, ...phishingFlagged.slice(3)]],
+      }),
+    ).toBeNull();
+    expect(
+      readSecurityMapView({
+        ...view,
+        flaggedFeed: [[phishingFlagged[0], 9, ...phishingFlagged.slice(2)]],
+      }),
+    ).toBeNull();
   });
 
   it('anything else is not a view', () => {
@@ -1324,37 +1361,65 @@ describe('the kept feeds: a poll merged in by identity', () => {
     expect(securityMapWindowStartNow(null, later)).toBe(Date.parse('2026-11-23T21:52:00Z'));
   });
 
-  it('the flagged list says when it leaves flagged events out, and never "nothing" for what was not read', () => {
-    // FLAGGED is 2 events of password guessing; the legend holds the window's flagged events by kind.
-    const read = whole({ flagged_feed: [FLAGGED] });
-    const withFlagged = (count: number, list = read.flaggedFeed) => ({
-      ...read,
-      flaggedFeed: list,
-      whole: { ...read.whole, legend: [[0, 0, count] as const] },
-    });
-    // Listed 2 of 2: all there.
-    expect(securityMapFlaggedFeedLeavesOut(withFlagged(2))).toBe(false);
-    expect(securityMapFlaggedListWords(withFlagged(2), 1, false)).toBeNull();
+  it('the flagged list says when the kept list adds up to less than the window\'s flagged events, and never "nothing" for what was not read', () => {
+    // FLAGGED is 2 events; flagged_window is the whole read's flagged events of every kind.
+    const read = (flaggedWindow: number) =>
+      whole({ flagged_feed: [FLAGGED], flagged_window: flaggedWindow });
+    const rows = read(2).flaggedFeed;
+    expect(securityMapFlaggedFeedLeavesOut(read(2), rows)).toBe(false);
+    expect(securityMapFlaggedListWords(read(2), rows, false)).toBeNull();
+    expect(securityMapFlaggedFeedLeavesOut(read(3), rows)).toBe(true);
+    expect(securityMapFlaggedListWords(read(3), rows, false)).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedMore,
+    );
+    // The kept list, polls merged in, is what is counted.
+    const more = [
+      ...rows,
+      [...rows[0]!.slice(0, 7), 1, ...rows[0]!.slice(8)] as unknown as SecurityMapFeedRow,
+    ];
+    expect(securityMapFlaggedFeedLeavesOut(read(3), more)).toBe(false);
     // Entries fell past the cap of the kept list.
-    expect(securityMapFlaggedListWords(withFlagged(2), 1, true)).toBe(
+    expect(securityMapFlaggedListWords(read(2), rows, true)).toBe(
       SECURITY_MAP_WORDS.flaggedFeedMore,
     );
-    // Listed 2 of 3: the newest only.
-    expect(securityMapFlaggedFeedLeavesOut(withFlagged(3))).toBe(true);
-    expect(securityMapFlaggedListWords(withFlagged(3), 1, false)).toBe(
-      SECURITY_MAP_WORDS.flaggedFeedMore,
-    );
-    // None listed, yet flagged events of the shown kinds: never "Nothing was flagged".
-    expect(securityMapFlaggedListWords(withFlagged(3, []), 0, false)).toBe(
-      SECURITY_MAP_WORDS.flaggedFeedNoneShown,
-    );
-    expect(securityMapFlaggedListWords(withFlagged(0, []), 0, false)).toBe(
+    // None listed: "Nothing was flagged" only when the window has no flagged event.
+    expect(securityMapFlaggedListWords(read(0), [], false)).toBe(
       SECURITY_MAP_WORDS.flaggedFeedEmpty,
     );
+    expect(securityMapFlaggedListWords(read(3), [], false)).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedNoneListed,
+    );
     // The whole window not read: could not check, or only the polls' entries.
-    expect(securityMapFlaggedListWords(null, 0, false)).toBe('Could not check.');
-    expect(securityMapFlaggedListWords(null, 2, false)).toBe(SECURITY_MAP_WORDS.flaggedFeedUnread);
-    expect(securityMapFlaggedFeedLeavesOut(null)).toBe(false);
+    expect(securityMapFlaggedListWords(null, [], false)).toBe('Could not check.');
+    expect(securityMapFlaggedListWords(null, rows, false)).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedUnread,
+    );
+    expect(securityMapFlaggedFeedLeavesOut(null, rows)).toBe(false);
+  });
+
+  it("a flagged entry's words: its own plain name, a neutral one for a code this build does not know, never a kind's name", () => {
+    expect(securityMapFlaggedReasonWords('sign_in_new_country')).toBe('Sign-in from a new country');
+    expect(securityMapFlaggedReasonWords('sign_in_not_me')).toBe(
+      'A member said a sign-in was not them',
+    );
+    expect(securityMapFlaggedReasonWords('sign_in_alerts_held')).toBe(
+      'Sign-in alerts held after too many in one day',
+    );
+    expect(securityMapFlaggedReasonWords('sign_in_from_the_moon')).toBe('Flagged sign-in event');
+    expect(SECURITY_MAP_FLAGGED_UNKNOWN_REASON).toBe('Flagged sign-in event');
+    for (const words of [
+      ...Object.values(SECURITY_EVENT_REASON_LABELS),
+      SECURITY_MAP_FLAGGED_UNKNOWN_REASON,
+      SECURITY_MAP_WORDS.flaggedFeedTitle,
+      SECURITY_MAP_WORDS.flaggedFeedNote,
+      SECURITY_MAP_WORDS.flaggedFeedSplit,
+      SECURITY_MAP_WORDS.flaggedFeedMore,
+      SECURITY_MAP_WORDS.flaggedFeedNoneListed,
+      SECURITY_MAP_WORDS.flaggedFeedEmpty,
+      SECURITY_MAP_WORDS.flaggedFeedUnread,
+    ]) {
+      expect(words).not.toMatch(/phishing|malware/i);
+    }
   });
 
   it("an entry's identity is its minute, kind, outcome, reason, source, place and organization", () => {

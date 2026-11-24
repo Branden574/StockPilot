@@ -30,6 +30,8 @@ import {
   isSecurityEventCategory,
   isSecurityEventSource,
   securityEventCategoryLabel,
+  securityEventReasonLabel,
+  SECURITY_EVENT_UNKNOWN_REASON_LABEL,
   type SecurityEventCategory,
   type SecurityEventOutcome,
   type SecurityEventSource,
@@ -785,9 +787,15 @@ export function securityMapViewOf(
     answer.timeline.filter((cell) => cell.bucket_seconds === 60),
     shown,
   );
-  const feedRows = (entries: readonly SecurityMapFeedEntry[]): SecurityMapFeedRow[] =>
+  // The plain feed holds the shown kinds only. The flagged feed holds every
+  // kind: the flagged sign-in alerts are real events even though their
+  // category is not drawn, and the flagged list is there for them.
+  const feedRows = (
+    entries: readonly SecurityMapFeedEntry[],
+    every = false,
+  ): SecurityMapFeedRow[] =>
     entries
-      .filter((entry) => shown.includes(entry.category))
+      .filter((entry) => every || shown.includes(entry.category))
       .map((e) => [
         e.minute,
         categoryIndex(e.category),
@@ -814,7 +822,7 @@ export function securityMapViewOf(
     live: liveRows.slice(0, SECURITY_MAP_MAX_ARCS),
     liveCut: liveRows.length > SECURITY_MAP_MAX_ARCS || answer.timeline_truncated,
     feed: feedRows(answer.feed),
-    flaggedFeed: feedRows(answer.flagged_feed),
+    flaggedFeed: feedRows(answer.flagged_feed, true),
     whole: null,
   };
   if (scope === 'recent') return view;
@@ -1039,9 +1047,9 @@ export function readSecurityMapView(
   if (!Array.isArray(raw.flaggedFeed) || raw.flaggedFeed.length > SECURITY_MAP_MAX_FLAGGED_FEED) {
     return null;
   }
-  if (
-    !(raw.flaggedFeed as unknown[]).every((row) => isFeedRow(row, shownIndexes) && row[2] === 1)
-  ) {
+  // Every kind may be in the flagged feed (a flagged sign-in alert of a kind the map does not draw).
+  const everyIndex = SECURITY_EVENT_CATEGORIES.map((_, i) => i);
+  if (!(raw.flaggedFeed as unknown[]).every((row) => isFeedRow(row, everyIndex) && row[2] === 1)) {
     return null;
   }
   if (raw.scope === 'recent' ? raw.whole !== null : !isWholeView(raw.whole, shownIndexes)) {
@@ -1263,39 +1271,53 @@ export function securityMapWindowStartNow(
 }
 
 /**
- * Whether the whole read's flagged list leaves flagged events out: its
- * entries (of the kinds shown) add up to less than its flagged events of
- * those kinds. The flagged feed is only the newest 20 inside the window read.
+ * Whether the flagged list leaves flagged events out: the events of the list
+ * as kept add up to less than the flagged events of the last read of the
+ * whole window (`flagged_window`, every kind). The list shows every kind, so
+ * the two count the same things.
  */
-export function securityMapFlaggedFeedLeavesOut(whole: SecurityMapWholeRead | null): boolean {
+export function securityMapFlaggedFeedLeavesOut(
+  whole: SecurityMapWholeRead | null,
+  rows: readonly SecurityMapFeedRow[],
+): boolean {
   if (!whole) return false;
   let listed = 0;
-  for (const row of whole.flaggedFeed) listed += row[7];
-  let flagged = 0;
-  for (const [, , count] of whole.whole.legend) flagged += count;
-  return listed < flagged;
+  for (const row of rows) listed += row[7];
+  return listed < whole.whole.flagged;
 }
 
 /**
  * The words beside the flagged list, or null when the list says it all.
- * `shown` is how many entries are listed; `cut` that the kept list lost
- * entries past its cap.
+ * `rows` is the list as kept; `cut` that it lost entries past its cap.
  */
 export function securityMapFlaggedListWords(
   whole: SecurityMapWholeRead | null,
-  shown: number,
+  rows: readonly SecurityMapFeedRow[],
   cut: boolean,
 ): string | null {
   if (!whole) {
-    return shown === 0 ? `${SECURITY_MAP_COULD_NOT_CHECK}.` : SECURITY_MAP_WORDS.flaggedFeedUnread;
+    return rows.length === 0
+      ? `${SECURITY_MAP_COULD_NOT_CHECK}.`
+      : SECURITY_MAP_WORDS.flaggedFeedUnread;
   }
-  const leavesOut = cut || securityMapFlaggedFeedLeavesOut(whole);
-  if (shown === 0) {
+  const leavesOut = cut || securityMapFlaggedFeedLeavesOut(whole, rows);
+  if (rows.length === 0) {
     return leavesOut
-      ? SECURITY_MAP_WORDS.flaggedFeedNoneShown
+      ? SECURITY_MAP_WORDS.flaggedFeedNoneListed
       : SECURITY_MAP_WORDS.flaggedFeedEmpty;
   }
   return leavesOut ? SECURITY_MAP_WORDS.flaggedFeedMore : null;
+}
+
+/** The words for a flagged reason this build does not know: neutral, never the raw code. */
+export const SECURITY_MAP_FLAGGED_UNKNOWN_REASON = 'Flagged sign-in event';
+
+/** What a flagged entry was, in plain words from its reason code. */
+export function securityMapFlaggedReasonWords(reason: string): string {
+  const label = securityEventReasonLabel(reason);
+  return label === SECURITY_EVENT_UNKNOWN_REASON_LABEL
+    ? SECURITY_MAP_FLAGGED_UNKNOWN_REASON
+    : label;
 }
 
 /* ───────────────────── polling, and when the play stops ───────────────────── */
@@ -1871,11 +1893,12 @@ export const SECURITY_MAP_WORDS = {
   feedEmpty: 'No entries to list.',
   flaggedFeedTitle: 'Flagged, not blocked: the newest',
   flaggedFeedNote:
-    'The newest 20 flagged entries of the window read, of the kinds this map shows, so a flood of blocked ones never hides them. Times in UTC.',
+    'The newest 20 flagged entries of the window read, so a flood of blocked ones never hides them. Times in UTC.',
+  flaggedFeedSplit:
+    'Flagged sign-in alerts are listed here, with a grey mark, and are not drawn on the map.',
   flaggedFeedEmpty: 'Nothing was flagged.',
   flaggedFeedMore: 'Only the newest are listed: this window holds more flagged events than these.',
-  flaggedFeedNoneShown:
-    'None to list: the newest flagged entries are of kinds this map does not show. Flagged events of the kinds it shows are older; they are in the totals and the table.',
+  flaggedFeedNoneListed: 'None listed, though this window holds flagged events.',
   flaggedFeedUnread:
     'The whole window could not be read: only entries of the last ten minutes are listed.',
   tableTitle: 'By country',
