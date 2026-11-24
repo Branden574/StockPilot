@@ -472,7 +472,7 @@ describe('the reads', () => {
 
   it('a read with no answer in 20 seconds is counted out: "Not updating since", the play stops, and its late answer is ignored', async () => {
     let release: (v: unknown) => void = () => {};
-    const { spy } = mount((input) =>
+    const { spy } = mount(() =>
       spy.mock.calls.length === 1
         ? new Promise((resolve) => {
             release = resolve;
