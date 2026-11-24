@@ -133,6 +133,20 @@ describe('what is on the map this moment', () => {
         STOCKPILOT_LON_LAT,
       ),
     );
+    // One loud country and one quiet one: weighed 7 to 1, not alike (that would
+    // face between them) and not 49 to 1.
+    const loud = focusOf(drawnArcs([arc('RU', 0, 0, 49), arc('ZA', 1, 0, 1)]));
+    const weighed = (a: number, b: number) =>
+      facingYaw(
+        [
+          { lonLat: countryPoint('RU')!, weight: a },
+          { lonLat: countryPoint('ZA')!, weight: b },
+        ],
+        STOCKPILOT_LON_LAT,
+      );
+    expect(loud).toBe(weighed(7, 1));
+    expect(loud).not.toBe(weighed(1, 1));
+    expect(loud).not.toBe(weighed(49, 1));
     // Nothing to draw: StockPilot.
     expect(focusOf([])).toBe(facingYaw([], STOCKPILOT_LON_LAT));
   });

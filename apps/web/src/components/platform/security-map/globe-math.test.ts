@@ -172,6 +172,21 @@ describe('turning the globe to face a place', () => {
     for (const p of places) expect(angleFromView(yaw, p.lonLat)).toBeLessThan(76 * DEG);
   });
 
+  it('sources east of StockPilot: the globe turns from their middle toward StockPilot, keeping it in view', () => {
+    // Facing these three alone puts the middle of the view near 6 E and StockPilot
+    // past the limb (74 degrees out); what StockPilot is worth turns the globe
+    // west until it is just inside, the sources still well in view.
+    const places = [
+      { lonLat: [10, 50] as const, weight: 3 },
+      { lonLat: [8, 9] as const, weight: 3 },
+      { lonLat: [-4, 40] as const, weight: 2 },
+    ];
+    const yaw = facingYaw(places, STOCKPILOT_LON_LAT);
+    expect(-yaw / DEG).toBeLessThan(-15);
+    expect(angleFromView(yaw, STOCKPILOT_LON_LAT)).toBeLessThan(50 * DEG);
+    for (const p of places) expect(angleFromView(yaw, p.lonLat)).toBeLessThan(46 * DEG);
+  });
+
   it('a play from the far side of the world faces its sources, not StockPilot', () => {
     const places = [
       { lonLat: [105, 35] as const, weight: 5 },
@@ -670,6 +685,9 @@ describe("the arcs' comets", () => {
     const f = createArcFrame();
     arcFrameAt(f, 'still', 1234, 0.5);
     expect(f).toEqual({ head: -1, track: STILL_TRACK, ring: -1 });
+    // Drawn plainly, not as the faint track a flight leaves.
+    expect(STILL_TRACK).toBeGreaterThanOrEqual(0.5);
+    expect(STILL_TRACK).toBeLessThanOrEqual(1);
   });
 
   it('a flight takes 1.6 to 2.4 seconds, the same for the same arc', () => {
