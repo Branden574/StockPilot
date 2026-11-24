@@ -526,7 +526,7 @@ select is(
         '42501|permission denied for function _security_map_read_from',
         '42501|permission denied for function platform_security_map',
         '42501|permission denied for function platform_security_map'],
-  '0478/19: a signed-in member, even one holding the second step, can call neither: no EXECUTE');
+  '0478/19: a signed-in member, even one holding the second step, can call none of the three: no EXECUTE');
 reset role;
 set local role anon;
 select set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true);
@@ -539,7 +539,7 @@ select is(
         '42501|permission denied for function _security_map_read_from',
         '42501|permission denied for function platform_security_map',
         '42501|permission denied for function platform_security_map'],
-  '0478/20: a signed-out caller can call neither: no EXECUTE');
+  '0478/20: a signed-out caller can call none of the three: no EXECUTE');
 reset role;
 select set_config('request.jwt.claims', '', true);
 
@@ -573,7 +573,7 @@ select is(
         pg_temp.refusal($$ select * from public._security_map_units(now() - interval '1 hour', now(), false) $$),
         pg_temp.refusal($$ select public._security_map_read_from(now() - interval '1 hour', now(), 1) $$)],
   array_fill('42501|platform_security_map_not_allowed'::text, array[4]),
-  '0478/23: the second lock refuses a signed-out caller on both as well');
+  '0478/23: the second lock refuses a signed-out caller on all three as well');
 reset role;
 select set_config('request.jwt.claims', '', true);
 rollback to savepoint slipped_grant;
