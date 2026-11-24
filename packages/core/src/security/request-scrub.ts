@@ -226,7 +226,14 @@ function settle(p: Piece): Piece {
 }
 
 function literalUnit(ch: string): Piece {
-  return settle({ view: '', out: '', literal: true, marker: false, cp: ch.codePointAt(0) ?? -1, byte: null });
+  return settle({
+    view: '',
+    out: '',
+    literal: true,
+    marker: false,
+    cp: ch.codePointAt(0) ?? -1,
+    byte: null,
+  });
 }
 
 function byteUnit(byte: number, out: string): Piece {
@@ -247,7 +254,8 @@ function groupBytes(units: Piece[]): Piece[] {
       continue;
     }
     const b = u.byte;
-    const need = b >= 0xc2 && b <= 0xdf ? 1 : b >= 0xe0 && b <= 0xef ? 2 : b >= 0xf0 && b <= 0xf4 ? 3 : 0;
+    const need =
+      b >= 0xc2 && b <= 0xdf ? 1 : b >= 0xe0 && b <= 0xef ? 2 : b >= 0xf0 && b <= 0xf4 ? 3 : 0;
     let cp = b < 0x80 ? b : -1;
     let raw = u.out;
     let used = 0;
@@ -281,7 +289,9 @@ function firstDecode(raw: string): Piece[] {
   for (let i = 0; i < chars.length; i++) {
     const ch = chars[i]!;
     if (ch === '%' && HEX_DIGIT.test(chars[i + 1] ?? '') && HEX_DIGIT.test(chars[i + 2] ?? '')) {
-      units.push(byteUnit(parseInt(chars[i + 1]! + chars[i + 2]!, 16), `%${chars[i + 1]}${chars[i + 2]}`));
+      units.push(
+        byteUnit(parseInt(chars[i + 1]! + chars[i + 2]!, 16), `%${chars[i + 1]}${chars[i + 2]}`),
+      );
       i += 2;
     } else {
       units.push(literalUnit(ch));
@@ -534,8 +544,7 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
   {
     name: 'id',
     marker: SAMPLE_MARKERS.id,
-    find: (view) =>
-      all(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, view),
+    find: (view) => all(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, view),
   },
   {
     name: 'ipv4',
@@ -601,7 +610,11 @@ const KEPT_TEXT_RULES: readonly ScrubRule[] = [
     marker: SAMPLE_MARKERS.id,
     find: (t) => all(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, t),
   },
-  { name: 'kept_id_without_dashes', marker: SAMPLE_MARKERS.id, find: (t) => all(/[0-9a-f]{32,}/gi, t) },
+  {
+    name: 'kept_id_without_dashes',
+    marker: SAMPLE_MARKERS.id,
+    find: (t) => all(/[0-9a-f]{32,}/gi, t),
+  },
 ];
 
 /**
@@ -657,7 +670,12 @@ function isSeparator(p: Piece, chars: string): boolean {
 }
 
 /** Splits [from, to) of `pieces` at the literal separators in `chars`: [start, end) ranges. */
-function partsOf(pieces: readonly Piece[], from: number, to: number, chars: string): Array<[number, number]> {
+function partsOf(
+  pieces: readonly Piece[],
+  from: number,
+  to: number,
+  chars: string,
+): Array<[number, number]> {
   const parts: Array<[number, number]> = [];
   let start = from;
   for (let i = from; i < to; i++) {
@@ -696,7 +714,8 @@ function removeSecretValues(
       if (to > from && bare(from, to)) replace.push([from, to]);
       continue;
     }
-    if (eq + 1 < to && isSecretQueryKey(viewText(pieces.slice(from, eq)))) replace.push([eq + 1, to]);
+    if (eq + 1 < to && isSecretQueryKey(viewText(pieces.slice(from, eq))))
+      replace.push([eq + 1, to]);
   }
   const out = pieces.slice();
   for (let r = replace.length - 1; r >= 0; r--) {
@@ -708,7 +727,8 @@ function removeSecretValues(
 
 function endsInCutMark(pieces: readonly Piece[], from: number, to: number): boolean {
   if (to - from < SAMPLE_CUT_MARK.length) return false;
-  for (let i = to - SAMPLE_CUT_MARK.length; i < to; i++) if (!isSeparator(pieces[i]!, '.')) return false;
+  for (let i = to - SAMPLE_CUT_MARK.length; i < to; i++)
+    if (!isSeparator(pieces[i]!, '.')) return false;
   return true;
 }
 

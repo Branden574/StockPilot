@@ -76,7 +76,9 @@ const BASE64URL = `${UPPER}${LOWER}${DIGITS}-_`;
 
 /** Every character written as an escape. */
 const encodeAll = (s: string) =>
-  [...new TextEncoder().encode(s)].map((b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`).join('');
+  [...new TextEncoder().encode(s)]
+    .map((b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`)
+    .join('');
 
 /** Undoes escapes as often as they change, for a check of what a kept text still says. */
 function decodedForm(s: string): string {
@@ -130,9 +132,11 @@ function plantedValues(seq: ReturnType<typeof sequence>): Planted {
     case 'email_triple_encoded_at': {
       const local = word();
       const domain = `${word()}.example`;
-      const at = { email_encoded_at: '%40', email_double_encoded_at: '%2540', email_triple_encoded_at: '%252540' }[
-        kind
-      ];
+      const at = {
+        email_encoded_at: '%40',
+        email_double_encoded_at: '%2540',
+        email_triple_encoded_at: '%252540',
+      }[kind];
       return { kind, value: `${local}@${domain}`, written: `${local}${at}${domain}` };
     }
     case 'email_all_encoded': {
@@ -224,8 +228,25 @@ function withNoise(seq: ReturnType<typeof sequence>, s: string): string {
   return out;
 }
 
-const PLAIN_SEGMENTS = ['wp-admin', 'api', 'backup', 'old', 'site', 'static', 'cgi-bin', 'x', 'phpunit'];
-const PROBE_NAMES = ['.env', 'wp-login.php', 'index.php', '.git/config', 'etc/passwd', 'xmlrpc.php'];
+const PLAIN_SEGMENTS = [
+  'wp-admin',
+  'api',
+  'backup',
+  'old',
+  'site',
+  'static',
+  'cgi-bin',
+  'x',
+  'phpunit',
+];
+const PROBE_NAMES = [
+  '.env',
+  'wp-login.php',
+  'index.php',
+  '.git/config',
+  'etc/passwd',
+  'xmlrpc.php',
+];
 const JOINERS = ['/', '-', '_', '.', '=', ';'];
 
 /** A path with one planted value, some noise, sometimes very long. */
@@ -242,7 +263,26 @@ function hostilePath(seq: ReturnType<typeof sequence>): { input: string; planted
   return { input: withNoise(seq, `/${parts.join('/')}`), planted };
 }
 
-const SECRET_NAMES = ['password', 'passwd', 'pwd', 'api_key', 'apiKey', 'access_token', 'auth', 'session_id', 'sig', 'otp', 'email', 'username', 'card_number', 'jwt', 'state', 'nonce', 'refresh', 'cookie'];
+const SECRET_NAMES = [
+  'password',
+  'passwd',
+  'pwd',
+  'api_key',
+  'apiKey',
+  'access_token',
+  'auth',
+  'session_id',
+  'sig',
+  'otp',
+  'email',
+  'username',
+  'card_number',
+  'jwt',
+  'state',
+  'nonce',
+  'refresh',
+  'cookie',
+];
 
 function mixedCase(seq: ReturnType<typeof sequence>, s: string): string {
   return [...s].map((c) => (seq.next() < 0.5 ? c.toUpperCase() : c)).join('');
@@ -251,13 +291,17 @@ function mixedCase(seq: ReturnType<typeof sequence>, s: string): string {
 /** A query with a planted value: as a secret-named key's value, as a plain value, or with no key. */
 function hostileQuery(seq: ReturnType<typeof sequence>): { input: string; planted: Planted } {
   const parts: string[] = [];
-  for (let i = seq.int(0, 3); i > 0; i--) parts.push(`${seq.pick(['q', 'page', 'lang', 'v', 'x'])}=${seq.text(LOWER, 4)}`);
+  for (let i = seq.int(0, 3); i > 0; i--)
+    parts.push(`${seq.pick(['q', 'page', 'lang', 'v', 'x'])}=${seq.text(LOWER, 4)}`);
   let planted: Planted;
   const how = seq.int(0, 2);
   if (how === 0) {
     // A dull value under a secret-shaped key: removed whole, whatever it looks like.
     const name = mixedCase(seq, seq.pick(SECRET_NAMES));
-    const nested = seq.next() < 0.3 ? `${seq.pick(['user', 'data', 'form'])}[${seq.pick(['a', 'b'])}][${name}]` : name;
+    const nested =
+      seq.next() < 0.3
+        ? `${seq.pick(['user', 'data', 'form'])}[${seq.pick(['a', 'b'])}][${name}]`
+        : name;
     const key = seq.next() < 0.2 ? encodeAll(nested) : nested;
     const value = `v${seq.text(LOWER, 11)}`;
     planted = { kind: 'secret_key', value, written: value };
@@ -269,7 +313,11 @@ function hostileQuery(seq: ReturnType<typeof sequence>): { input: string; plante
   }
   planted = plantedValues(seq);
   const written = planted.written || planted.value;
-  parts.splice(seq.int(0, parts.length), 0, how === 1 ? `${seq.pick(['q', 'path', 'x'])}=${written}` : written);
+  parts.splice(
+    seq.int(0, parts.length),
+    0,
+    how === 1 ? `${seq.pick(['q', 'path', 'x'])}=${written}` : written,
+  );
   if (seq.next() < 0.1) parts.push(`pad=${'b'.repeat(seq.int(200, 700))}`);
   return { input: withNoise(seq, parts.join(seq.pick(['&', '&', ';']))), planted };
 }
@@ -281,7 +329,10 @@ function expectSafe(out: string, planted: Planted, max: number) {
   expect(out.length).toBeLessThanOrEqual(max);
   expect(out.includes('@'), out).toBe(false);
   for (const form of [out, decodedForm(out)]) {
-    expect(form.toLowerCase().includes(planted.value.toLowerCase()), `${planted.kind} in ${out}`).toBe(false);
+    expect(
+      form.toLowerCase().includes(planted.value.toLowerCase()),
+      `${planted.kind} in ${out}`,
+    ).toBe(false);
     if (planted.written && planted.written !== planted.value) {
       expect(form.includes(planted.written), `${planted.kind} (as written) in ${out}`).toBe(false);
     }
@@ -296,18 +347,38 @@ describe('the contract with migration 0479', () => {
     expect(SAMPLE_UNREADABLE_TARGET).toBe('(unreadable)');
     expect(SAMPLE_OVERFLOW_TARGET).toBe('(more than could be listed)');
     expect([SAMPLE_BATCH_MAX, SAMPLE_KIND_CAP_PER_HOUR, SAMPLE_HOUR_CAP]).toEqual([50, 50, 300]);
-    expect([...SAMPLE_METHODS]).toEqual(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+    expect([...SAMPLE_METHODS]).toEqual([
+      'GET',
+      'HEAD',
+      'POST',
+      'PUT',
+      'PATCH',
+      'DELETE',
+      'OPTIONS',
+    ]);
     expect(SAMPLE_COUNT_MAX).toBe(999_999);
     expect(SAMPLE_AT_MS_PAST_HOURS).toBe(26);
     expect([SAMPLE_RETENTION_DAYS, SAMPLE_PURGE_BATCH]).toEqual([90, 5_000]);
     expect([SAMPLE_READ_MAX_HOURS, SAMPLE_READ_DEFAULT_HOURS]).toEqual([168, 24]);
-    expect([SAMPLE_READ_DEFAULT_LIMIT, SAMPLE_READ_MAX_LIMIT, SAMPLE_READ_PAIRS_PER_TARGET]).toEqual([10, 50, 5]);
+    expect([
+      SAMPLE_READ_DEFAULT_LIMIT,
+      SAMPLE_READ_MAX_LIMIT,
+      SAMPLE_READ_PAIRS_PER_TARGET,
+    ]).toEqual([10, 50, 5]);
     expect(SAMPLE_READ_ROW_CEILING).toBe(60_000);
   });
 
   it('every marker and both fixed words pass every rule, as a path and in a query string', () => {
     const markers = Object.values(SAMPLE_MARKERS);
-    expect(markers).toEqual(['<email>', '<id>', '<number>', '<long value>', '<token>', '<removed>', '<address>']);
+    expect(markers).toEqual([
+      '<email>',
+      '<id>',
+      '<number>',
+      '<long value>',
+      '<token>',
+      '<removed>',
+      '<address>',
+    ]);
     for (const word of [...markers, SAMPLE_UNREADABLE_TARGET, SAMPLE_OVERFLOW_TARGET]) {
       expect(isStorableTarget(`/${word}`), word).toBe(true);
       expect(isStorableSample(word), word).toBe(true);
@@ -352,7 +423,8 @@ describe('the contract with migration 0479', () => {
 
   it('a method is one of the seven, exactly', () => {
     for (const m of SAMPLE_METHODS) expect(isSampleMethod(m)).toBe(true);
-    for (const m of ['get', 'TRACE', 'CONNECT', 'PROPFIND', '', null, 1]) expect(isSampleMethod(m)).toBe(false);
+    for (const m of ['get', 'TRACE', 'CONNECT', 'PROPFIND', '', null, 1])
+      expect(isSampleMethod(m)).toBe(false);
   });
 });
 
@@ -404,7 +476,9 @@ describe('each rule', () => {
     expect(t('/wp-content/plugins/advanced-custom-fields-pro/x.php')).toBe(
       '/wp-content/plugins/advanced-custom-fields-pro/x.php',
     );
-    expect(t('/wp-content/plugins/JMXInvokerServlet/x.php')).toBe('/wp-content/plugins/JMXInvokerServlet/x.php');
+    expect(t('/wp-content/plugins/JMXInvokerServlet/x.php')).toBe(
+      '/wp-content/plugins/JMXInvokerServlet/x.php',
+    );
   });
   it('a JWT shape, and any three long base64url parts joined by dots', () => {
     const part = 'Ab1_'.repeat(5);
@@ -423,7 +497,9 @@ describe('each rule', () => {
     expect(t('/x;jsessionid=vexample/index.php')).toBe('/x;jsessionid=<removed>/index.php');
     expect(t('/x;color=blue/index.php')).toBe('/x;color=blue/index.php');
     // The one-letter names this app's own links carry a token or an address in.
-    expect(q('m=vexample&e=vexample&t=vexample&s=kept')).toBe('m=<removed>&e=<removed>&t=<removed>&s=kept');
+    expect(q('m=vexample&e=vexample&t=vexample&s=kept')).toBe(
+      'm=<removed>&e=<removed>&t=<removed>&s=kept',
+    );
     for (const name of [...SAMPLE_SECRET_KEY_PARTS, ...SAMPLE_SECRET_KEY_NAMES]) {
       expect(isSecretQueryKey(name.toUpperCase()), name).toBe(true);
     }
@@ -458,7 +534,14 @@ describe('each rule', () => {
     expect(t('/x/caf%C3%A9/.env')).toBe('/x/caf%C3%A9/.env');
   });
   it('a malformed escape: the path is unreadable, the query is no sample', () => {
-    for (const bad of ['/a%zz/.env', '/a%/.env', '/a%2/.env', '/a%C3/.env', '/a%FF/.env', '/a%E2%80/.env']) {
+    for (const bad of [
+      '/a%zz/.env',
+      '/a%/.env',
+      '/a%2/.env',
+      '/a%C3/.env',
+      '/a%FF/.env',
+      '/a%E2%80/.env',
+    ]) {
       expect(t(bad), bad).toBe(SAMPLE_UNREADABLE_TARGET);
       expect(scrubRequestSample(bad.slice(1)), bad).toBeNull();
     }
@@ -493,7 +576,8 @@ describe('each rule', () => {
     expect(t(split)).not.toBe(SAMPLE_UNREADABLE_TARGET);
   });
   it('a target that is not a path is unreadable', () => {
-    for (const bad of ['', 'no-slash', SAMPLE_OVERFLOW_TARGET]) expect(t(bad), bad).toBe(SAMPLE_UNREADABLE_TARGET);
+    for (const bad of ['', 'no-slash', SAMPLE_OVERFLOW_TARGET])
+      expect(t(bad), bad).toBe(SAMPLE_UNREADABLE_TARGET);
     expect(t(SAMPLE_UNREADABLE_TARGET)).toBe(SAMPLE_UNREADABLE_TARGET);
     expect(t(42 as unknown as string)).toBe(SAMPLE_UNREADABLE_TARGET);
   });
@@ -698,7 +782,9 @@ describe('a 22-character base64url token, which the table lets through, never su
     ];
     for (const name of kept) {
       expect(looksLikeToken(name), name).toBe(false);
-      expect(scrubRequestTarget(`/wp-content/plugins/${name}/x.php`), name).toBe(`/wp-content/plugins/${name}/x.php`);
+      expect(scrubRequestTarget(`/wp-content/plugins/${name}/x.php`), name).toBe(
+        `/wp-content/plugins/${name}/x.php`,
+      );
     }
   });
 });
@@ -726,13 +812,16 @@ describe('every rule runs in about linear time (review S2)', () => {
     '%2540'.repeat(N / 5),
   ];
 
-  it.each(SCRUB_RULES.map((r) => [r.name, r] as const))('%s, on 2,000-character worst cases', (_name, rule) => {
-    for (const text of WORST) {
-      const started = performance.now();
-      rule.find(text);
-      expect(performance.now() - started, text.slice(0, 12)).toBeLessThan(50);
-    }
-  });
+  it.each(SCRUB_RULES.map((r) => [r.name, r] as const))(
+    '%s, on 2,000-character worst cases',
+    (_name, rule) => {
+      for (const text of WORST) {
+        const started = performance.now();
+        rule.find(text);
+        expect(performance.now() - started, text.slice(0, 12)).toBeLessThan(50);
+      }
+    },
+  );
 
   it('the whole scrub, on the longest input it reads and far past it', () => {
     for (const text of WORST) {
