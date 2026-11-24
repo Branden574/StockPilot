@@ -88,8 +88,16 @@ function everUnder(segments: readonly string[]): boolean {
       (entry) => entry.length <= stack.length && entry.every((seg, i) => stack[i] === seg),
     );
   for (const raw of segments) {
-    // A matrix part (`/r;x=1/`) is not part of the name.
-    const segment = raw.split(';', 1)[0]!.toLowerCase();
+    // A matrix part (`/r;x=1/`) or what follows a `?` or `#` (decoded ones
+    // reach here) is not part of the name; nor is a control, space or
+    // invisible character anywhere in it, nor a dot at its end (`/r%00/`,
+    // `/r%20/`, `/r./`: review 3B, S1). When in doubt, no sample: this only
+    // ever makes more paths read as under an entry.
+    const segment = raw
+      .split(/[;?#]/, 1)[0]!
+      .replace(/[\p{Cc}\p{Cf}\p{Z}]/gu, '')
+      .replace(/(?<=[^.])\.+$/, '')
+      .toLowerCase();
     if (segment === '' || segment === '.') continue;
     if (segment === '..') {
       stack.pop();

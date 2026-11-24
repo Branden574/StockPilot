@@ -294,6 +294,38 @@ describe('mayBeSampled', () => {
     expect(mayBeSampled(pathname)).toBe(true);
   });
 
+  it.each([
+    `/r%00/${OPAQUE}/.env`,
+    `/r%09/${OPAQUE}/.env`,
+    `/r%20/${OPAQUE}/.env`,
+    `/r%C2%A0/${OPAQUE}/.env`,
+    `/r%E3%80%80/${OPAQUE}/.env`,
+    `/r%E2%80%8B/${OPAQUE}/.env`,
+    `/r%C2%AD/${OPAQUE}/.env`,
+    `/%00r/${OPAQUE}/.env`,
+    `/r%2500/${OPAQUE}/.env`,
+    `/r./${OPAQUE}/.env`,
+    `/r.../${OPAQUE}/.env`,
+    `/r%3Fx/${OPAQUE}/.env`,
+    `/r%23/${OPAQUE}/.env`,
+    `/invite%00/${OPAQUE}/wp-login.php`,
+    `/orders/sign%00/${OPAQUE}/.env`,
+    `/orders%20/sign/${OPAQUE}/.env`,
+    `/api%00/v1/orders/submissions/${OPAQUE}/.env`,
+  ])(
+    'nothing under a list entry with a control, space or invisible character, a trailing dot, or a ? or # glued on: %s (review 3B, S1)',
+    (pathname) => {
+      expect(mayBeSampled(pathname)).toBe(false);
+    },
+  );
+
+  it.each(['/reset.php', '/r.env', '/r-x./.env', '/rx%00/.env', '/.git/config', '/wp-admin/x.php'])(
+    'a name that only begins like an entry may still be sampled: %s',
+    (pathname) => {
+      expect(mayBeSampled(pathname)).toBe(true);
+    },
+  );
+
   it('nothing for an empty or non-string path', () => {
     expect(mayBeSampled('')).toBe(false);
     expect(mayBeSampled(undefined as unknown as string)).toBe(false);
