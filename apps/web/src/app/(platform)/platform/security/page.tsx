@@ -10,7 +10,11 @@ import { PlatformSecurityBriefingSection } from '@/components/platform/platform-
 import { PlatformTable } from '@/components/platform/platform-table';
 import { SecurityResponseButton } from '@/components/platform/security-response/security-response-button';
 import { SecurityResponseHost } from '@/components/platform/security-response/security-response-host';
-import { ConsoleMoment, consoleZoneNote } from '@/components/platform/zoned-time';
+import {
+  ConsoleMoment,
+  consoleZoneNote,
+  SECURITY_PAGES_CLOCK,
+} from '@/components/platform/zoned-time';
 import { Button } from '@/components/ui/button';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
@@ -255,7 +259,11 @@ async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | nul
                             kind: securityEventCategoryLabel(r.category),
                             place,
                             time: Number.isFinite(Date.parse(r.lastSeenAt))
-                              ? formatMomentInZone(r.lastSeenAt, timeZone ?? 'UTC')
+                              ? formatMomentInZone(
+                                  r.lastSeenAt,
+                                  timeZone ?? 'UTC',
+                                  SECURITY_PAGES_CLOCK,
+                                )
                               : null,
                             timeUtc: formatExactUtc(r.lastSeenAt),
                             organization:

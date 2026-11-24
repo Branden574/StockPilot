@@ -401,7 +401,7 @@ export function SecurityMapClient({
                 className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-4 px-4 pb-3.5"
                 aria-hidden="true"
               >
-                <SecurityMapStageLegend items={legend} />
+                <SecurityMapStageLegend items={legend} view={shown.view} />
                 <SecurityMapTicker
                   row={tickerRow}
                   reserveRight={wide ? PANEL_WIDTH + PANEL_MARGIN : 0}

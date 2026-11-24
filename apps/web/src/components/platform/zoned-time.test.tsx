@@ -38,8 +38,9 @@ describe('a time', () => {
       </>,
     );
     const [before, after] = [...container.querySelectorAll('time')];
-    expect(before!.firstChild?.textContent).toBe('1 Nov 2026, 01:30 PDT');
-    expect(after!.firstChild?.textContent).toBe('1 Nov 2026, 01:30 PST');
+    expect(before!.firstChild?.textContent).toBe('1 Nov 2026, 1:30 AM PDT');
+    expect(after!.firstChild?.textContent).toBe('1 Nov 2026, 1:30 AM PST');
+    // The exact UTC stays on the 24-hour clock.
     expect(before).toHaveAttribute('title', '1 Nov 2026, 08:30 UTC');
     expect(after).toHaveAttribute('title', '1 Nov 2026, 09:30 UTC');
     expect(after).toHaveAttribute('dateTime', '2026-11-01T09:30:00.000Z');
@@ -55,9 +56,9 @@ describe('a time', () => {
       </>,
     );
     const [berlin, none] = [...container.querySelectorAll('time')];
-    expect(berlin!.firstChild?.textContent).toBe('23 Nov 2026, 22:58 GMT+1');
+    expect(berlin!.firstChild?.textContent).toBe('23 Nov 2026, 10:58 PM GMT+1');
     expect(berlin).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
-    expect(none!.textContent).toBe('23 Nov 2026, 21:58 UTC');
+    expect(none!.textContent).toBe('23 Nov 2026, 9:58 PM UTC');
     expect(none).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
     expect(none!.querySelector('.sr-only')).toBeNull();
     expect(container.textContent).toMatch(/—$/);
@@ -68,11 +69,11 @@ describe('a time', () => {
       <>
         <ZonedWords
           at={[Date.parse('2026-11-23T20:00:00Z')]}
-          text="Not updating since 12:00 PST."
+          text="Not updating since 12:00 PM PST."
         />
         <ZonedWords
           at={[Date.parse('2026-11-23T20:00:00Z')]}
-          text="Not updating since 20:00 UTC."
+          text="Not updating since 8:00 PM UTC."
         />
         <ZonedWords at={null} text="Paused." />
       </>,
@@ -80,9 +81,9 @@ describe('a time', () => {
     const [pacific, utc] = [...container.querySelectorAll('span[title]')];
     expect(pacific).toHaveAttribute('title', '23 Nov 2026, 20:00 UTC');
     expect(pacific!.textContent).toBe(
-      'Not updating since 12:00 PST. In UTC: 23 Nov 2026, 20:00 UTC.',
+      'Not updating since 12:00 PM PST. In UTC: 23 Nov 2026, 20:00 UTC.',
     );
-    expect(utc!.textContent).toBe('Not updating since 20:00 UTC.');
+    expect(utc!.textContent).toBe('Not updating since 8:00 PM UTC.');
     expect(container.textContent).toMatch(/Paused\.$/);
   });
 
@@ -105,8 +106,8 @@ describe('no hydration mismatch', () => {
     const tree = (
       <p>
         <ConsoleMoment at="2026-11-20T10:15:31Z" timeZone="America/Los_Angeles" />
-        <ZonedTime at={Date.parse('2026-11-23T21:58:00Z')} shown="13:58 PST" />
-        <ZonedWords at={[Date.parse('2026-11-23T21:58:00Z')]} text="As of 13:58 PST." />
+        <ZonedTime at={Date.parse('2026-11-23T21:58:00Z')} shown="1:58 PM PST" />
+        <ZonedWords at={[Date.parse('2026-11-23T21:58:00Z')]} text="As of 1:58 PM PST." />
       </p>
     );
     // On the server: its own zone is UTC.
@@ -129,7 +130,7 @@ describe('no hydration mismatch', () => {
     const parsed = document.createElement('div');
     parsed.innerHTML = html;
     expect(container.innerHTML).toBe(parsed.innerHTML);
-    expect(container.textContent).toContain('20 Nov 2026, 02:15 PST');
+    expect(container.textContent).toContain('20 Nov 2026, 2:15 AM PST');
     container.remove();
   });
 });

@@ -558,7 +558,7 @@ describe('the reads', () => {
     expect(screen.queryByTestId('security-map-stop')).toBeNull();
     await advance(1);
     expect(screen.getByTestId('security-map-stop').textContent).toMatch(
-      /^Not updating since \d\d:\d\d UTC\. The map is stopped and shows what was read then\.$/,
+      /^Not updating since \d{1,2}:\d\d [AP]M UTC\. The map is stopped and shows what was read then\.$/,
     );
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
@@ -594,7 +594,7 @@ describe('the reads', () => {
     expect(scopes.filter((scope) => scope === 'recent').length).toBeGreaterThan(15);
     expect(
       screen.getByText(
-        /^Totals and table as of \d\d:\d\d UTC\. The newest count could not be read/,
+        /^Totals and table as of \d{1,2}:\d\d [AP]M UTC\. The newest count could not be read/,
       ),
     ).toBeInTheDocument();
     // The last ten minutes stay live, against the last good whole read.
@@ -753,7 +753,7 @@ describe('a window the database shortened', () => {
     mount(async () => new Promise(() => {}), wholeRead(shortened()));
     const words = screen.getByTestId('security-map-shortened').textContent ?? '';
     expect(words).toMatch(
-      /^Showing the last 3 hours 52 minutes only, from \d\d:\d\d UTC: there were too many events to count all of the last 24 hours\. Nothing before \d\d:\d\d UTC is in these numbers\.$/,
+      /^Showing the last 3 hours 52 minutes only, from \d{1,2}:\d\d [AP]M UTC: there were too many events to count all of the last 24 hours\. Nothing before \d{1,2}:\d\d [AP]M UTC is in these numbers\.$/,
     );
     expect(screen.getByText('Blocked, last 3 hours 52 minutes')).toBeInTheDocument();
     expect(screen.getByText('Flagged, last 3 hours 52 minutes')).toBeInTheDocument();
@@ -821,7 +821,7 @@ describe('the flagged list beside the map', () => {
     const entry = entries()[0]!;
     expect(entry.textContent).toContain('Sign-in alerts held after too many in one day');
     expect(entry.textContent).toContain('Example Borough, United Kingdom');
-    expect(entry.textContent).toContain('21:44 UTC');
+    expect(entry.textContent).toContain('9:44 PM UTC');
     expect(entry.textContent).toContain('at least 4');
     // The same mark a flagged arc starts from: hollow, in its category's colour.
     const mark = entry.querySelector('svg path')!;
@@ -845,7 +845,7 @@ describe('the flagged list beside the map', () => {
     const entry = entries()[1]!;
     expect(entry.textContent).toContain('Sign-in from a new country');
     expect(entry.textContent).toContain('Example Falls, United States');
-    expect(entry.textContent).toContain('21:40 UTC');
+    expect(entry.textContent).toContain('9:40 PM UTC');
     expect(entry.textContent).toContain('2');
     const mark = entry.querySelector('svg path')!;
     expect(mark.getAttribute('fill')).toBe('none');
@@ -1019,7 +1019,7 @@ describe('the flagged list beside the map', () => {
     ]);
     expect(entries()).toHaveLength(1);
     expect(entries()[0]!.textContent).toContain('Example Borough, United Kingdom');
-    expect(entries()[0]!.textContent).toContain('21:55 UTC');
+    expect(entries()[0]!.textContent).toContain('9:55 PM UTC');
     // The plain feed too: its entry from the whole read is still there.
     expect(screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })).toHaveLength(1);
   });
@@ -1137,7 +1137,7 @@ describe('when the page stops', () => {
     expect(lastGlobe().timing).toBe('replay');
     await advance(60_000);
     expect(screen.getByTestId('security-map-stop').textContent).toMatch(
-      /^Not updating since \d\d:\d\d UTC\. The map is stopped and shows what was read then\.$/,
+      /^Not updating since \d{1,2}:\d\d [AP]M UTC\. The map is stopped and shows what was read then\.$/,
     );
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
@@ -1299,7 +1299,7 @@ describe('the stage', () => {
     );
     const pill = () => screen.getByTestId('security-map-pill');
     expect(pill().getAttribute('data-kind')).toBe('replay');
-    expect(pill().textContent).toMatch(/^Replay \d\d:\d\d to \d\d:\d\d UTC$/);
+    expect(pill().textContent).toMatch(/^Replay \d{1,2}:\d\d [AP]M to \d{1,2}:\d\d [AP]M UTC$/);
     expect(pill().getAttribute('aria-hidden')).toBe('true');
     await advance(0);
     await advance(30_000);
@@ -1313,7 +1313,7 @@ describe('the stage', () => {
     await advance(60_000);
     const pill = screen.getByTestId('security-map-pill');
     expect(pill.getAttribute('data-kind')).toBe('not_updating');
-    expect(pill.textContent).toMatch(/^Not updating since \d\d:\d\d UTC$/);
+    expect(pill.textContent).toMatch(/^Not updating since \d{1,2}:\d\d [AP]M UTC$/);
   });
 
   it('the ticker: the newest feed entry the stage draws, never one it does not', async () => {
@@ -1334,7 +1334,7 @@ describe('the stage', () => {
     expect(lastGlobe().timing).toBe('live');
     const ticker = screen.getByTestId('security-map-ticker');
     expect(ticker.textContent).toContain('Example Harbour, China');
-    expect(ticker.textContent).toContain('21:58 UTC');
+    expect(ticker.textContent).toContain('9:58 PM UTC');
     expect(ticker.textContent).not.toContain('Example Town');
     expect(ticker.closest('[aria-hidden="true"]')).not.toBeNull();
   });
@@ -1402,12 +1402,12 @@ describe('the controls and the flagged entries line up', () => {
       wide = layout === 'wide';
       notPhone = layout === 'wide';
       const { unmount } = mount(async () => new Promise(() => {}));
-      // The first entry's count is a floor: "21:44 UTC · at least 4".
+      // The first entry's count is a floor: "9:44 PM UTC · at least 4".
       const entry = screen
         .getByTestId('security-map-flagged')
         .querySelector('[data-flagged-entry]')!;
       const timeAndCount = [...entry.querySelectorAll('span')].find((el) =>
-        /^\d\d:\d\d UTC · at least 4$/.test(el.textContent ?? ''),
+        /^\d{1,2}:\d\d [AP]M UTC · at least 4$/.test(el.textContent ?? ''),
       );
       expect(timeAndCount, layout).toBeDefined();
       expect(timeAndCount!.className.split(' '), layout).toContain('whitespace-nowrap');
@@ -1488,9 +1488,13 @@ describe('lab walk 2', () => {
     notPhone = true;
     mount(async () => new Promise(() => {}));
     expect(screen.getByTestId('security-map-legend-counts').textContent).toBe(
-      SECURITY_MAP_WORDS.legendCounts,
+      'Numbers on the globe: events in this play',
     );
-    expect(SECURITY_MAP_WORDS.legendCounts).toContain('events in this play');
+    // On the flat map, the same sentence names the map.
+    fireEvent.click(screen.getByRole('button', { name: 'Flat map' }));
+    expect(screen.getByTestId('security-map-legend-counts').textContent).toBe(
+      'Numbers on the map: events in this play',
+    );
   });
 
   it('a country label reads over the brightest land: its backdrop at least 88% opaque, its text at least 7:1 (F5), with a leader line on its side (F4)', () => {
@@ -1717,7 +1721,7 @@ describe('how to respond, from the map', () => {
     expect(contextOf(panel)).toEqual([
       ['Kind', 'Exploit attempts'],
       ['Where', 'Example Town, Germany'],
-      ['When', '21:58 UTC'],
+      ['When', '9:58 PM UTC'],
       ['Organization', MARKUP_NAME],
     ]);
     expect(panel.querySelector('img')).toBeNull();
@@ -1733,7 +1737,7 @@ describe('how to respond, from the map', () => {
     expect(contextOf(panel)).toEqual([
       ['Kind', 'Password guessing'],
       ['Where', 'Example Borough, United Kingdom'],
-      ['When', '21:44 UTC'],
+      ['When', '9:44 PM UTC'],
     ]);
     expect(panel.textContent).not.toContain('Example Hidden Academy');
   });
@@ -1747,7 +1751,7 @@ describe('how to respond, from the map', () => {
     expect(panel).toHaveAttribute('data-card', 'sign-in-new-country');
     expect(contextOf(panel)).toEqual([
       ['Where', 'Example Falls, United States'],
-      ['When', '21:40 UTC'],
+      ['When', '9:40 PM UTC'],
     ]);
     expect(panel.textContent).not.toMatch(/phishing|malware/i);
   });
@@ -2051,11 +2055,11 @@ describe("the viewer's zone (owner request, 2026-11-24)", () => {
     browserZone('Asia/Tokyo');
     const { spy } = mount(async (input) => dayRead()(input), wholeRead(), 'America/Los_Angeles');
     await advance(0);
-    expect(feedTime().firstChild?.textContent).toBe('13:58 PST');
+    expect(feedTime().firstChild?.textContent).toBe('1:58 PM PST');
     expect(feedTime()).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
     expect(feedTime().querySelector('.sr-only')?.textContent).toBe(' (23 Nov 2026, 21:58 UTC)');
     const flagged = screen.getByTestId('security-map-flagged').querySelector('time')!;
-    expect(flagged.firstChild?.textContent).toBe('13:44 PST');
+    expect(flagged.firstChild?.textContent).toBe('1:44 PM PST');
     expect(flagged).toHaveAttribute('title', '23 Nov 2026, 21:44 UTC');
     expect(screen.getByTestId('security-map-feed-times').textContent).toBe(
       'Times in Pacific Standard Time (America/Los_Angeles).',
@@ -2068,14 +2072,14 @@ describe("the viewer's zone (owner request, 2026-11-24)", () => {
     expect(firstDayStart(spy)).toBe('2026-11-23T08:00:00.000Z');
     expect(screen.getByText('Blocked since midnight, PST')).toBeTruthy();
     const asOf = screen.getByText(/^Totals and table as of /);
-    expect(asOf.textContent).toMatch(/^Totals and table as of 14:00 PST\. /);
+    expect(asOf.textContent).toMatch(/^Totals and table as of 2:00 PM PST\. /);
     expect(asOf).toHaveAttribute('title', '23 Nov 2026, 22:00 UTC');
   });
 
   it('a zone east of UTC: its own clock, and its own midnight, a day earlier in UTC', async () => {
     const { spy } = mount(async (input) => dayRead()(input), wholeRead(), 'Europe/Berlin');
     await advance(0);
-    expect(feedTime().firstChild?.textContent).toBe('22:58 GMT+1');
+    expect(feedTime().firstChild?.textContent).toBe('10:58 PM GMT+1');
     expect(firstDayStart(spy)).toBe('2026-11-22T23:00:00.000Z');
     expect(screen.getByText('Blocked since midnight, GMT+1')).toBeTruthy();
   });
@@ -2084,7 +2088,7 @@ describe("the viewer's zone (owner request, 2026-11-24)", () => {
     browserZone('Asia/Tokyo');
     const { spy } = mount(async (input) => dayRead()(input), wholeRead(), null);
     await advance(0);
-    expect(feedTime().firstChild?.textContent).toBe('06:58 GMT+9');
+    expect(feedTime().firstChild?.textContent).toBe('6:58 AM GMT+9');
     // 07:00 on the 24th in Tokyo: its day began at 15:00 UTC on the 23rd.
     expect(firstDayStart(spy)).toBe('2026-11-23T15:00:00.000Z');
     expect(screen.getByText('Blocked since midnight, GMT+9')).toBeTruthy();
@@ -2094,7 +2098,7 @@ describe("the viewer's zone (owner request, 2026-11-24)", () => {
     browserZone('Asia/Tokyo');
     mount(async (input) => dayRead()(input), wholeRead(), 'America/Nowhere');
     await advance(0);
-    expect(feedTime().firstChild?.textContent).toBe('06:58 GMT+9');
+    expect(feedTime().firstChild?.textContent).toBe('6:58 AM GMT+9');
   });
 
   it("the next midnight is the chosen zone's: the whole window is read again then", async () => {
@@ -2124,7 +2128,7 @@ describe("the viewer's zone (owner request, 2026-11-24)", () => {
     const when = [
       ...within(panel).getByTestId('security-response-context').querySelectorAll('dt'),
     ].find((dt) => dt.textContent === 'When')!.nextElementSibling!;
-    expect(when.firstChild?.textContent).toBe('13:58 PST');
+    expect(when.firstChild?.textContent).toBe('1:58 PM PST');
     expect(when).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
     expect(when.querySelector('.sr-only')?.textContent).toBe(' (23 Nov 2026, 21:58 UTC)');
   });

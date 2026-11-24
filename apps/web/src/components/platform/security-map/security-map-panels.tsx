@@ -347,7 +347,14 @@ export function SecurityMapViewControls({
 }
 
 /** The short legend on the stage: the kinds with their marks, and what solid and dashed mean. */
-export function SecurityMapStageLegend({ items }: { items: readonly SecurityMapLegendItem[] }) {
+export function SecurityMapStageLegend({
+  items,
+  view = 'globe',
+}: {
+  items: readonly SecurityMapLegendItem[];
+  /** The view on screen: the line under the legend names it. */
+  view?: 'globe' | 'flat';
+}) {
   return (
     <div
       data-testid="security-map-stage-legend"
@@ -413,7 +420,7 @@ export function SecurityMapStageLegend({ items }: { items: readonly SecurityMapL
           {SECURITY_MAP_WORDS.legendFlagged}
         </span>
       </div>
-      <p data-testid="security-map-legend-counts">{SECURITY_MAP_WORDS.legendCounts}</p>
+      <p data-testid="security-map-legend-counts">{SECURITY_MAP_WORDS.legendCounts(view)}</p>
     </div>
   );
 }

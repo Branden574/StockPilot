@@ -36,7 +36,15 @@ import {
   type SecurityEventOutcome,
   type SecurityEventSource,
 } from './security-events';
-import { runtimeTimeZone, usableTimeZone, zoneLongWords, zoneShortName } from '../time/viewer-zone';
+import {
+  clockWords,
+  runtimeTimeZone,
+  usableTimeZone,
+  zoneLongWords,
+  zoneShortName,
+  type ClockStyle,
+} from '../time/viewer-zone';
+import { zonedParts } from '../time/zoned-wall-clock';
 
 /* ═════════════════════════════ 1. THE LISTS ═════════════════════════════ */
 
@@ -1958,10 +1966,28 @@ export const SECURITY_MAP_MARK_WORDS = {
   flagged: 'Flagged, not blocked: a dashed line and a hollow mark',
 } as const;
 
-/** "HH:MM" on a 24-hour clock, in `timeZone` (the runtime's own zone when none is given). */
-export function securityMapClock(at: number | string, timeZone?: string): string {
+/**
+ * How the map writes a clock: 12-hour with AM or PM ("11:20 PM PST"), as the
+ * owner was told the platform security pages would show it (2026-11-24). The
+ * exact UTC beside each time stays 24-hour.
+ */
+export const SECURITY_MAP_CLOCK: ClockStyle = '12h';
+
+/**
+ * "HH:MM" on a 24-hour clock, or "h:MM AM" on a 12-hour one (`clock`), in
+ * `timeZone` (the runtime's own zone when none is given).
+ */
+export function securityMapClock(
+  at: number | string,
+  timeZone?: string,
+  clock: ClockStyle = '24h',
+): string {
   const ms = typeof at === 'number' ? at : Date.parse(at);
   if (!Number.isFinite(ms)) return '--:--';
+  if (clock === '12h') {
+    const p = zonedParts(ms, timeZone ?? runtimeTimeZone());
+    return clockWords(p.hour, p.minute, '12h');
+  }
   return new Intl.DateTimeFormat('en-GB', {
     hour: '2-digit',
     minute: '2-digit',
@@ -1971,15 +1997,20 @@ export function securityMapClock(at: number | string, timeZone?: string): string
 }
 
 /**
- * "21:58 PST": the clock in `timeZone` and the zone's short name at that
- * instant, as the formatter gives it (the viewer's zone: the one they chose,
- * else the browser's; the runtime's own when none is given).
+ * "9:58 PM PST": the clock in `timeZone` (the map's clock, SECURITY_MAP_CLOCK,
+ * unless `clock` says otherwise) and the zone's short name at that instant, as
+ * the formatter gives it (the viewer's zone: the one they chose, else the
+ * browser's; the runtime's own when none is given).
  */
-export function securityMapZonedClock(at: number | string, timeZone?: string): string {
+export function securityMapZonedClock(
+  at: number | string,
+  timeZone?: string,
+  clock: ClockStyle = SECURITY_MAP_CLOCK,
+): string {
   const ms = typeof at === 'number' ? at : Date.parse(at);
   if (!Number.isFinite(ms)) return '--:--';
   const zone = timeZone ?? runtimeTimeZone();
-  return `${securityMapClock(ms, zone)} ${zoneShortName(ms, zone)}`;
+  return `${securityMapClock(ms, zone, clock)} ${zoneShortName(ms, zone)}`;
 }
 
 /** The line under a list that says which zone its times are in: "Times in Pacific Standard Time (America/Los_Angeles)." */
@@ -2014,7 +2045,7 @@ export function securityMapModeWords(
   if (plan.mode === 'replay') {
     const step = plan.steps[Math.max(0, Math.min(stepIndex, plan.steps.length - 1))];
     const hour = step
-      ? ` Now showing ${securityMapClock(step.fromMs, timeZone ?? runtimeTimeZone())} to ${securityMapZonedClock(step.toMs, timeZone)}.`
+      ? ` Now showing ${securityMapClock(step.fromMs, timeZone ?? runtimeTimeZone(), SECURITY_MAP_CLOCK)} to ${securityMapZonedClock(step.toMs, timeZone)}.`
       : '';
     const undrawn = plan.liveUndrawn ? ` ${SECURITY_MAP_WORDS.liveUndrawn}` : '';
     return `Replay of the ${window}. ${SECURITY_MAP_WORDS.liveNothingToDraw}${undrawn}${hour} Hours with nothing to draw are skipped.`;
@@ -2094,7 +2125,7 @@ export function securityMapPillWords(
     return {
       kind: 'replay',
       text: step
-        ? `${SECURITY_MAP_WORDS.pillReplay} ${securityMapClock(step.fromMs, timeZone ?? runtimeTimeZone())} to ${securityMapZonedClock(step.toMs, timeZone)}`
+        ? `${SECURITY_MAP_WORDS.pillReplay} ${securityMapClock(step.fromMs, timeZone ?? runtimeTimeZone(), SECURITY_MAP_CLOCK)} to ${securityMapZonedClock(step.toMs, timeZone)}`
         : SECURITY_MAP_WORDS.pillReplay,
     };
   }
@@ -2511,7 +2542,9 @@ export const SECURITY_MAP_WORDS = {
   pillNothingToPlay: 'Nothing to play',
   legendBlocked: 'Blocked',
   legendFlagged: 'Flagged, not blocked',
-  legendCounts: 'Numbers on the globe: events in this play',
+  /** Under the legend, naming the view on screen: one sentence for the globe and the flat map. */
+  legendCounts: (view: 'globe' | 'flat') =>
+    `Numbers on the ${view === 'flat' ? 'map' : 'globe'}: events in this play`,
   legendSignInAlert: 'Flagged sign-in alert',
   legendSignInAlertHelp:
     'Drawn from the flagged list, with a grey mark and a dashed line. Not in the numbers by kind.',

@@ -259,7 +259,7 @@ describe('the table', () => {
       ),
     ).toEqual([
       [
-        '20 Nov 2026, 10:15 UTC',
+        '20 Nov 2026, 10:15 AM UTC',
         'Request for a settings fileExploit attempts · Blocked',
         'No organization',
         'Leipzig, DE',
@@ -268,7 +268,7 @@ describe('the table', () => {
         'Stopped: nothing to doHow to respond',
       ],
       [
-        '20 Nov 2026, 10:15 UTC',
+        '20 Nov 2026, 10:15 AM UTC',
         'Wrong password at sign-inPassword guessing · Blocked',
         'Example School District',
         'Fresno, US',
@@ -277,7 +277,7 @@ describe('the table', () => {
         'Stopped: nothing to doHow to respond',
       ],
       [
-        '20 Nov 2026, 10:15 UTC',
+        '20 Nov 2026, 10:15 AM UTC',
         'More events than could be listedPassword guessing · Blocked',
         ORG,
         '—',
@@ -341,7 +341,7 @@ describe('the table', () => {
     expect(facts(panel)).toEqual([
       ['Kind', 'Password guessing'],
       ['Where', 'Example Falls, US'],
-      ['When', '20 Nov 2026, 10:15 UTC'],
+      ['When', '20 Nov 2026, 10:15 AM UTC'],
       ['Organization', 'Example School District'],
     ]);
     fireEvent.keyDown(panel, { key: 'Escape' });
@@ -354,7 +354,7 @@ describe('the table', () => {
     expect(panel).toHaveAttribute('data-card', 'counts-past-limit');
     expect(facts(panel)).toEqual([
       ['Kind', 'Password guessing'],
-      ['When', '20 Nov 2026, 10:15 UTC'],
+      ['When', '20 Nov 2026, 10:15 AM UTC'],
       ['Organization', 'No organization'],
     ]);
   });
@@ -374,9 +374,9 @@ describe('the table', () => {
       const table = screen.getByRole('region', { name: 'Security events' });
       const times = [...table.querySelectorAll('tbody time')];
       expect(times.map((t) => t.firstChild?.textContent)).toEqual([
-        '20 Nov 2026, 02:15 PST',
-        '1 Nov 2026, 01:30 PDT',
-        '1 Nov 2026, 01:30 PST',
+        '20 Nov 2026, 2:15 AM PST',
+        '1 Nov 2026, 1:30 AM PDT',
+        '1 Nov 2026, 1:30 AM PST',
       ]);
       expect(times.map((t) => t.getAttribute('title'))).toEqual([
         '20 Nov 2026, 10:15 UTC',
@@ -400,14 +400,14 @@ describe('the table', () => {
     h.list.mockResolvedValueOnce([row()]);
     const { unmount } = await renderPage();
     let cell = screen.getByRole('region', { name: 'Security events' }).querySelector('tbody time')!;
-    expect(cell.firstChild?.textContent).toBe('20 Nov 2026, 11:15 GMT+1');
+    expect(cell.firstChild?.textContent).toBe('20 Nov 2026, 11:15 AM GMT+1');
     unmount();
     h.zone = null;
     h.list.mockResolvedValueOnce([row()]);
     await renderPage();
     const table = screen.getByRole('region', { name: 'Security events' });
     cell = table.querySelector('tbody time')!;
-    expect(cell.textContent).toBe('20 Nov 2026, 10:15 UTC');
+    expect(cell.textContent).toBe('20 Nov 2026, 10:15 AM UTC');
     expect(cell.querySelector('.sr-only')).toBeNull();
     expect(within(table).getByRole('columnheader', { name: 'When' })).toHaveAttribute(
       'title',
@@ -426,7 +426,7 @@ describe('the table', () => {
     const when = [
       ...within(panel).getByTestId('security-response-context').querySelectorAll('dt'),
     ].find((dt) => dt.textContent === 'When')!.nextElementSibling!;
-    expect(when.firstChild?.textContent).toBe('20 Nov 2026, 02:15 PST');
+    expect(when.firstChild?.textContent).toBe('20 Nov 2026, 2:15 AM PST');
     expect(when).toHaveAttribute('title', '20 Nov 2026, 10:15 UTC');
     expect(when.querySelector('.sr-only')?.textContent).toBe(' (20 Nov 2026, 10:15 UTC)');
   });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { securityMapZonedClock } from '../security/security-map';
 import {
+  clockWords,
   dayStartInZone,
   nextDayStartInZone,
   runtimeTimeZone,
@@ -42,24 +43,26 @@ describe('a time names its zone at that instant', () => {
     const after = Date.parse('2026-11-01T09:30:00Z');
     expect(zoneShortName(before, LA)).toBe('PDT');
     expect(zoneShortName(after, LA)).toBe('PST');
-    expect(securityMapZonedClock(before, LA)).toBe('01:30 PDT');
-    expect(securityMapZonedClock(after, LA)).toBe('01:30 PST');
-    expect(securityMapZonedClock('2026-11-23T21:58:00Z', LA)).toBe('13:58 PST');
+    expect(securityMapZonedClock(before, LA)).toBe('1:30 AM PDT');
+    expect(securityMapZonedClock(after, LA)).toBe('1:30 AM PST');
+    expect(securityMapZonedClock('2026-11-23T21:58:00Z', LA)).toBe('1:58 PM PST');
+    // The option of the same formatter: the 24-hour clock, still named.
+    expect(securityMapZonedClock(after, LA, '24h')).toBe('01:30 PST');
   });
 
   it('east of UTC, across its own change: an offset where English has no short name', () => {
     // 25 Oct 2026: 03:00 CEST becomes 02:00 CET at 01:00 UTC.
     const before = Date.parse('2026-10-25T00:30:00Z');
     const after = Date.parse('2026-10-25T01:30:00Z');
-    expect(securityMapZonedClock(before, BERLIN)).toBe(`02:30 ${zoneShortName(before, BERLIN)}`);
-    expect(securityMapZonedClock(after, BERLIN)).toBe(`02:30 ${zoneShortName(after, BERLIN)}`);
+    expect(securityMapZonedClock(before, BERLIN)).toBe(`2:30 AM ${zoneShortName(before, BERLIN)}`);
+    expect(securityMapZonedClock(after, BERLIN)).toBe(`2:30 AM ${zoneShortName(after, BERLIN)}`);
     expect(zoneShortName(before, BERLIN)).toBe('GMT+2');
     expect(zoneShortName(after, BERLIN)).toBe('GMT+1');
-    expect(securityMapZonedClock('2026-11-23T21:58:00Z', BERLIN)).toBe('22:58 GMT+1');
+    expect(securityMapZonedClock('2026-11-23T21:58:00Z', BERLIN)).toBe('10:58 PM GMT+1');
   });
 
   it('UTC is named UTC; the line under a list names the zone in full', () => {
-    expect(securityMapZonedClock('2026-11-23T21:58:00Z', 'UTC')).toBe('21:58 UTC');
+    expect(securityMapZonedClock('2026-11-23T21:58:00Z', 'UTC')).toBe('9:58 PM UTC');
     const nov = Date.parse('2026-11-23T21:58:00Z');
     expect(zoneLongWords(nov, LA)).toBe('Pacific Standard Time (America/Los_Angeles)');
     expect(zoneLongWords(Date.parse('2026-07-01T12:00:00Z'), LA)).toBe(
@@ -67,6 +70,27 @@ describe('a time names its zone at that instant', () => {
     );
     expect(zoneLongWords(nov, 'UTC')).toBe('UTC');
     expect(zoneLongWords(nov, BERLIN)).toMatch(/\(Europe\/Berlin\)$/);
+  });
+});
+
+describe('a clock in words: 24-hour by default, 12-hour as an option', () => {
+  it('the two clocks, at midnight, before noon, at noon and after', () => {
+    const cases: Array<[number, number, string, string]> = [
+      [0, 0, '00:00', '12:00 AM'],
+      [0, 5, '00:05', '12:05 AM'],
+      [9, 7, '09:07', '9:07 AM'],
+      [11, 59, '11:59', '11:59 AM'],
+      [12, 0, '12:00', '12:00 PM'],
+      [13, 30, '13:30', '1:30 PM'],
+      [23, 20, '23:20', '11:20 PM'],
+    ];
+    for (const [h, m, h24, h12] of cases) {
+      expect(clockWords(h, m), h24).toBe(h24);
+      expect(clockWords(h, m, '24h'), h24).toBe(h24);
+      expect(clockWords(h, m, '12h'), h12).toBe(h12);
+    }
+    // A plain space before AM or PM, never the narrow one some Intl builds print.
+    expect(clockWords(23, 20, '12h')).not.toMatch(/\u202f|\u00a0/);
   });
 });
 

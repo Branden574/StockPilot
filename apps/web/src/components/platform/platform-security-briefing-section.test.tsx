@@ -599,7 +599,7 @@ describe('one organization (?org=)', () => {
       ),
     ).toEqual([
       [
-        '22 Nov 2026, 18:04 UTC',
+        '22 Nov 2026, 6:04 PM UTC',
         'Alex Example (alex@example.com) was made an admin by Dana Example (dana@example.com).',
       ],
     ]);

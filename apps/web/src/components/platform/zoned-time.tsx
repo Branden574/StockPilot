@@ -74,9 +74,17 @@ export function ZonedWords({
 }
 
 /**
- * A moment in a table the console renders on the server ("20 Nov 2026, 02:15
- * PST", the console's own spelling, formatMomentInZone): in the viewer's
- * chosen zone, else UTC (the server knows no browser). "—" for no instant.
+ * How the platform security pages write a clock: 12-hour ("11:20 PM PST"),
+ * as the owner was told he would see it (2026-11-24). An option of the
+ * console's formatter; the exact UTC in each time's title stays 24-hour.
+ */
+export const SECURITY_PAGES_CLOCK = { clock: '12h' } as const;
+
+/**
+ * A moment in a table of the Security page, rendered on the server ("20 Nov
+ * 2026, 2:15 AM PST", the console's own spelling, formatMomentInZone on the
+ * 12-hour clock): in the viewer's chosen zone, else UTC (the server knows no
+ * browser). "—" for no instant.
  */
 export function ConsoleMoment({
   at,
@@ -86,7 +94,9 @@ export function ConsoleMoment({
   timeZone: string | null;
 }) {
   if (!at || !Number.isFinite(Date.parse(at))) return <>—</>;
-  return <ZonedTime at={at} shown={formatMomentInZone(at, timeZone ?? 'UTC')} />;
+  return (
+    <ZonedTime at={at} shown={formatMomentInZone(at, timeZone ?? 'UTC', SECURITY_PAGES_CLOCK)} />
+  );
 }
 
 /** A table head's note on which zone its times are in: "In Pacific Standard Time (America/Los_Angeles)." */
