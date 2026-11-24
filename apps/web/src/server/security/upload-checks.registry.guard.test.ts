@@ -4,6 +4,11 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import {
+  SECURITY_CATEGORIES_WITH_DETECTOR,
+  UPLOAD_SECURITY_EVENT_REASON_LABELS,
+} from '@stockpilot/core';
+
 /**
  * Security invariant (part 6, stage 6a): EVERY WAY A FILE COMES IN IS LISTED
  * HERE WITH THE CHECK IT CALLS, so a new upload path cannot ship unchecked.
@@ -480,6 +485,104 @@ describe('every way a file comes in is listed with its check (part 6)', () => {
   it('the known gaps that are not a file each name the stage that closes them', () => {
     expect(KNOWN_GAPS.length).toBeGreaterThan(0);
     for (const gap of KNOWN_GAPS) expect(gap.startsWith('stage 6c:')).toBe(true);
+  });
+});
+
+/**
+ * Every place the website writes a security event with a literal reason: the
+ * reason, its category and outcome (when literal), and whether the object is
+ * handed straight to recordSecurityEvent.
+ */
+interface ReasonSite {
+  reason: string;
+  category: string | null;
+  outcome: string | null;
+  recorded: boolean;
+}
+
+function reasonSites(text: string, fileName: string): ReasonSite[] {
+  const source = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const out: ReasonSite[] = [];
+  const literal = (o: ts.ObjectLiteralExpression, name: string): string | null => {
+    for (const p of o.properties) {
+      if (ts.isPropertyAssignment(p) && p.name.getText(source) === name && ts.isStringLiteralLike(p.initializer)) {
+        return p.initializer.text;
+      }
+    }
+    return null;
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isObjectLiteralExpression(node)) {
+      const reason = literal(node, 'reason');
+      if (reason !== null) {
+        const parent = node.parent;
+        const recorded =
+          ts.isCallExpression(parent) &&
+          parent.arguments[0] === node &&
+          parent.expression.getText(source).replace(/^await\s+/, '') === 'recordSecurityEvent';
+        out.push({ reason, category: literal(node, 'category'), outcome: literal(node, 'outcome'), recorded });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
+describe('every upload reason code has a producer (part 6)', () => {
+  const sites = sourceFiles(WEB_SRC).flatMap((f) =>
+    reasonSites(readFileSync(f, 'utf8'), f).map((s) => ({ ...s, file: rel(f) })),
+  );
+  const UPLOAD_REASONS = Object.keys(UPLOAD_SECURITY_EVENT_REASON_LABELS).sort();
+
+  it('the four reasons, each with words', () => {
+    expect(UPLOAD_REASONS).toEqual(
+      ['upload_active_content', 'upload_could_not_check', 'upload_hidden_file', 'upload_wrong_type'],
+    );
+  });
+
+  it('each one is written, as a literal, by the one upload check: malware, blocked, straight to recordSecurityEvent', () => {
+    for (const reason of UPLOAD_REASONS) {
+      const producers = sites.filter((s) => s.reason === reason);
+      expect(producers.length, `${reason} has no producer: a label must never stand for a kind nothing records`).toBeGreaterThan(0);
+      for (const p of producers) {
+        expect(p, reason).toMatchObject({
+          file: `${W}server/security/upload-checks.ts`,
+          category: 'malware',
+          outcome: 'blocked',
+          recorded: true,
+        });
+      }
+    }
+  });
+
+  it('no upload reason is written that has no words, and nothing else writes the malware kind', () => {
+    const upload = sites.filter((s) => s.reason.startsWith('upload_')).map((s) => s.reason);
+    for (const reason of upload) expect(UPLOAD_REASONS, reason).toContain(reason);
+    const malware = sites.filter((s) => s.category === 'malware');
+    expect(malware.map((s) => s.reason).sort()).toEqual(UPLOAD_REASONS);
+  });
+
+  it('the map shows the malware kind only while something records it', () => {
+    const detector = SECURITY_CATEGORIES_WITH_DETECTOR.malware;
+    if (detector.shown) {
+      expect(detector.firesNow.length).toBeGreaterThan(0);
+      expect(sites.some((s) => s.category === 'malware' && s.recorded)).toBe(true);
+    }
+  });
+
+  it('the reader of a reason sees a literal in a recordSecurityEvent call, and only there (self-test)', () => {
+    const made = `
+      await recordSecurityEvent({ category: 'malware', outcome: 'blocked', reason: 'upload_wrong_type', source, organizationId });
+      const notRecorded = { category: 'malware', reason: 'upload_hidden_file' };
+      other({ reason: 'upload_active_content' });
+      const dynamic = { reason: someVariable };
+    `;
+    expect(reasonSites(made, 'made-up.ts')).toEqual([
+      { reason: 'upload_wrong_type', category: 'malware', outcome: 'blocked', recorded: true },
+      { reason: 'upload_hidden_file', category: 'malware', outcome: null, recorded: false },
+      { reason: 'upload_active_content', category: null, outcome: null, recorded: false },
+    ]);
   });
 });
 
