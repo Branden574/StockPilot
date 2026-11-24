@@ -86,6 +86,7 @@ vi.mock('./security-map-globe', async () => {
   };
 });
 
+import { HOME_SPOTS } from './globe-math';
 import { CATEGORY_LOOKS, HIDDEN_KIND_LOOK, PANEL, localDayStart } from './map-model';
 import { SecurityMapClient } from './security-map-client';
 import {
@@ -1386,6 +1387,7 @@ describe('lab walk 2', () => {
 
   it("the ticker never cuts the place: the reason's words give way first, the place keeps up to 32 characters (F7)", async () => {
     notPhone = true;
+    wide = true;
     const live = answer({
       ...liveAnswer(),
       feed: [
@@ -1406,6 +1408,19 @@ describe('lab walk 2', () => {
       expect.arrayContaining(['shrink-0', 'max-w-[32ch]', 'truncate']),
     );
     expect(place.className.split(' ')).not.toContain('min-w-0');
+    // It grows to the whole width beside the legend before the reason is cut:
+    // it never shrinks, and the room kept clear for the panel above gives way first.
+    expect(ticker.className.split(' ')).toEqual(expect.arrayContaining(['shrink-0', 'max-w-full']));
+    const room = screen.getByTestId('security-map-ticker-room');
+    const [before, line, after] = Array.from(room.children) as HTMLElement[];
+    expect(line).toBe(ticker);
+    expect(before!.className.split(' ')).toEqual(
+      expect.arrayContaining(['min-w-0', 'flex-[1_1_0px]']),
+    );
+    expect(after!.style.flex).toMatch(/^1 1 \d+px$/);
+    expect(after!.style.flex).not.toBe('1 1 0px');
+    expect(after!.className.split(' ')).toContain('min-w-0');
+    expect(room.style.paddingRight).toBe('');
   });
 
   it('the stage legend says what the numbers by a country count (N1)', () => {
@@ -1452,7 +1467,7 @@ describe('lab walk 2', () => {
       }
     }
     expect(STAGE_CSS).toContain(`background:${LABEL_LOOK.background}`);
-    for (const side of ['right', 'left', 'above', 'below']) {
+    for (const side of HOME_SPOTS) {
       expect(STAGE_CSS).toContain(`.sm-label[data-side=${side}]::before{display:block;`);
     }
   });

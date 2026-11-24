@@ -20,7 +20,9 @@ import {
 
 import {
   ARC_SEGMENTS,
+  CAMERA_FOV,
   GLOBE_HEIGHT_SHARE,
+  HOME_SPOTS,
   TRAIL,
   advanceGlobeMotion,
   arcBow,
@@ -35,6 +37,7 @@ import {
   LABEL_LEADER,
   LABEL_SPOTS,
   placeLabels,
+  spotBox,
   stockpilotSpots,
   pointAlong,
   projectToStage,
@@ -141,7 +144,8 @@ const DOT_RADIUS = 1.003;
 const MARK_RADIUS = 1.004;
 /** Half of StockPilot's mark on the screen, with its inner ring (CSS px). */
 const HOME_MARK_HALF = 9;
-const CAMERA_FOV = 30;
+/** The arcs' last stretch into StockPilot, in segments, that its label keeps clear of. */
+const LAST_STRETCH = 24;
 const HALO_SIZE = 1.7;
 /** Frames slower than this, for this long, drop the scenery first. */
 const SLOW_FRAME_MS = 24;
@@ -1043,6 +1047,12 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
   }));
   const markBoxes: ScreenBox[] = [];
   const homeSpots: LabelSpot[] = [];
+  const homeCovered = {} as Record<LabelSpot, number>;
+  const spotBoxes = {} as Record<LabelSpot, ScreenBox>;
+  for (const spot of HOME_SPOTS) {
+    homeCovered[spot] = 0;
+    spotBoxes[spot] = { x: 0, y: 0, w: 0, h: 0 };
+  }
   const stageCamera: StageCamera = {
     distance: 5,
     tanHalf: Math.tan(((CAMERA_FOV / 2) * Math.PI) / 180),
@@ -1186,28 +1196,47 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
   }
 
   /**
-   * StockPilot's label's spots, best first: away from the last stretch of the
-   * arcs coming in (globe-math stockpilotSpots), keeping its side while that
-   * stays good enough.
+   * StockPilot's label's spots (the sides and the corners), best first: the
+   * ones that cover the fewest points of the arcs' last stretch (the last
+   * LAST_STRETCH segments into StockPilot, a third of each arc), and among
+   * those away from where the arcs come in, keeping its spot while that stays
+   * good enough (globe-math stockpilotSpots).
    */
-  function writeHomeSpots(held: LabelSpot | null): void {
+  function writeHomeSpots(anchor: LabelAnchor, held: LabelSpot | null): void {
     projectToStage(at, motion.yaw, motion.pitch, stageCamera, projectedEnd);
+    for (const spot of HOME_SPOTS) {
+      spotBox(anchor, spot, spotBoxes[spot]);
+      homeCovered[spot] = 0;
+    }
     let dx = 0;
     let dy = 0;
     for (let i = 0; i < count; i += 1) {
-      // A point an eighth of the way back along the arc from StockPilot.
       const points = slots[i]!.points;
-      const back = (ARC_SEGMENTS - 9) * 3;
-      for (let k = 0; k < 3; k += 1) scratchPoint[k] = points[back + k] as number;
-      projectToStage(scratchPoint, motion.yaw, motion.pitch, stageCamera, projected);
-      const ex = (projected[0] as number) - (projectedEnd[0] as number);
-      const ey = (projected[1] as number) - (projectedEnd[1] as number);
-      const length = Math.hypot(ex, ey);
-      if (length < 1e-3) continue;
-      dx += ex / length;
-      dy += ey / length;
+      for (let back = 1; back <= LAST_STRETCH; back += 1) {
+        const v = (ARC_SEGMENTS - back) * 3;
+        for (let k = 0; k < 3; k += 1) scratchPoint[k] = points[v + k] as number;
+        projectToStage(scratchPoint, motion.yaw, motion.pitch, stageCamera, projected);
+        const px = projected[0] as number;
+        const py = projected[1] as number;
+        for (const spot of HOME_SPOTS) {
+          const b = spotBoxes[spot];
+          if (px > b.x - 2 && px < b.x + b.w + 2 && py > b.y - 2 && py < b.y + b.h + 2) {
+            homeCovered[spot] += 1;
+          }
+        }
+        // The direction back along the arc, from a point an eighth of the way back.
+        if (back === 9) {
+          const ex = px - (projectedEnd[0] as number);
+          const ey = py - (projectedEnd[1] as number);
+          const length = Math.hypot(ex, ey);
+          if (length >= 1e-3) {
+            dx += ex / length;
+            dy += ey / length;
+          }
+        }
+      }
     }
-    stockpilotSpots(dx, dy, held, homeSpots);
+    stockpilotSpots(dx, dy, held, homeSpots, homeCovered);
   }
 
   /** The labels: each beside its marks, clear of each other, of every mark and of the island's panels. */
@@ -1229,7 +1258,7 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
       anchor.visible = entry.fade > 0.05;
       anchor.reach = (home ? HOME_MARK_HALF : (markReach.get(entry.key) ?? 6)) + LABEL_LEADER + 1;
       if (home) {
-        writeHomeSpots(placed[i]?.side ?? null);
+        writeHomeSpots(anchor, placed[i]?.side ?? null);
         anchor.spots = homeSpots;
       }
     }

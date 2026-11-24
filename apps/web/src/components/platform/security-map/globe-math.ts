@@ -58,6 +58,20 @@ export function centralAngle(a: LonLat, b: LonLat): number {
 export const GLOBE_HEIGHT_SHARE = 0.36;
 export const STAGE_HEADROOM = (0.5 - GLOBE_HEIGHT_SHARE) / GLOBE_HEIGHT_SHARE;
 
+/** The camera's vertical field of view, in degrees. */
+export const CAMERA_FOV = 30;
+
+/**
+ * The nearest the limb ever comes to the middle of the view, as an angle at
+ * the globe's centre. The camera is close enough to show the globe at its
+ * radius (GLOBE_HEIGHT_SHARE of the stage's height, or less on a narrow
+ * stage), so it sees less than a half: the limb is 90 degrees less the angle
+ * the globe's radius takes in the view. A narrower stage draws a smaller
+ * globe from farther away, so the limb only moves out from here.
+ */
+export const NEAREST_LIMB =
+  Math.PI / 2 - Math.atan(2 * GLOBE_HEIGHT_SHARE * Math.tan((CAMERA_FOV / 2) * RADIANS));
+
 /**
  * How high an arc rises at its middle, in globe radii: higher the farther it
  * goes, and never higher than ARC_MAX_HEIGHT, which is well under the room
@@ -367,10 +381,11 @@ export const GLOBE_TILT = 18 * RADIANS;
 export const GLOBE_TILT_MAX = 55 * RADIANS;
 /**
  * Whenever there is something to play, StockPilot is kept at most this far
- * from the middle of the view: 15 degrees inside the limb, so its arrivals
- * and their rings are always seen (lab walk 2, F2).
+ * from the middle of the view: 15 degrees inside the limb the camera sees
+ * (NEAREST_LIMB, about 79 degrees), so its arrivals and their rings are
+ * always seen (lab walk 2, F2).
  */
-export const STOCKPILOT_REACH = 75 * RADIANS;
+export const STOCKPILOT_REACH = NEAREST_LIMB - 15 * RADIANS;
 /** The sway's reach is never cut below this, so a view held near StockPilot's limit still drifts. */
 export const SWAY_MIN = 8 * RADIANS;
 /**
@@ -835,11 +850,30 @@ export interface LabelAnchor {
   /** Which spots it may take, in order. */
   spots: readonly LabelSpot[];
 }
-export type LabelSpot = 'right' | 'left' | 'above' | 'below';
+export type LabelSpot =
+  | 'right'
+  | 'left'
+  | 'above'
+  | 'below'
+  | 'above-right'
+  | 'below-right'
+  | 'below-left'
+  | 'above-left';
 /** A label's leader line, from its edge toward its mark, in CSS pixels (the stage's CSS draws it). */
 export const LABEL_LEADER = 8;
-/** Every spot, the order a source's label tries them in. */
+/** A source's label's spots, in the order it tries them. */
 export const LABEL_SPOTS: readonly LabelSpot[] = ['right', 'left', 'above', 'below'];
+/** StockPilot's label's spots: the four sides and the four corners between them (stockpilotSpots orders them). */
+export const HOME_SPOTS: readonly LabelSpot[] = [
+  'right',
+  'below-right',
+  'below',
+  'below-left',
+  'left',
+  'above-left',
+  'above',
+  'above-right',
+];
 /** A box on the screen (top-left, size). */
 export interface ScreenBox {
   x: number;
@@ -857,6 +891,34 @@ export interface PlacedLabel {
 
 const overlaps = (a: ScreenBox, b: ScreenBox, pad: number): boolean =>
   a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
+
+/** Each spot's direction from the point, on the screen (y down). */
+const SPOT_DIRECTION: Record<LabelSpot, readonly [number, number]> = {
+  right: [1, 0],
+  left: [-1, 0],
+  above: [0, -1],
+  below: [0, 1],
+  'above-right': [Math.SQRT1_2, -Math.SQRT1_2],
+  'below-right': [Math.SQRT1_2, Math.SQRT1_2],
+  'below-left': [-Math.SQRT1_2, Math.SQRT1_2],
+  'above-left': [-Math.SQRT1_2, -Math.SQRT1_2],
+};
+
+/**
+ * Where a label's box stands when it takes `spot`: `reach` from its point,
+ * centred on that side, or for a corner, its nearest corner `reach` from the
+ * point on the diagonal.
+ */
+export function spotBox(a: LabelAnchor, spot: LabelSpot, out: ScreenBox): ScreenBox {
+  const [sx, sy] = SPOT_DIRECTION[spot];
+  const corner = sx !== 0 && sy !== 0;
+  const r = corner ? a.reach * Math.SQRT1_2 : a.reach;
+  out.x = sx > 0 ? a.x + r : sx < 0 ? a.x - r - a.w : a.x - a.w / 2;
+  out.y = sy > 0 ? a.y + r : sy < 0 ? a.y - r - a.h : a.y - a.h / 2;
+  out.w = a.w;
+  out.h = a.h;
+  return out;
+}
 
 /**
  * Places labels beside their marks, in the order given (the most important
@@ -885,11 +947,8 @@ export function placeLabels(
     slot.side = null;
     if (!a.visible) continue;
     for (const spot of a.spots) {
-      const x =
-        spot === 'right' ? a.x + a.reach : spot === 'left' ? a.x - a.reach - a.w : a.x - a.w / 2;
-      const y =
-        spot === 'above' ? a.y - a.reach - a.h : spot === 'below' ? a.y + a.reach : a.y - a.h / 2;
-      const box = { x, y, w: a.w, h: a.h };
+      const box = spotBox(a, spot, { x: 0, y: 0, w: 0, h: 0 });
+      const { x, y } = box;
       if (x < margin || y < margin || x + a.w > bounds.w - margin || y + a.h > bounds.h - margin) {
         continue;
       }
@@ -910,36 +969,37 @@ export function placeLabels(
   }
 }
 
-const SPOT_DIRECTION: Record<LabelSpot, readonly [number, number]> = {
-  right: [1, 0],
-  left: [-1, 0],
-  above: [0, -1],
-  below: [0, 1],
-};
-
 /**
- * The spots for StockPilot's label, best first: away from where the arcs
- * come in. `dx`, `dy` is the sum of the screen directions (y down) from
- * StockPilot back along each arriving arc's last stretch; the label goes the
- * other way, so it never covers their last stretch (lab walk 2, F6). With
- * no arcs coming in (a sum near zero), right first. `current` is the spot it
- * holds: it keeps it unless another is clearly better, so the label does not
- * jump to and fro as the globe sways.
+ * The spots for StockPilot's label (HOME_SPOTS: the sides and the corners),
+ * best first: the ones that cover the fewest points of the arriving arcs' last stretch first (`covered`, a count
+ * for each spot), and among those, away from where the arcs come in. `dx`,
+ * `dy` is the sum of the screen directions (y down) from StockPilot back
+ * along each arriving arc's last stretch; the label goes the other way, so it
+ * never covers their last stretch (lab walk 2, F6). With no arcs coming in (a
+ * sum near zero) and nothing covered, right first. `current` is the spot it holds: it keeps it
+ * unless another covers fewer points or is clearly further away, so the label
+ * does not jump to and fro as the globe sways.
  */
 export function stockpilotSpots(
   dx: number,
   dy: number,
   current: LabelSpot | null,
   out: LabelSpot[] = [],
+  covered: Partial<Record<LabelSpot, number>> = {},
 ): LabelSpot[] {
   const length = Math.hypot(dx, dy);
   out.length = 0;
-  out.push(...LABEL_SPOTS);
-  if (!(length > 1e-3)) return out;
+  out.push(...HOME_SPOTS);
+  const hits = (spot: LabelSpot): number => covered[spot] ?? 0;
   const score = (spot: LabelSpot): number =>
-    -(SPOT_DIRECTION[spot][0] * dx + SPOT_DIRECTION[spot][1] * dy) / length;
-  out.sort((a, b) => score(b) - score(a));
-  if (current !== null && out[0] !== current && score(out[0]!) - score(current) < 0.3) {
+    length > 1e-3 ? -(SPOT_DIRECTION[spot][0] * dx + SPOT_DIRECTION[spot][1] * dy) / length : 0;
+  out.sort((a, b) => hits(a) - hits(b) || score(b) - score(a));
+  if (
+    current !== null &&
+    out[0] !== current &&
+    hits(current) <= hits(out[0]!) &&
+    score(out[0]!) - score(current) < 0.3
+  ) {
     out.splice(out.indexOf(current), 1);
     out.unshift(current);
   }

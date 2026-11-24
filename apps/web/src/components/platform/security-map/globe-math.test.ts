@@ -6,6 +6,7 @@ import {
   ARC_MAX_HEIGHT,
   ARC_MIN_HEIGHT,
   ARC_SEGMENTS,
+  CAMERA_FOV,
   DRIFT_TURN_MS,
   EASE_MS,
   FLIGHT_MAX_MS,
@@ -13,9 +14,11 @@ import {
   GLOBE_HEIGHT_SHARE,
   GLOBE_TILT,
   GLOBE_TILT_MAX,
+  HOME_SPOTS,
   LABEL_LEADER,
   LABEL_SPOTS,
   LIVE_PERIOD_MS,
+  NEAREST_LIMB,
   REPLAY_FLIGHT_MS,
   REPLAY_SPREAD_MS,
   RETURN_AFTER_MS,
@@ -56,6 +59,7 @@ import {
   ribbonIndexes,
   ribbonVertexCount,
   sourceMarkSize,
+  spotBox,
   stockpilotSpots,
   stopCoasting,
   swayAt,
@@ -66,6 +70,7 @@ import {
   writeStars,
   type GlobeFacing,
   type LabelAnchor,
+  type LabelSpot,
   type PlacedLabel,
   type RibbonArrays,
   type StageCamera,
@@ -630,6 +635,29 @@ describe('the stage', () => {
     expect(out[1]!).toBeLessThan(300);
   });
 
+  it("StockPilot's reach is 15 degrees inside the limb the camera sees, on a stage of any shape", () => {
+    // The renderer's layout: the globe's radius is GLOBE_HEIGHT_SHARE of the height, or less when the room is narrow.
+    const limbOf = (width: number, height: number): number => {
+      const radiusPx = Math.max(40, Math.min(height * GLOBE_HEIGHT_SHARE, width * 0.42));
+      const tanA = (radiusPx / (height / 2)) * Math.tan((CAMERA_FOV / 2) * DEG);
+      return Math.acos(Math.sin(Math.atan(tanA)));
+    };
+    near(limbOf(1256, 568), NEAREST_LIMB, 9);
+    near(NEAREST_LIMB / DEG, 79.1, 1);
+    near((NEAREST_LIMB - STOCKPILOT_REACH) / DEG, 15, 9);
+    for (const [width, height] of [
+      [1256, 420],
+      [1700, 760],
+      [700, 600],
+      [400, 360],
+      [320, 520],
+    ] as const) {
+      expect(limbOf(width, height), `${width}x${height}`).toBeGreaterThanOrEqual(
+        NEAREST_LIMB - 1e-9,
+      );
+    }
+  });
+
   it('a place fades over the last degrees before the limb and is gone past it', () => {
     const limbCos = Math.cos(70 * DEG);
     near(limbFade(Math.cos(20 * DEG), limbCos, 12 * DEG), 1);
@@ -727,17 +755,63 @@ describe('labels', () => {
     expect(stockpilotSpots(3, 0, null)[0]).toBe('left');
     // From below (y grows downward): above.
     expect(stockpilotSpots(0, 2, null)[0]).toBe('above');
-    // From the upper right: left or below, never right or above.
+    // From the upper right: the lower-left corner, then left and below; right, above and their corner last.
     const upperRight = stockpilotSpots(2, -1.5, null);
-    expect(upperRight.slice(0, 2).sort()).toEqual(['below', 'left']);
-    expect(upperRight.slice(2).sort()).toEqual(['above', 'right']);
-    // Every spot, once each.
-    expect([...stockpilotSpots(1, 1, null)].sort()).toEqual([...LABEL_SPOTS].sort());
+    expect(upperRight[0]).toBe('below-left');
+    expect(upperRight.slice(1, 3).sort()).toEqual(['below', 'left']);
+    expect(upperRight.slice(-3).sort()).toEqual(['above', 'above-right', 'right']);
+    // Every spot, sides and corners, once each.
+    expect([...stockpilotSpots(1, 1, null)].sort()).toEqual([...HOME_SPOTS].sort());
+    expect(HOME_SPOTS).toHaveLength(8);
     // Nothing coming in: right first.
-    expect(stockpilotSpots(0, 0, null)).toEqual(LABEL_SPOTS);
+    expect(stockpilotSpots(0, 0, null)[0]).toBe('right');
+    expect(stockpilotSpots(0, 0, null)).toEqual(HOME_SPOTS);
     // Held on its side while another is only a little better; moved when clearly worse.
-    expect(stockpilotSpots(2, -1.8, 'below')[0]).toBe('below');
+    // (From the upper right, the lower-left corner is best; left is only a little worse, below clearly.)
+    expect(stockpilotSpots(2, -1.8, 'left')[0]).toBe('left');
+    expect(stockpilotSpots(2, -1.8, 'below')[0]).toBe('below-left');
     expect(stockpilotSpots(3, 0, 'right')[0]).toBe('left');
+  });
+
+  it("StockPilot's label takes the side that covers the fewest points of the arcs' last stretch first, then the side away", () => {
+    // Coming in from the upper right on the whole, but some arcs curve in from below and the left:
+    // the spots that cover them give way to the one that covers none.
+    const all = (n: number) =>
+      Object.fromEntries(HOME_SPOTS.map((spot) => [spot, n])) as Record<LabelSpot, number>;
+    const covered = { ...all(4), 'below-left': 3, left: 2, 'below-right': 0 };
+    expect(stockpilotSpots(2, -1.5, null, [], covered)[0]).toBe('below-right');
+    // Held on below-left, which covers points, it moves at once to a spot that covers none.
+    expect(stockpilotSpots(2, -1.5, 'below-left', [], covered)[0]).toBe('below-right');
+    // Equal cover: the spot away from the arcs, as without counts.
+    expect(stockpilotSpots(3, 0, null, [], all(2))[0]).toBe('left');
+    // Every spot covers some: the fewest, even toward the arcs.
+    expect(stockpilotSpots(3, 0, null, [], { ...all(5), right: 1 })[0]).toBe('right');
+    // A held spot that covers no more than the best keeps its place while only a little worse.
+    expect(stockpilotSpots(2, -1.8, 'left', [], all(0))[0]).toBe('left');
+    expect(stockpilotSpots(2, -1.8, 'left', [], { ...all(0), left: 1 })[0]).toBe('below-left');
+  });
+
+  it("a label's box at each spot stands its reach from the point, centred on that side", () => {
+    const a = anchor(300, 200, { w: 80, h: 20, reach: 18 });
+    const box = { x: 0, y: 0, w: 0, h: 0 };
+    expect(spotBox(a, 'right', box)).toEqual({ x: 318, y: 190, w: 80, h: 20 });
+    expect(spotBox(a, 'left', box)).toEqual({ x: 202, y: 190, w: 80, h: 20 });
+    expect(spotBox(a, 'above', box)).toEqual({ x: 260, y: 162, w: 80, h: 20 });
+    expect(spotBox(a, 'below', box)).toEqual({ x: 260, y: 218, w: 80, h: 20 });
+    // A corner: the label's nearest corner its reach from the point, on the diagonal.
+    const d = 18 * Math.SQRT1_2;
+    const at = (spot: LabelSpot) => {
+      const b = spotBox(a, spot, box);
+      return [b.x, b.y];
+    };
+    const close = ([x, y]: number[], [ex, ey]: number[]) => {
+      near(x!, ex!);
+      near(y!, ey!);
+    };
+    close(at('below-right'), [300 + d, 200 + d]);
+    close(at('below-left'), [300 - d - 80, 200 + d]);
+    close(at('above-right'), [300 + d, 200 - d - 20]);
+    close(at('above-left'), [300 - d - 80, 200 - d - 20]);
   });
 });
 

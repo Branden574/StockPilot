@@ -74,6 +74,22 @@ const LEADER_CSS = (['right', 'left', 'above', 'below'] as const)
       : `width:1px;height:${LABEL_LEADER}px`;
     return `.sm-label[data-side=${side}]::before{display:block;${at};${size}}`;
   })
+  .concat(
+    // StockPilot's label may take a corner: its leader runs on the diagonal from that corner.
+    (['below-right', 'below-left', 'above-right', 'above-left'] as const).map((side) => {
+      const d = (LABEL_LEADER * Math.SQRT1_2).toFixed(2);
+      const at =
+        side === 'below-right'
+          ? `left:-${d}px;top:-${d}px`
+          : side === 'below-left'
+            ? 'left:100%;top:0'
+            : side === 'above-right'
+              ? `left:-${d}px;top:calc(100% + ${d}px)`
+              : 'left:100%;top:100%';
+      const turn = side === 'below-right' || side === 'above-left' ? 45 : -45;
+      return `.sm-label[data-side=${side}]::before{display:block;${at};width:${LABEL_LEADER}px;height:1px;transform:rotate(${turn}deg);transform-origin:0 0}`;
+    }),
+  )
   .join('\n');
 
 /** The stage's own colours and keyframes (dark in both appearances), scoped by their sm- names. */
@@ -378,12 +394,16 @@ export function SecurityMapTicker({
   if (!row) return <div className="flex-1" />;
   const w = securityMapFeedWords(row);
   const look = CATEGORY_LOOKS[w.category];
+  // Centred under the globe (the room left of `reserveRight`) when it fits;
+  // a longer line takes the reserve first, so it can grow to the whole width
+  // beside the legend before its reason's words are cut (lab walk 2, F7).
   return (
-    <div className="flex min-w-0 flex-1 justify-center" style={{ paddingRight: reserveRight }}>
+    <div className="flex min-w-0 flex-1" data-testid="security-map-ticker-room">
+      <div className="min-w-0 flex-[1_1_0px]" />
       <p
         key={w.key}
         data-testid="security-map-ticker"
-        className="sm-glass sm-ticker-line flex min-w-0 max-w-full items-center gap-2 rounded-full px-3 py-1.5 text-[12px]"
+        className="sm-glass sm-ticker-line flex min-w-0 max-w-full shrink-0 items-center gap-2 rounded-full px-3 py-1.5 text-[12px]"
         style={{ color: ON_STAGE.text }}
       >
         <CategoryMark
@@ -413,6 +433,7 @@ export function SecurityMapTicker({
           {w.time}
         </span>
       </p>
+      <div className="min-w-0" style={{ flex: `1 1 ${reserveRight}px` }} />
     </div>
   );
 }
