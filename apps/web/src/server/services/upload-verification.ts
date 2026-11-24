@@ -5,19 +5,11 @@ import {
   type DocumentBucket,
   type SniffedFile,
 } from '@/lib/file-signature';
-import { MIME_FOR_UPLOAD_KIND, type UploadKind } from '@/lib/upload-inspect';
+import { uploadKindsForMimes } from '@/lib/upload-inspect';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { checkStoredUpload, type UploadSurface } from '@/server/security/upload-checks';
 
 import { ServiceError, type ServiceContext } from './context';
-
-/** The kinds a document bucket holds: the kinds whose MIME its pin lists. */
-function kindsOfBucket(bucket: DocumentBucket): UploadKind[] {
-  const allowed: readonly string[] = DOCUMENT_BUCKET_MIME_ALLOWLISTS[bucket];
-  return (Object.keys(MIME_FOR_UPLOAD_KIND) as UploadKind[]).filter((kind) =>
-    allowed.includes(MIME_FOR_UPLOAD_KIND[kind]),
-  );
-}
 
 const SURFACE_OF_BUCKET: Readonly<Record<DocumentBucket, UploadSurface>> = {
   'po-attachments': 'po_attachment',
@@ -83,7 +75,7 @@ export async function verifyStoredDocumentOrDelete(
   // removed and refused (we have not inspected it, so it gets no row).
   const checked = await checkStoredUpload(store, storagePath, {
     surface: SURFACE_OF_BUCKET[bucket],
-    accept: kindsOfBucket(bucket),
+    accept: uploadKindsForMimes(DOCUMENT_BUCKET_MIME_ALLOWLISTS[bucket]),
     organizationId: ctx.organizationId,
     removeOnRefusal: [storagePath],
     unreadableMessage: 'This file could not be verified.',

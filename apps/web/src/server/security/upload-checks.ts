@@ -222,8 +222,13 @@ export type StoredUploadResult =
       /** The whole object as it was checked. */
       bytes: Uint8Array;
     }
-  /** `family` null: the object could not be read, so nothing was judged or recorded. */
-  | { ok: false; family: UploadRefusalFamily | null; message: string };
+  /**
+   * `family` null: the object could not be read, so nothing was judged or
+   * recorded. `absent`: it could not be read at all (never uploaded, or
+   * already gone), so nothing was removed either; a path whose object is
+   * optional (an item photo's thumbnail) reads that as "none".
+   */
+  | { ok: false; family: UploadRefusalFamily | null; message: string; absent?: true };
 
 export interface StoredUploadInput extends UploadCheckInput {
   /** Every object of this upload to remove on a refusal (the file, and its thumbnail or poster). */
@@ -271,7 +276,7 @@ export async function checkStoredUpload(
   input: StoredUploadInput,
 ): Promise<StoredUploadResult> {
   const head = await fetchObjectPrefix(store, path);
-  if (!head) return { ok: false, family: null, message: input.unreadableMessage };
+  if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
   const prefixKinds = input.accept.filter((k) => k !== 'text' && k !== 'docx' && k !== 'xlsx');
   if (prefixKinds.length === input.accept.length) {
     const first = await checkUploadPrefix(head.prefix, input);
@@ -307,7 +312,7 @@ export async function checkStoredUploadSignature(
   input: StoredUploadInput,
 ): Promise<StoredUploadResult> {
   const head = await fetchObjectWindow(store, path);
-  if (!head) return { ok: false, family: null, message: input.unreadableMessage };
+  if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
   const verdict = await checkUploadPrefix(head.prefix, input);
   if (!verdict.ok) {
     await removeQuietly(store, input.removeOnRefusal);

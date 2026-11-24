@@ -5,23 +5,24 @@ import { unstable_cache } from 'next/cache';
 import { itemPhotoPath, itemPhotoThumbPath } from '@stockpilot/core';
 
 import { reportError } from '@/lib/error-reporter';
-import {
-  isSniffedKindAllowedInBucket,
-  sniffImage,
-} from '@/lib/image-signature';
-import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
+import { SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS } from '@/lib/image-signature';
 import {
   isValidStoragePath,
   itemImageAnyPathShape,
   itemImagePathShape,
 } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { uploadKindsForMimes } from '@/lib/upload-inspect';
+import { checkStoredUpload } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { objectsNamedByOtherImageRows } from './lib/item-image-shared-objects';
 import { SIGN_PATHS_PER_CALL, withStorageSignSlot } from './lib/storage-sign-limiter';
+
+/** An item photo that could not be read at its finalize (never uploaded, or gone). */
+const ITEM_PHOTO_UNREADABLE_MESSAGE = 'This photo could not be read. Try uploading it again.';
 
 /**
  * Long-lived signed URL per storage path. The signed URL itself is
@@ -996,17 +997,22 @@ export class ItemImagesService {
     // the caller can read and change (the sign is an RLS-checked read, and
     // the item was read above under the caller's RLS), so there is no reason
     // to reach for createAdminClient here.
+    //
+    // Part 6: the sniff is the one upload check's, which then reads the whole
+    // object (only when the leading window was not already all of it) for a
+    // file hidden after the picture, and records a refusal as a security
+    // event in this organization. The person reads a plain sentence; this
+    // used to answer the code word invalid_image, which the uploader showed.
     const bucket = this.ctx.supabase.storage.from('item-images');
-    const head = await fetchObjectPrefix(bucket, storagePath);
-    if (!head) {
-      throw new ServiceError('validation_error', 'invalid_image');
-    }
-    const sniffed = sniffImage(head.prefix);
-    if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'item-images')) {
-      const orphans = opts.thumbPath ? [storagePath, opts.thumbPath] : [storagePath];
-      await bucket.remove(orphans);
-      throw new ServiceError('validation_error', 'invalid_image');
-    }
+    const kinds = uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['item-images']);
+    const master = await checkStoredUpload(bucket, storagePath, {
+      surface: 'item_photo',
+      accept: kinds,
+      organizationId: this.ctx.organizationId,
+      removeOnRefusal: opts.thumbPath ? [storagePath, opts.thumbPath] : [storagePath],
+      unreadableMessage: ITEM_PHOTO_UNREADABLE_MESSAGE,
+    });
+    if (!master.ok) throw new ServiceError('validation_error', master.message);
 
     // SP-135 — the THUMB got the same treatment, because it is the object
     // most surfaces actually render. Until this, `opts.thumbPath` was only
@@ -1031,18 +1037,17 @@ export class ItemImagesService {
     //   - object present and a real image: keep the path.
     let verifiedThumbPath: string | null = opts.thumbPath ?? null;
     if (verifiedThumbPath) {
-      const thumbHead = await fetchObjectPrefix(bucket, verifiedThumbPath);
-      if (!thumbHead) {
-        verifiedThumbPath = null;
-      } else {
-        const thumbSniffed = sniffImage(thumbHead.prefix);
-        if (
-          !thumbSniffed ||
-          !isSniffedKindAllowedInBucket(thumbSniffed.kind, 'item-images')
-        ) {
-          await bucket.remove([storagePath, opts.thumbPath as string]);
-          throw new ServiceError('validation_error', 'invalid_image');
-        }
+      const thumb = await checkStoredUpload(bucket, verifiedThumbPath, {
+        surface: 'item_photo_thumb',
+        accept: kinds,
+        organizationId: this.ctx.organizationId,
+        removeOnRefusal: [storagePath, verifiedThumbPath],
+        unreadableMessage: ITEM_PHOTO_UNREADABLE_MESSAGE,
+      });
+      if (!thumb.ok) {
+        // Not there at all: the client skipped the thumb PUT (nothing removed).
+        if (thumb.absent) verifiedThumbPath = null;
+        else throw new ServiceError('validation_error', thumb.message);
       }
     }
 

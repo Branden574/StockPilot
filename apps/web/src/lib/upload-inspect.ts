@@ -47,6 +47,16 @@ export const MIME_FOR_UPLOAD_KIND: Readonly<Record<UploadKind, string>> = {
   text: 'text/plain',
 };
 
+/**
+ * The kinds whose MIME a bucket's pin lists, so a path accepts exactly what
+ * its bucket holds and the pin stays the one place that says so.
+ */
+export function uploadKindsForMimes(allowed: readonly string[]): UploadKind[] {
+  return (Object.keys(MIME_FOR_UPLOAD_KIND) as UploadKind[]).filter((kind) =>
+    allowed.includes(MIME_FOR_UPLOAD_KIND[kind]),
+  );
+}
+
 /** The kinds of verdict a refusal can be. Each has one reason code in the record. */
 export type UploadRefusalFamily = 'wrong_type' | 'active_content' | 'hidden_file' | 'could_not_check';
 

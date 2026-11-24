@@ -232,11 +232,15 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
       ok: false,
       family: null,
       message: 'This file could not be verified.',
+      absent: true,
     });
     expect(first.remove).not.toHaveBeenCalled();
     fetchObjectPrefixMock.mockResolvedValue({ prefix: PDF.subarray(0, 8), totalSize: 9000 });
     const second = bucket(null);
-    expect(await checkStoredUpload(second.store, PATH, stored)).toMatchObject({ ok: false, family: null });
+    const gone = await checkStoredUpload(second.store, PATH, stored);
+    expect(gone).toMatchObject({ ok: false, family: null });
+    // Removed, so not "absent": a path with an optional object must not read it as "none".
+    expect(gone).not.toHaveProperty('absent');
     expect(second.remove).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
     expect(record).not.toHaveBeenCalled();
   });
