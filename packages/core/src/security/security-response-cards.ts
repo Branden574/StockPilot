@@ -146,15 +146,15 @@ const NOTHING_STOPPED = { text: 'Nothing: this was stopped.' } as const;
 /**
  * Two "already did" lines both refused-file cards share (part 6), each true of
  * every upload path that records one: a copy in storage is deleted unless
- * another record uses the same file or that could not be confirmed (a PO
- * import's shared file, a maintenance photo or evidence whose look failed),
- * and a failed delete leaves it unused; the person is told, except for a
- * cover picture the server fetched during an import, which is left out.
+ * another record uses the same file or that could not be confirmed (every
+ * path that removes one looks first), and a failed delete leaves it unused;
+ * the person is told, except for a cover picture the server fetched during
+ * an import, which is not stored.
  */
 const UPLOAD_COPY_DELETED =
   'A copy that had already reached storage was deleted, unless another record still uses the same file or that could not be confirmed. A delete that storage refuses leaves the copy where it was, unused.';
 const UPLOAD_TOLD_AND_RECORDED =
-  'The person who sent it was told in a plain sentence that it was refused; a cover picture fetched during an import is just left out. The record keeps the kind of refusal, the organization when there is one, and the time, never the file, its name or what was in it.';
+  'The person who sent it was told in a plain sentence that it was refused; a cover picture fetched during an import is just not stored. The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.';
 
 /** The cards, in the order the record lists its reasons. */
 export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
@@ -799,7 +799,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
       "Malware here means a file the upload checks refused or could not finish checking, not a confirmed virus. StockPilot reads most files sent to it with its own file checks before anything uses them.",
     alreadyDid: [
       'What was done with each file depends on the reason of its entry: open the entry in the events list to read the card of that reason.',
-      'The record keeps the kind of refusal, the organization when there is one, and the time, never the file, its name or what was in it.',
+      'The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.',
     ],
     doNow: [
       {
@@ -827,9 +827,9 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
     whatThisIs:
       "A file sent to StockPilot was refused by the app's own file checks: it was not a kind of file that part of the app takes, or it carried a script, a macro or another file inside it. An honest file can be refused too, such as a PDF sent where only pictures are taken.",
     alreadyDid: [
-      'Blocked: the file was refused before anything used it. It was not attached, shown, imported or passed on.',
+      'Blocked: the file was refused before anything used it. It was not attached or imported.',
       UPLOAD_COPY_DELETED,
-      "The checks decide from the file's own bytes: no name, and no type a browser or the phone claims, can make a file pass.",
+      "The checks decide from the file's own bytes: no name, and no type a browser or the phone claims, can make a file pass. Where a name or a stated type picks the kind of file expected, it can only narrow what the bytes must be.",
       UPLOAD_TOLD_AND_RECORDED,
     ],
     doNow: [
@@ -857,7 +857,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
     whatThisIs:
       "A file sent to StockPilot was refused because the app's own file checks could not finish reading it: it was locked with a password, too large or too complex to read safely, or not put together the way its kind should be. An honest file can do this, and so can a file built to wear a checker out, and this alone does not say which.",
     alreadyDid: [
-      'Blocked: the file was refused because the checks could not finish, and nothing used it. It was not attached, shown, imported or passed on.',
+      'Blocked: the file was refused because the checks could not finish, and nothing used it. It was not attached or imported.',
       UPLOAD_COPY_DELETED,
       'The checks stop after a set amount of time and work on one file, and a file that reaches that point is refused, never let through.',
       UPLOAD_TOLD_AND_RECORDED,

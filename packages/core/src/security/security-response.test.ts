@@ -276,6 +276,20 @@ describe('the upload cards (part 6)', () => {
     }
   });
 
+  it('the outcome sentences claim only what holds on every path that records one (part 6 review)', () => {
+    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked'] as const) {
+      const did = securityResponseCard(id).alreadyDid.join(' ');
+      // A refused cover keeps the link the book was found with, so no card says the file was not shown or passed on.
+      expect(did, id).not.toMatch(/\bshown\b|passed on/);
+      // The record also keeps where the request came from.
+      expect(did, id).toMatch(/The record keeps the kind of refusal, the organization when there is one, the place it came from and the time/);
+    }
+    // A name or a stated type can pick the kind expected (the ISBN and PO import paths), never widen it.
+    expect(securityResponseCard('upload-refused').alreadyDid.join(' ')).toMatch(
+      /Where a name or a stated type picks the kind of file expected, it can only narrow what the bytes must be\./,
+    );
+  });
+
   it('no upload card claims every file is checked', () => {
     for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked'] as const) {
       expect(ownText(securityResponseCard(id)), id).not.toMatch(/\bevery file\b|\ball files\b/i);
