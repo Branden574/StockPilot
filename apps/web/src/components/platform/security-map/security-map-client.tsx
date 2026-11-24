@@ -7,7 +7,6 @@ import { pollPlatformSecurityMapAction } from '@/server/actions/platform/securit
 import {
   SECURITY_MAP_REPLAY_STEP_MS,
   SECURITY_MAP_WORDS,
-  planSecurityMapPlayback,
   securityMapAsOfWords,
   securityMapCounters,
   securityMapEmptyWords,
@@ -105,15 +104,10 @@ export function SecurityMapClient({
 }: SecurityMapClientProps) {
   const hidden = useDocumentHidden();
   const reducedMotion = useReducedMotion();
-  const state = useSecurityMapPoll(initial, poll, hidden);
+  const { state, plan } = useSecurityMapPoll(initial, poll, hidden);
   const [paused, setPaused] = React.useState(false);
   const [choice, setChoice] = React.useState<MapViewChoice>('globe');
   const [globe, setGlobe] = React.useState<GlobeState>('ok');
-
-  const plan = React.useMemo(
-    () => planSecurityMapPlayback(state.whole, state.recent),
-    [state.whole, state.recent],
-  );
   const stop = securityMapStopReason({
     mode: plan.mode,
     health: state.health,

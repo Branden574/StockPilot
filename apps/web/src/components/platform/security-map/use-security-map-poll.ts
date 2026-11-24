@@ -1,24 +1,30 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   SECURITY_MAP_HEALTH_AT_START,
+  planSecurityMapPlayback,
   readSecurityMapPollResult,
   securityMapHealthAfter,
   type SecurityMapHealth,
+  type SecurityMapPlan,
   type SecurityMapRefusal,
   type SecurityMapView,
   type SecurityMapWholeRead,
 } from '@stockpilot/core';
 
-import { localDayStart, nextPoll } from './map-model';
+import { localDayStart, nextLocalMidnight, nextPoll, replayWantsWhole } from './map-model';
 
 /**
  * THE MAP'S POLL: one small hook local to the island (no shared polling
  * hook). It asks the console's Server Action for the map's data: the whole
  * window with the viewer's day start at once, then the last ten minutes every
- * 30 seconds and the whole window every 5 minutes (map-model.ts nextPoll).
+ * 30 seconds; the whole window again every 5 minutes, at the viewer's
+ * midnight, and when the replay begins on a read more than a minute old
+ * (map-model.ts nextPoll). A read of the last ten minutes only adds the
+ * newest live arcs and feed entries to the newest whole read; it replaces
+ * none of its numbers.
  *
  * One request at a time; nothing is sent while the tab is hidden, and when it
  * comes back an overdue read is sent at once; after a failed read the wait
@@ -132,6 +138,12 @@ export function pollStateAfter(
   };
 }
 
+export interface SecurityMapPollResult {
+  state: SecurityMapPollState;
+  /** Core's playback plan for the two newest reads, worked out here once. */
+  plan: SecurityMapPlan;
+}
+
 /**
  * The poll, run while the island is mounted. `hidden` stops it (a hidden
  * tab); the read in flight, if any, still lands.
@@ -140,10 +152,19 @@ export function useSecurityMapPoll(
   initial: unknown,
   poll: SecurityMapPoll,
   hidden: boolean,
-): SecurityMapPollState {
+): SecurityMapPollResult {
   const [state, setState] = useState(() => initialPollState(initial, Date.now()));
+  const plan = useMemo(
+    () => planSecurityMapPlayback(state.whole, state.recent),
+    [state.whole, state.recent],
+  );
+  const replaying = plan.mode === 'replay';
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  // The turn to the replay, seen once: whether the play was replaying when
+  // last looked at, and whether that turn asks for the whole window again.
+  const wasReplaying = useRef(false);
+  const wholeWanted = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
@@ -153,6 +174,15 @@ export function useSecurityMapPoll(
   }, []);
 
   useEffect(() => {
+    if (replaying !== wasReplaying.current) {
+      wholeWanted.current = replayWantsWhole(
+        wasReplaying.current,
+        replaying,
+        state.lastWholeAt,
+        Date.now(),
+      );
+      wasReplaying.current = replaying;
+    }
     if (hidden || inFlight.current) return undefined;
     const step = nextPoll(
       {
@@ -160,6 +190,10 @@ export function useSecurityMapPoll(
         lastWholeAt: state.lastWholeAt,
         failures: state.health.failures,
         dayCounted: state.dayStartAsked,
+        dayEndsAt: state.dayStartAsked
+          ? nextLocalMidnight(state.whole?.whole.dayStart ?? null)
+          : null,
+        wholeWanted: wholeWanted.current,
       },
       Date.now(),
     );
@@ -167,6 +201,7 @@ export function useSecurityMapPoll(
       () => {
         if (inFlight.current) return;
         inFlight.current = true;
+        if (step.scope === 'whole') wholeWanted.current = false;
         const dayStart = step.scope === 'whole' ? localDayStart(new Date()) : null;
         void Promise.resolve()
           .then(() => poll({ scope: step.scope, dayStart }))
@@ -185,7 +220,7 @@ export function useSecurityMapPoll(
       Math.max(0, step.at - Date.now()),
     );
     return () => clearTimeout(timer);
-  }, [hidden, state, poll]);
+  }, [hidden, state, poll, replaying]);
 
-  return state;
+  return { state, plan };
 }

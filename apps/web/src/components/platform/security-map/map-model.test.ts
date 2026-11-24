@@ -18,9 +18,12 @@ import {
   drawnArcs,
   focusOf,
   globeArcsOf,
+  REPLAY_REREAD_AFTER_MS,
   localDayStart,
+  nextLocalMidnight,
   nextPoll,
   notOnMapWords,
+  replayWantsWhole,
   stageOf,
   viewShown,
 } from './map-model';
@@ -144,40 +147,114 @@ describe('the line for places with no point', () => {
 
 describe('when to read', () => {
   const T = 1_000_000;
+  /** No midnight in sight and no replay just begun. */
+  const QUIET = { dayEndsAt: null, wholeWanted: false } as const;
 
   it("first, at once: the whole window with the viewer's day start", () => {
     expect(
-      nextPoll({ lastPollAt: null, lastWholeAt: T - 10, failures: 0, dayCounted: false }, T),
+      nextPoll(
+        { lastPollAt: null, lastWholeAt: T - 10, failures: 0, dayCounted: false, ...QUIET },
+        T,
+      ),
     ).toEqual({ scope: 'whole', at: T });
   });
 
   it('then the last ten minutes every 30 seconds, and the whole window in their place every 5 minutes', () => {
-    expect(nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 0, dayCounted: true }, T)).toEqual({
+    expect(
+      nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 0, dayCounted: true, ...QUIET }, T),
+    ).toEqual({
       scope: 'recent',
       at: T + 30_000,
     });
     const whole = T + SECURITY_MAP_WHOLE_POLL_MS;
     expect(
-      nextPoll({ lastPollAt: whole - 10_000, lastWholeAt: T, failures: 0, dayCounted: true }, T),
+      nextPoll(
+        { lastPollAt: whole - 10_000, lastWholeAt: T, failures: 0, dayCounted: true, ...QUIET },
+        T,
+      ),
     ).toEqual({ scope: 'whole', at: whole });
   });
 
   it('after failed reads the wait grows, 60 then 120 seconds, and nothing is sent sooner', () => {
-    expect(nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 1, dayCounted: true }, T)).toEqual({
+    expect(
+      nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 1, dayCounted: true, ...QUIET }, T),
+    ).toEqual({
       scope: 'recent',
       at: T + 60_000,
     });
-    expect(nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 5, dayCounted: true }, T)).toEqual({
+    expect(
+      nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 5, dayCounted: true, ...QUIET }, T),
+    ).toEqual({
       scope: 'recent',
       at: T + 120_000,
     });
     // A whole read that is overdue still waits out the back-off.
     expect(
-      nextPoll({ lastPollAt: T, lastWholeAt: T - 3_600_000, failures: 2, dayCounted: true }, T),
+      nextPoll(
+        { lastPollAt: T, lastWholeAt: T - 3_600_000, failures: 2, dayCounted: true, ...QUIET },
+        T,
+      ),
     ).toEqual({ scope: 'whole', at: T + 120_000 });
     expect(
-      nextPoll({ lastPollAt: T, lastWholeAt: null, failures: 1, dayCounted: false }, T),
+      nextPoll({ lastPollAt: T, lastWholeAt: null, failures: 1, dayCounted: false, ...QUIET }, T),
     ).toEqual({ scope: 'whole', at: T + 60_000 });
+  });
+
+  it("at the viewer's midnight the whole window is read, even between the 30-second reads", () => {
+    const clock = { lastPollAt: T, lastWholeAt: T, failures: 0, dayCounted: true };
+    expect(nextPoll({ ...clock, dayEndsAt: T + 10_000, wholeWanted: false }, T)).toEqual({
+      scope: 'whole',
+      at: T + 10_000,
+    });
+    // A midnight later than the 5-minute read changes nothing.
+    expect(
+      nextPoll({ ...clock, dayEndsAt: T + SECURITY_MAP_WHOLE_POLL_MS + 1, wholeWanted: false }, T),
+    ).toEqual({ scope: 'recent', at: T + 30_000 });
+    // After failed reads the midnight read waits out the back-off too.
+    expect(
+      nextPoll({ ...clock, failures: 2, dayEndsAt: T + 10_000, wholeWanted: false }, T),
+    ).toEqual({ scope: 'whole', at: T + 120_000 });
+  });
+
+  it('the replay just begun on an old read: the whole window at once (after the back-off when reads fail)', () => {
+    const clock = { lastPollAt: T, lastWholeAt: T - 90_000, dayCounted: true, dayEndsAt: null };
+    expect(nextPoll({ ...clock, failures: 0, wholeWanted: true }, T + 5)).toEqual({
+      scope: 'whole',
+      at: T + 5,
+    });
+    expect(nextPoll({ ...clock, failures: 1, wholeWanted: true }, T + 5)).toEqual({
+      scope: 'whole',
+      at: T + 60_000,
+    });
+  });
+
+  it('only the turn to the replay asks, and only on a read more than a minute old', () => {
+    const old = T - REPLAY_REREAD_AFTER_MS - 1;
+    expect(replayWantsWhole(false, true, old, T)).toBe(true);
+    expect(replayWantsWhole(false, true, null, T)).toBe(true);
+    expect(replayWantsWhole(false, true, T - REPLAY_REREAD_AFTER_MS, T)).toBe(false);
+    expect(replayWantsWhole(true, true, old, T)).toBe(false);
+    expect(replayWantsWhole(true, false, old, T)).toBe(false);
+    expect(replayWantsWhole(false, false, old, T)).toBe(false);
+    expect(REPLAY_REREAD_AFTER_MS).toBe(60_000);
+  });
+
+  it("the next midnight is the viewer's own, a day on, also across a change of the clocks", () => {
+    const start = new Date(2026, 10, 23);
+    const next = new Date(nextLocalMidnight(start.toISOString())!);
+    expect([next.getFullYear(), next.getMonth(), next.getDate()]).toEqual([2026, 10, 24]);
+    expect([next.getHours(), next.getMinutes(), next.getSeconds()]).toEqual([0, 0, 0]);
+    // Whatever the zone, every day of a year turns at a midnight one calendar day on.
+    for (let day = new Date(2026, 0, 1); day.getFullYear() === 2026;) {
+      const after = new Date(nextLocalMidnight(localDayStart(day))!);
+      expect(after.getDate()).toBe(
+        new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getDate(),
+      );
+      expect(after.getTime()).toBeGreaterThan(day.getTime());
+      day = after;
+    }
+    expect(nextLocalMidnight(null)).toBeNull();
+    expect(nextLocalMidnight('not a time')).toBeNull();
   });
 
   it("the day start is the viewer's own midnight, as an instant", () => {

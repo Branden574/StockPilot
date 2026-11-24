@@ -188,6 +188,14 @@ export interface PollClock {
   failures: number;
   /** Whether a whole read that carried the viewer's day start has come back. */
   dayCounted: boolean;
+  /**
+   * The viewer's next midnight after the day the newest whole read counted
+   * (the page's clock), or null. The whole window is read again then, so the
+   * day's count starts over at the turn of the day.
+   */
+  dayEndsAt: number | null;
+  /** The replay has just begun on an old read of the whole window: read it again first. */
+  wholeWanted: boolean;
 }
 
 export interface PollStep {
@@ -197,21 +205,54 @@ export interface PollStep {
 }
 
 /**
- * The next read. First, at once, the whole window with the viewer's day
- * start (the server's first read could not know the viewer's midnight).
- * Then the last ten minutes every 30 seconds and, in their place when it is
- * due, the whole window every 5 minutes. After a failed read the wait grows
- * (30, 60, then 120 seconds) and nothing is sent sooner, whichever read is due.
+ * The next read. A read of the last ten minutes holds no ten-minute cells
+ * and no groups by country (contract version 2), so the whole window is read
+ * again on its own: first, at once, with the viewer's day start (the server's
+ * first read could not know the viewer's midnight); then every 5 minutes; at
+ * the viewer's midnight, so the day's count starts over; and as soon as may
+ * be when the replay begins on a read more than a minute old. In between, the
+ * last ten minutes every 30 seconds. After a failed read the wait grows (30,
+ * 60, then 120 seconds) and nothing is sent sooner, whichever read is due.
  */
 export function nextPoll(clock: PollClock, now: number): PollStep {
   const wait = securityMapNextPollDelay(clock.failures);
   const afterLast = clock.lastPollAt === null ? now : clock.lastPollAt + wait;
   if (!clock.dayCounted) return { scope: 'whole', at: afterLast };
-  const recentAt = clock.lastPollAt === null ? now : clock.lastPollAt + wait;
-  const wholeDue =
-    clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
+  const soonest = clock.failures > 0 ? afterLast : now;
+  if (clock.wholeWanted) return { scope: 'whole', at: soonest };
+  const recentAt = afterLast;
+  const every = clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
+  const wholeDue = clock.dayEndsAt === null ? every : Math.min(every, clock.dayEndsAt);
   const wholeAt = Math.max(wholeDue, clock.failures > 0 ? afterLast : -Infinity);
   return wholeAt <= recentAt ? { scope: 'whole', at: wholeAt } : { scope: 'recent', at: recentAt };
+}
+
+/** A whole read older than this is read again when the replay begins. */
+export const REPLAY_REREAD_AFTER_MS = 60_000;
+
+/**
+ * Whether the replay's beginning asks for the whole window again: the play
+ * has just turned to the replay (the last ten minutes hold nothing), and the
+ * newest whole read is more than a minute old, or there is none. Only the
+ * turn asks, never every read while the replay goes on.
+ */
+export function replayWantsWhole(
+  wasReplaying: boolean,
+  replaying: boolean,
+  lastWholeAt: number | null,
+  now: number,
+): boolean {
+  if (!replaying || wasReplaying) return false;
+  return lastWholeAt === null || now - lastWholeAt > REPLAY_REREAD_AFTER_MS;
+}
+
+/** The viewer's next midnight after the day that began at `dayStart`, or null for no time. */
+export function nextLocalMidnight(dayStart: string | null): number | null {
+  const at = dayStart === null ? NaN : Date.parse(dayStart);
+  if (!Number.isFinite(at)) return null;
+  const next = new Date(at);
+  next.setHours(24, 0, 0, 0);
+  return next.getTime();
 }
 
 /** The instant the viewer's own day began, as the poll sends it. */
