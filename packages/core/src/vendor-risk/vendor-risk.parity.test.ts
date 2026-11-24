@@ -7,8 +7,10 @@
  *     between their markers in supabase/tests/0481_supplier_risk_reviews.test.sql,
  *     which the pgTAP file runs against the database's rules, run here against
  *     core's;
- *   - the text rule's characters, the limits and the refusal words, read from
- *     the migration.
+ *   - the text rule's characters, the limits, the thresholds and the refusal
+ *     words, read from the migration;
+ *   - the rollback note at the end of the migration: one transaction with a
+ *     short lock wait, a drop for every object it makes.
  * A change on one side only fails here or there.
  */
 import { readFileSync } from 'node:fs';
@@ -27,7 +29,9 @@ import {
   VENDOR_RISK_ACTION_MAX,
   VENDOR_RISK_ANSWER_DATE_MAX,
   VENDOR_RISK_ANSWER_DATE_MIN,
+  VENDOR_RISK_ADEQUATE_MAX_GAPS,
   VENDOR_RISK_ANSWER_PROBLEMS,
+  VENDOR_RISK_CONDITIONS_MAX_GAPS,
   VENDOR_RISK_EVIDENCE_LEVELS,
   VENDOR_RISK_FINDING_MAX,
   VENDOR_RISK_ITEM_STATUSES,
@@ -42,7 +46,11 @@ import {
   vendorRiskDefaultNextReview,
   type VendorRiskAnswers,
 } from './rules';
-import { VENDOR_RISK_REFUSAL_WORDS } from './words';
+import {
+  VENDOR_RISK_ACT_AS_REFUSAL,
+  VENDOR_RISK_ACT_AS_REFUSAL_WORDS,
+  VENDOR_RISK_REFUSAL_WORDS,
+} from './words';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..', '..', '..');
@@ -94,26 +102,34 @@ function sqlFunction(name: string): string {
   return MIGRATION.slice(start, close);
 }
 
-/** As pg_temp.answers in the pgTAP file: every asked question Yes, then the overrides ('missing' leaves one out). */
+/**
+ * As pg_temp.answers in the pgTAP file: every asked question Yes, then the
+ * overrides ('missing' leaves one out; "@YYYY-MM-DD" adds the date beside an
+ * answer).
+ */
 function answersFor(level: VendorRiskDataLevel, over: Record<string, string>): VendorRiskAnswers {
-  const out: Record<string, { answer: string }> = {};
+  const out: Record<string, { answer: string; date?: string }> = {};
   for (const q of vendorRiskQuestionsFor(level)) out[q.key] = { answer: 'yes' };
   for (const [k, v] of Object.entries(over)) {
-    if (v === 'missing') delete out[k];
-    else out[k] = { answer: v };
+    if (v === 'missing') {
+      delete out[k];
+      continue;
+    }
+    const at = v.indexOf('@');
+    out[k] = at < 0 ? { answer: v } : { answer: v.slice(0, at), date: v.slice(at + 1) };
   }
   return out as VendorRiskAnswers;
 }
 
 describe('the question list is the database list', () => {
   const ROW =
-    /^\s*\('([a-z_]+)',\s*'([a-z]+)',\s*(\d+),\s*(true|false),\s*(true|false),\s*(true|false),\s*(null|'[a-z_]+'),\s*(null|'[a-z]+'),\s*'([a-z]+)'\),?$/;
+    /^\s*\('([a-z_]+)',\s*'([a-z]+)',\s*(\d+),\s*(true|false),\s*(null|\d+),\s*(true|false),\s*(true|false),\s*(null|'[a-z_]+'),\s*(null|'[a-z]+'),\s*'([a-z]+)'\),?$/;
   const sqlRows = rows(
     block(MIGRATION, '-- vendor-risk-questions:begin', '-- vendor-risk-questions:end'),
     ROW,
   );
 
-  it('has the same fourteen questions, in order, with the same group, date, level, key paper, hard stop and severities', () => {
+  it('has the same fourteen questions, in order, with the same group, date and its age limit, level, key paper, hard stop and severities', () => {
     expect(sqlRows).toHaveLength(VENDOR_RISK_QUESTIONS.length);
     const unq = (s: string) => (s === 'null' ? null : s.slice(1, -1));
     const fromSql = sqlRows.map((m) => ({
@@ -121,17 +137,19 @@ describe('the question list is the database list', () => {
       group: m[2],
       ord: Number(m[3]),
       hasDate: m[4] === 'true',
-      studentOnly: m[5] === 'true',
-      keyEvidence: m[6] === 'true',
-      hardStop: unq(m[7]!),
-      severityStaff: unq(m[8]!),
-      severityStudent: m[9],
+      maxAgeMonths: m[5] === 'null' ? null : Number(m[5]),
+      studentOnly: m[6] === 'true',
+      keyEvidence: m[7] === 'true',
+      hardStop: unq(m[8]!),
+      severityStaff: unq(m[9]!),
+      severityStudent: m[10],
     }));
     const fromCore = VENDOR_RISK_QUESTIONS.map((q, i) => ({
       key: q.key,
       group: q.group,
       ord: i + 1,
       hasDate: q.date !== null,
+      maxAgeMonths: q.date?.maxAgeMonths ?? null,
       studentOnly: q.studentDataOnly,
       keyEvidence: q.keyEvidence,
       hardStop: q.hardStop,
@@ -144,12 +162,17 @@ describe('the question list is the database list', () => {
 
 describe('the case table gives the same answers from core', () => {
   const ROW =
-    /^\s*\((\d+), '([a-z]+)', '(\{.*\})', '([a-z_]+)', '([a-z_]+)', '([a-z_]+)', '([a-z_,]*)', '([a-z_]+)'\)[,;]$/;
-  const cases = rows(block(PGTAP, '-- VENDOR RISK CASES BEGIN', '-- VENDOR RISK CASES END'), ROW);
+    /^\s*\((\d+), '([a-z]+)', '(\{.*\})', '([a-z_]+)', '([a-z_]+)', '([a-z_]+)', '([a-z_,]*)', '([a-z_,]*)', '([a-z_]+)'\)[,;]$/;
+  const lines = block(PGTAP, '-- VENDOR RISK CASES BEGIN', '-- VENDOR RISK CASES END');
+  const cases = rows(lines, ROW);
+  const DAY = /^-- reviewed on (\d{4}-\d{2}-\d{2})$/;
+  const reviewedOn = lines.map((l) => DAY.exec(l.trim())?.[1]).find(Boolean);
 
-  it('reads the 40 rows the pgTAP file counts', () => {
-    expect(cases.map((m) => Number(m[1]))).toEqual(Array.from({ length: 40 }, (_, i) => i + 1));
-    expect(PGTAP).toContain('(select count(*)::int from vr_cases), 40,');
+  it('reads the 58 rows the pgTAP file counts, and the review day both engines judge them on', () => {
+    expect(cases.map((m) => Number(m[1]))).toEqual(Array.from({ length: 58 }, (_, i) => i + 1));
+    expect(PGTAP).toContain('(select count(*)::int from vr_cases), 58,');
+    expect(reviewedOn).toBe('2026-06-30');
+    expect(PGTAP).toContain(`pg_temp.answers(c.level, c.answers), date '${reviewedOn}')`);
   });
 
   it.each(cases.map((m) => [Number(m[1]), m] as const))('case %i', (_n, m) => {
@@ -157,29 +180,36 @@ describe('the case table gives the same answers from core', () => {
     const e = evaluateVendorRisk(
       level,
       answersFor(level, JSON.parse(m[3]!) as Record<string, string>),
+      { reviewedOn },
     );
     expect({
       startingRisk: e.startingRisk,
       evidence: e.evidence,
       residualRisk: e.residualRisk,
       hardStops: e.hardStops.join(','),
+      outOfDate: e.outOfDate.join(','),
       result: e.result,
     }).toEqual({
       startingRisk: m[4],
       evidence: m[5],
       residualRisk: m[6],
       hardStops: m[7],
-      result: m[8],
+      outOfDate: m[8],
+      result: m[9],
     });
   });
 
-  it('covers every hard stop, every result, every evidence level and every risk level', () => {
+  it('covers every hard stop, every result, every evidence level, every risk level and each date judged', () => {
     const seen = cases.map((m) => ({
       stops: m[7]!.split(',').filter(Boolean),
+      stale: m[8]!.split(',').filter(Boolean),
       evidence: m[5],
       residual: m[6],
-      result: m[8],
+      result: m[9],
     }));
+    expect(new Set(seen.flatMap((s) => s.stale))).toEqual(
+      new Set(VENDOR_RISK_QUESTIONS.filter((q) => q.date?.maxAgeMonths).map((q) => q.key)),
+    );
     expect(new Set(seen.flatMap((s) => s.stops))).toEqual(
       new Set(VENDOR_RISK_QUESTIONS.filter((q) => q.hardStop).map((q) => q.hardStop)),
     );
@@ -267,7 +297,12 @@ describe('the limits and words are the database ones', () => {
     expect(reason).toContain(
       `_supplier_risk_text_ok(p_text, 1, ${VENDOR_RISK_OVERRIDE_REASON_MAX})`,
     );
-    expect(reason).toContain(`>= ${VENDOR_RISK_OVERRIDE_REASON_MIN};`);
+    expect(reason).toContain(
+      `pg_catalog.char_length(pg_catalog.btrim(p_text, E' \\t\\r\\n')) >= ${VENDOR_RISK_OVERRIDE_REASON_MIN}`,
+    );
+    // Not one character repeated: two different ones that are not a space, tab or line break.
+    expect(reason).toMatch(/where c !~ '\[ \\t\\r\\n\]'\) >= 2;/);
+    expect(RULES_SRC).toContain('.size >= 2');
     expect(MIGRATION).toContain(
       `check (public._supplier_risk_text_ok(finding, 1, ${VENDOR_RISK_FINDING_MAX}))`,
     );
@@ -286,6 +321,19 @@ describe('the limits and words are the database ones', () => {
     expect(itemUpdate).toContain(`_supplier_risk_text_ok(p_action, 1, ${VENDOR_RISK_ACTION_MAX})`);
     expect(itemUpdate).toContain(
       `(v_today + interval '${VENDOR_RISK_MAX_YEARS_AHEAD} years')::date`,
+    );
+  });
+
+  it('holds the evidence and result thresholds to the same numbers', () => {
+    const evaluate = sqlFunction('_supplier_risk_evaluate');
+    expect(evaluate).toContain(
+      `pg_catalog.cardinality(v_gaps) > ${VENDOR_RISK_ADEQUATE_MAX_GAPS} then`,
+    );
+    expect(evaluate).toContain(
+      `or pg_catalog.cardinality(v_gaps) > ${VENDOR_RISK_CONDITIONS_MAX_GAPS} then`,
+    );
+    expect(evaluate).toContain(
+      'v_d < (p_review_on - pg_catalog.make_interval(months => v_q.date_max_months))::date',
     );
   });
 
@@ -315,5 +363,52 @@ describe('the limits and words are the database ones', () => {
     );
     for (const w of VENDOR_RISK_ANSWER_PROBLEMS) raised.add(w);
     expect(new Set(Object.keys(VENDOR_RISK_REFUSAL_WORDS))).toEqual(raised);
+  });
+
+  it("names the support seat's refusal as the four writes raise it", () => {
+    const raised = [
+      ...MIGRATION.matchAll(
+        /raise exception '([a-z_]+)' using errcode = '42501', hint = '([a-z_]+)';/g,
+      ),
+    ]
+      .map((m): [string, string] => [m[1]!, m[2]!])
+      .filter(([code]) => code.includes('act_as'));
+    expect(raised).toEqual(Array(4).fill([VENDOR_RISK_ACT_AS_REFUSAL, VENDOR_RISK_ACT_AS_REFUSAL]));
+    expect(VENDOR_RISK_ACT_AS_REFUSAL_WORDS.length).toBeGreaterThan(20);
+  });
+});
+
+describe('the rollback note', () => {
+  const lines = MIGRATION.split('\n');
+  const start = lines.findIndex((l) => l.startsWith('-- ── ROLLBACK'));
+  const note = lines.slice(start);
+  const steps = note.filter((l) => l.startsWith('--   ')).map((l) => l.slice(5));
+
+  it('is one transaction with a short lock wait, and says what the drops lock', () => {
+    expect(start).toBeGreaterThan(0);
+    expect(steps[0]).toBe('begin;');
+    expect(steps[1]).toMatch(/^set local lock_timeout = '\d+ms';$/);
+    expect(steps[steps.length - 1]).toBe('commit;');
+    const words = note.join(' ');
+    expect(words).toContain('ACCESS');
+    expect(words).toContain('EXCLUSIVE');
+    expect(words).toContain('public.organizations');
+    expect(words).toContain('public.user_profiles');
+  });
+
+  it('drops every function and table the migration makes, and nothing else', () => {
+    const made = new Set(
+      [...MIGRATION.matchAll(/^create (function|table) (public\.[a-z_]+)\(?/gm)].map(
+        (m) => `${m[1]} ${m[2]}`,
+      ),
+    );
+    const dropped = new Set(
+      steps
+        .filter((l) => l.startsWith('drop '))
+        .map((l) => /^drop (function|table) if exists (public\.[a-z_]+)/.exec(l))
+        .map((m) => (m ? `${m[1]} ${m[2]}` : 'unreadable')),
+    );
+    expect(dropped).toEqual(made);
+    expect(steps.filter((l) => l.startsWith('drop ')).length).toBe(made.size);
   });
 });

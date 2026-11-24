@@ -12,14 +12,20 @@
  * VENDOR RISK CASES markers) is run against both: vendor-risk.parity.test.ts
  * here, the pgTAP file there.
  *
- * THE RULES (VENDOR_RISK_RULES_TEXT says them in words for the page):
+ * THE RULES, version 1 (VENDOR_RISK_RULES_TEXT says them in words for the
+ * page). The rules are versioned: a stored review keeps the rules version it
+ * was judged under, and the database holds every stored final to it.
  *   - Asked: with "No data of ours", nothing; with staff contact details, the
  *     nine questions of the first three groups; with student data, all
  *     fourteen.
- *   - Gap: an asked question answered No or Not shown to us. Not shown never
- *     counts as a pass. (A preview of an unfinished review counts an
- *     unanswered question as Not shown; the database stores a result only for
- *     a finished review, with every asked question answered.)
+ *   - Out of date: a Yes to the security report or to insurance whose date is
+ *     more than 12 months before the review counts as Not shown to us, and
+ *     its item says it is out of date. A Yes with no date is not judged.
+ *   - Gap: an asked question answered No or Not shown to us (out of date
+ *     included). Not shown never counts as a pass. (A preview of an
+ *     unfinished review counts an unanswered question as Not shown; the
+ *     database stores a result only for a finished review, with every asked
+ *     question answered.)
  *   - Starting risk, from the level: none Low, staff Moderate, student High.
  *   - Evidence: not needed when nothing is asked; else, first that holds:
  *       not enough to judge: a key paper (data agreement, breach notice time,
@@ -28,17 +34,21 @@
  *       weak: a key paper is No, or there are three gaps or more;
  *       adequate: one or two gaps;
  *       strong: no gap.
- *   - Hard stops, with student data only: no signed data agreement; no breach
- *     notice time; the contract does not forbid sale or advertising; it does
- *     not forbid AI training. Each is a No; the same question Not shown is a
- *     hard stop not yet ruled out.
+ *   - Hard stops, with student data only (the design names "no breach notice"
+ *     with no condition; here none applies without student data): no signed
+ *     data agreement; no breach notice time; the three school-official
+ *     conditions (direct control, use only for the service, no passing on);
+ *     the contract does not forbid sale or advertising; it does not forbid AI
+ *     training. Each is a No; the same question Not shown is a hard stop not
+ *     yet ruled out. Every question of the Student data group is one of them,
+ *     so Not shown on any of those is More information needed.
  *   - Risk left: High with a hard stop; else Low when the evidence is strong
  *     or not needed; one step below the starting risk when adequate; the
  *     starting risk when weak or not enough to judge.
  *   - Result, first that holds: a hard stop, Do not use; a hard stop not yet
- *     ruled out, or evidence not enough to judge, More information needed; no
- *     gap, Approve; else Approve with conditions (the items are the
- *     conditions).
+ *     ruled out, evidence not enough to judge, or more than three gaps, More
+ *     information needed; no gap (every asked answer Yes), Approve; else
+ *     Approve with conditions (the items are the conditions).
  *
  * Pure: no I/O, no clock. Dates are 'YYYY-MM-DD' strings in the
  * organization's own zone, worked out by the caller.
@@ -46,6 +56,7 @@
 
 import {
   isVendorRiskAnswer,
+  type VendorRiskItemAnswer,
   isVendorRiskDataLevel,
   VENDOR_RISK_QUESTIONS,
   VENDOR_RISK_RULES_VERSION,
@@ -100,6 +111,8 @@ export const VENDOR_RISK_STARTING_RISK: Readonly<Record<VendorRiskDataLevel, Ven
 
 /** At most this many gaps, none of them a key paper, is "adequate". */
 export const VENDOR_RISK_ADEQUATE_MAX_GAPS = 2;
+/** More gaps than this can never be "Approve with conditions" (it is More information needed, or Do not use). */
+export const VENDOR_RISK_CONDITIONS_MAX_GAPS = 3;
 
 /** The default time to the next review, by level: 12 months, sooner for student data. */
 export const VENDOR_RISK_NEXT_REVIEW_MONTHS: Readonly<Record<VendorRiskDataLevel, number>> = {
@@ -115,7 +128,7 @@ export const VENDOR_RISK_REMINDER_DAYS_BEFORE = 30;
 
 /** Text limits, the database's own (0481's CHECKs and functions). */
 export const VENDOR_RISK_NOTE_MAX = 1000;
-export const VENDOR_RISK_OVERRIDE_REASON_MIN = 10;
+export const VENDOR_RISK_OVERRIDE_REASON_MIN = 20;
 export const VENDOR_RISK_OVERRIDE_REASON_MAX = 2000;
 export const VENDOR_RISK_FINDING_MAX = 500;
 export const VENDOR_RISK_ACTION_MAX = 1000;
@@ -138,7 +151,7 @@ export type VendorRiskAnswers = Partial<Record<VendorRiskQuestionKey, VendorRisk
 /** An item a gap makes, as suggested (the admin may change the action, and adds the owner and due date). */
 export interface VendorRiskItemSuggestion {
   questionKey: VendorRiskQuestionKey;
-  answer: 'no' | 'not_shown';
+  answer: VendorRiskItemAnswer;
   severity: VendorRiskSeverity;
   finding: string;
   action: string;
@@ -152,8 +165,10 @@ export interface VendorRiskEvaluation {
   /** Asked and not answered yet (counted as Not shown). */
   missing: VendorRiskQuestionKey[];
   complete: boolean;
-  /** Asked and answered No or Not shown (or not answered), in order. */
+  /** Asked and answered No or Not shown (or not answered, or out of date), in order. */
   gaps: VendorRiskQuestionKey[];
+  /** Answered Yes with a date too long before the review: counted as Not shown, in order. */
+  outOfDate: VendorRiskQuestionKey[];
   notShownCount: number;
   startingRisk: VendorRiskRiskLevel;
   evidence: VendorRiskEvidence;
@@ -180,6 +195,26 @@ function answerOf(
   return isVendorRiskAnswer(a) ? a : null;
 }
 
+/** The date given beside an answer when it is a real calendar date, else null. */
+function dateOf(
+  answers: VendorRiskAnswers | null | undefined,
+  key: VendorRiskQuestionKey,
+): string | null {
+  const entry = answers?.[key] as unknown;
+  if (entry === null || typeof entry !== 'object') return null;
+  const d = (entry as { date?: unknown }).date;
+  return typeof d === 'string' && parseVendorRiskDate(d) ? d : null;
+}
+
+export interface VendorRiskEvaluateOptions {
+  /**
+   * The day of the review, 'YYYY-MM-DD' in the organization's zone (for a
+   * finished review, the day it was finished). The dates beside the answers
+   * are judged against it; without it they are not judged.
+   */
+  reviewedOn?: string | null;
+}
+
 const RISK_STEP_DOWN: Readonly<Record<VendorRiskRiskLevel, VendorRiskRiskLevel>> = {
   high: 'moderate',
   moderate: 'low',
@@ -193,13 +228,19 @@ const RISK_STEP_DOWN: Readonly<Record<VendorRiskRiskLevel, VendorRiskRiskLevel>>
 export function evaluateVendorRisk(
   level: VendorRiskDataLevel,
   answers: VendorRiskAnswers | null | undefined,
+  options: VendorRiskEvaluateOptions = {},
 ): VendorRiskEvaluation {
   const asked = vendorRiskQuestionsFor(level);
   const missing: VendorRiskQuestionKey[] = [];
   const gaps: VendorRiskQuestionKey[] = [];
+  const outOfDate: VendorRiskQuestionKey[] = [];
   const hardStops: VendorRiskHardStop[] = [];
   const pendingHardStops: VendorRiskHardStop[] = [];
   const items: VendorRiskItemSuggestion[] = [];
+  const reviewedOn = options.reviewedOn ?? null;
+  if (reviewedOn !== null && !parseVendorRiskDate(reviewedOn)) {
+    throw new RangeError(`not a date: ${reviewedOn}`);
+  }
   let notShown = 0;
   let keyNotShown = false;
   let keyNo = false;
@@ -208,7 +249,16 @@ export function evaluateVendorRisk(
     const given = answerOf(answers, q.key);
     if (given === null) missing.push(q.key);
     // Not answered counts as Not shown: never as a pass.
-    const a: VendorRiskAnswer = given ?? 'not_shown';
+    let a: VendorRiskAnswer = given ?? 'not_shown';
+    let stale = false;
+    if (a === 'yes' && q.date?.maxAgeMonths && reviewedOn !== null) {
+      const d = dateOf(answers, q.key);
+      if (d !== null && d < addVendorRiskMonths(reviewedOn, -q.date.maxAgeMonths)) {
+        a = 'not_shown';
+        stale = true;
+        outOfDate.push(q.key);
+      }
+    }
     if (a === 'yes') continue;
     gaps.push(q.key);
     if (a === 'not_shown') {
@@ -223,10 +273,10 @@ export function evaluateVendorRisk(
     const severity = level === 'student' ? q.severity.student : q.severity.staff;
     items.push({
       questionKey: q.key,
-      answer: a,
+      answer: stale ? 'out_of_date' : a,
       // A question asked at this level always has a severity for it.
       severity: severity ?? q.severity.student,
-      finding: q.finding[a],
+      finding: stale ? (q.finding.out_of_date ?? q.finding.not_shown) : q.finding[a],
       action: q.action,
     });
   }
@@ -248,7 +298,12 @@ export function evaluateVendorRisk(
 
   let result: VendorRiskResult;
   if (hardStops.length > 0) result = 'do_not_use';
-  else if (pendingHardStops.length > 0 || evidence === 'insufficient') result = 'more_information';
+  else if (
+    pendingHardStops.length > 0 ||
+    evidence === 'insufficient' ||
+    gaps.length > VENDOR_RISK_CONDITIONS_MAX_GAPS
+  )
+    result = 'more_information';
   else if (gaps.length === 0) result = 'approve';
   else result = 'approve_with_conditions';
 
@@ -259,6 +314,7 @@ export function evaluateVendorRisk(
     missing,
     complete: missing.length === 0,
     gaps,
+    outOfDate,
     notShownCount: notShown,
     startingRisk,
     evidence,
@@ -282,8 +338,11 @@ export function vendorRiskResultInForce(
 export function vendorRiskFollowUps(
   level: VendorRiskDataLevel,
   answers: VendorRiskAnswers | null | undefined,
+  options: VendorRiskEvaluateOptions = {},
 ): string[] {
-  return evaluateVendorRisk(level, answers).gaps.map((k) => vendorRiskQuestion(k)!.followUp);
+  return evaluateVendorRisk(level, answers, options).gaps.map(
+    (k) => vendorRiskQuestion(k)!.followUp,
+  );
 }
 
 /**
@@ -295,8 +354,9 @@ export function vendorRiskFollowUpEmail(
   supplierName: string,
   level: VendorRiskDataLevel,
   answers: VendorRiskAnswers | null | undefined,
+  options: VendorRiskEvaluateOptions = {},
 ): string | null {
-  const asks = vendorRiskFollowUps(level, answers);
+  const asks = vendorRiskFollowUps(level, answers, options);
   if (asks.length === 0) return null;
   const name = supplierName.trim() || 'your company';
   return [
@@ -414,13 +474,20 @@ export function vendorRiskTextOk(text: unknown, min: number, max: number): boole
   return !FORBIDDEN_CHARS.test(text);
 }
 
-/** The override reason: 10 to 2000 characters, at least 10 once spaces and line breaks at the ends are trimmed. */
+/**
+ * A reason (an override's, or a risk accepted): the text rule with 1 to 2000
+ * characters, at least 20 once spaces, tabs and line breaks at the ends are
+ * trimmed, and not one character repeated (at least two different characters
+ * that are not a space, tab or line break).
+ */
 export function vendorRiskOverrideReasonOk(text: unknown): boolean {
   if (!vendorRiskTextOk(text, 1, VENDOR_RISK_OVERRIDE_REASON_MAX)) return false;
-  return (
-    Array.from((text as string).replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')).length >=
-    VENDOR_RISK_OVERRIDE_REASON_MIN
-  );
+  const t = text as string;
+  if (
+    Array.from(t.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')).length < VENDOR_RISK_OVERRIDE_REASON_MIN
+  )
+    return false;
+  return new Set(Array.from(t).filter((c) => !/[ \t\r\n]/.test(c))).size >= 2;
 }
 
 export const VENDOR_RISK_ANSWER_PROBLEMS = [

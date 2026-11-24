@@ -61,11 +61,22 @@ export const VENDOR_RISK_RULES_TEXT: readonly string[] = [
   'A gap is a question answered No or Not shown to us. Not shown to us is never counted as Yes.',
   'Starting risk comes from what they hold: Low with no data of ours, Moderate with staff contact details, High with student data.',
   `Evidence is Not enough to judge when a key paper (${VENDOR_RISK_KEY_PAPERS_WORDS}) was not shown to us, or more than half the answers were not shown to us; Weak when a key paper is No or there are three gaps or more; Adequate with one or two gaps; Strong with none.`,
-  'With student data, four answers stop the review on their own: no signed data agreement; no time for telling us about a breach; a contract that does not forbid selling student data or using it for advertising; a contract that does not forbid using it to train AI.',
-  'Risk left is High when one of those applies; Low when the evidence is Strong; one step below the starting risk when it is Adequate; the starting risk otherwise.',
-  'The result is Do not use when one of those four applies; More information needed when one of them was not shown to us, or the evidence is Not enough to judge; Approve with no gap; Approve with conditions otherwise, and the items are the conditions.',
-  'You can set a different result. Write down why: the reason is kept with the review.',
+  'A security report or proof of insurance dated more than 12 months before the review counts as Not shown to us (out of date), and its item says so.',
+  'With student data, seven answers stop the review on their own: no signed data agreement; no time for telling us about a breach; a contract that does not keep student data under our direct control, does not limit its use to the service we buy, or does not forbid passing it on without our permission; a contract that does not forbid selling student data or using it for advertising; a contract that does not forbid using it to train AI.',
+  'Risk left is High when one of those applies; Low when the evidence is Strong or not needed; one step below the starting risk when it is Adequate; the starting risk otherwise.',
+  'The result is Do not use when one of those seven applies; More information needed when one of them was not shown to us (so any Student data question not shown to us), the evidence is Not enough to judge, or there are more than three gaps; Approve only when every answer is Yes; Approve with conditions otherwise, and the items are the conditions.',
+  'You can set a different result. Write down why, in at least 20 characters: the reason is kept with the review.',
+  'The rules are versioned: a review keeps the rules version it was judged under.',
 ];
+
+/**
+ * A support (act-as) session may read the reviews but never write one: the
+ * database refuses its saves, finishes, overrides and item changes with 42501
+ * and this code as the message and the hint.
+ */
+export const VENDOR_RISK_ACT_AS_REFUSAL = 'supplier_risk_act_as_read_only' as const;
+export const VENDOR_RISK_ACT_AS_REFUSAL_WORDS =
+  'A support session can read vendor reviews but cannot change them. Ask an owner or admin of this workspace.';
 
 /** The honest limits, written on the page. */
 export const VENDOR_RISK_LIMITS: readonly string[] = [
@@ -92,7 +103,8 @@ export type VendorRiskRefusal =
   | 'bad_item'
   | 'bad_item_text'
   | 'items_do_not_match_answers'
-  | 'item_owner_not_a_member'
+  | 'item_owner_not_an_admin'
+  | 'bad_item_reason'
   | 'bad_item_due_on'
   | 'bad_item_status'
   | 'item_not_found'
@@ -116,12 +128,14 @@ export const VENDOR_RISK_REFUSAL_WORDS: Readonly<Record<VendorRiskRefusal, strin
   bad_next_review_on: 'The next review must be after today and within three years.',
   bad_override: 'Choose a different result from the one the rules give, or none.',
   bad_override_reason:
-    'Write why you set a different result: 10 to 2,000 characters of plain text.',
+    'Write why you set a different result: 20 to 2,000 characters of plain text, not one character repeated.',
   items_not_an_array: 'The items could not be read. Reload the page and try again.',
   bad_item: 'One item could not be read. Reload the page and try again.',
   bad_item_text: 'A finding must be 1 to 500 characters and an action 1 to 1,000, in plain text.',
   items_do_not_match_answers: 'The items do not match the answers. Reload the page and try again.',
-  item_owner_not_a_member: 'An item owner must be a current member of this workspace.',
+  item_owner_not_an_admin: 'An item owner must be a current owner or admin of this workspace.',
+  bad_item_reason:
+    'Write why the risk is accepted: 20 to 2,000 characters of plain text, not one character repeated. A reason goes only with Risk accepted.',
   bad_item_due_on: 'A due date must be today or later, and within three years.',
   bad_item_status: 'Choose Open, In progress, Done or Risk accepted.',
   item_not_found: 'This item was not found in this workspace.',

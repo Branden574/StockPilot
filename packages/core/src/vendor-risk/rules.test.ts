@@ -85,15 +85,22 @@ describe('the question list', () => {
     for (const q of VENDOR_RISK_QUESTIONS) expect(q.studentDataOnly).toBe(q.group === 'student');
   });
 
-  it('has four hard stops, three key papers and three dates', () => {
+  it('has seven hard stops, three key papers and three dates, two of them judged', () => {
     expect(VENDOR_RISK_QUESTIONS.filter((q) => q.hardStop).map((q) => [q.key, q.hardStop])).toEqual(
       [
         ['data_agreement', 'student_data_no_agreement'],
         ['breach_notice', 'student_data_no_breach_notice'],
+        ['direct_control', 'student_data_no_direct_control'],
+        ['purpose_only', 'student_data_no_purpose_limit'],
+        ['no_redisclosure', 'student_data_redisclosure'],
         ['no_sale_or_ads', 'student_data_sale_or_ads'],
         ['no_ai_training', 'student_data_ai_training'],
       ],
     );
+    // Every question of the Student data group is a hard-stop question, so Not
+    // shown on any of them is a hard stop not yet ruled out (More information).
+    for (const q of VENDOR_RISK_QUESTIONS.filter((x) => x.group === 'student'))
+      expect(q.hardStop, q.key).not.toBeNull();
     expect(VENDOR_RISK_QUESTIONS.filter((q) => q.hardStop).map((q) => q.hardStop)).toEqual([
       ...VENDOR_RISK_HARD_STOPS,
     ]);
@@ -106,6 +113,16 @@ describe('the question list', () => {
       'data_agreement',
       'security_report',
       'insurance',
+    ]);
+    expect(
+      VENDOR_RISK_QUESTIONS.filter((q) => q.date?.maxAgeMonths).map((q) => [
+        q.key,
+        q.date!.maxAgeMonths,
+        Boolean(q.finding.out_of_date),
+      ]),
+    ).toEqual([
+      ['security_report', 12, true],
+      ['insurance', 12, true],
     ]);
   });
 
@@ -143,11 +160,6 @@ describe('the rules', () => {
       { insurance: 'no', hosting_known: 'not_shown' },
       'moderate adequate low  approve_with_conditions',
     ],
-    [
-      'student',
-      { direct_control: 'no', purpose_only: 'no' },
-      'high adequate moderate  approve_with_conditions',
-    ],
     // Three gaps: weak, the starting risk stays.
     [
       'staff',
@@ -156,8 +168,24 @@ describe('the rules', () => {
     ],
     [
       'student',
-      { insurance: 'no', data_listed: 'not_shown', direct_control: 'no' },
+      { insurance: 'no', data_listed: 'not_shown', return_or_delete: 'no' },
       'high weak high  approve_with_conditions',
+    ],
+    // More than three gaps is never Approve with conditions: four is More information.
+    [
+      'staff',
+      { insurance: 'no', hosting_known: 'no', data_listed: 'no', data_we_send: 'no' },
+      'moderate weak moderate  more_information',
+    ],
+    [
+      'staff',
+      { insurance: 'no', hosting_known: 'not_shown', data_listed: 'no', data_we_send: 'not_shown' },
+      'moderate weak moderate  more_information',
+    ],
+    [
+      'student',
+      { insurance: 'no', hosting_known: 'no', data_listed: 'no', return_or_delete: 'no' },
+      'high weak high  more_information',
     ],
     // A key paper No: weak even with one gap; Not shown: not enough to judge.
     ['staff', { security_report: 'no' }, 'moderate weak moderate  approve_with_conditions'],
@@ -173,7 +201,7 @@ describe('the rules', () => {
         hosting_known: 'not_shown',
         return_or_delete: 'not_shown',
       },
-      'moderate weak moderate  approve_with_conditions',
+      'moderate weak moderate  more_information',
     ],
     [
       'staff',
@@ -197,7 +225,7 @@ describe('the rules', () => {
         insurance: 'not_shown',
         direct_control: 'not_shown',
       },
-      'high weak high  approve_with_conditions',
+      'high weak high  more_information',
     ],
     [
       'student',
@@ -213,15 +241,48 @@ describe('the rules', () => {
       },
       'high insufficient high  more_information',
     ],
-    // Every hard stop, alone; all four together, in question order.
+    // Every hard stop, alone; all seven together, in question order.
     ['student', { data_agreement: 'no' }, 'high weak high student_data_no_agreement do_not_use'],
     ['student', { breach_notice: 'no' }, 'high weak high student_data_no_breach_notice do_not_use'],
+    [
+      'student',
+      { direct_control: 'no' },
+      'high adequate high student_data_no_direct_control do_not_use',
+    ],
+    [
+      'student',
+      { purpose_only: 'no' },
+      'high adequate high student_data_no_purpose_limit do_not_use',
+    ],
+    [
+      'student',
+      { no_redisclosure: 'no' },
+      'high adequate high student_data_redisclosure do_not_use',
+    ],
+    [
+      'student',
+      { direct_control: 'no', purpose_only: 'no' },
+      'high adequate high student_data_no_direct_control,student_data_no_purpose_limit do_not_use',
+    ],
     ['student', { no_sale_or_ads: 'no' }, 'high adequate high student_data_sale_or_ads do_not_use'],
     ['student', { no_ai_training: 'no' }, 'high adequate high student_data_ai_training do_not_use'],
     [
       'student',
       { no_ai_training: 'no', breach_notice: 'no', no_sale_or_ads: 'no', data_agreement: 'no' },
       'high weak high student_data_no_agreement,student_data_no_breach_notice,student_data_sale_or_ads,student_data_ai_training do_not_use',
+    ],
+    [
+      'student',
+      {
+        no_ai_training: 'no',
+        breach_notice: 'no',
+        no_sale_or_ads: 'no',
+        data_agreement: 'no',
+        no_redisclosure: 'no',
+        purpose_only: 'no',
+        direct_control: 'no',
+      },
+      'high weak high student_data_no_agreement,student_data_no_breach_notice,student_data_no_direct_control,student_data_no_purpose_limit,student_data_redisclosure,student_data_sale_or_ads,student_data_ai_training do_not_use',
     ],
     // A hard stop wins over a pending one and over not enough to judge.
     [
@@ -234,8 +295,11 @@ describe('the rules', () => {
       { no_ai_training: 'no', security_report: 'not_shown' },
       'high insufficient high student_data_ai_training do_not_use',
     ],
-    // A hard-stop question Not shown: not yet ruled out.
+    // A hard-stop question Not shown: not yet ruled out (so any Student data question Not shown).
     ['student', { no_sale_or_ads: 'not_shown' }, 'high adequate moderate  more_information'],
+    ['student', { direct_control: 'not_shown' }, 'high adequate moderate  more_information'],
+    ['student', { purpose_only: 'not_shown' }, 'high adequate moderate  more_information'],
+    ['student', { no_redisclosure: 'not_shown' }, 'high adequate moderate  more_information'],
     ['student', { data_agreement: 'not_shown' }, 'high insufficient high  more_information'],
     // The same answers with staff contact details make no hard stop.
     [
@@ -358,6 +422,120 @@ describe('the rules', () => {
   });
 });
 
+describe('the dates beside the answers', () => {
+  // The review is on 2026-06-30: 12 months before is 2025-06-30.
+  const on = { reviewedOn: '2026-06-30' };
+  const dated = (level: VendorRiskDataLevel, key: VendorRiskQuestionKey, date: string) => ({
+    ...answers(level),
+    [key]: { answer: 'yes' as const, date },
+  });
+
+  it('counts a security report or insurance dated more than 12 months before the review as Not shown, and the item says it is out of date', () => {
+    const report = evaluateVendorRisk('staff', dated('staff', 'security_report', '2025-06-29'), on);
+    expect(brief(report)).toBe('moderate insufficient moderate  more_information');
+    expect(report.outOfDate).toEqual(['security_report']);
+    expect(report.items).toEqual([
+      expect.objectContaining({
+        questionKey: 'security_report',
+        answer: 'out_of_date',
+        severity: 'medium',
+        finding: VENDOR_RISK_QUESTIONS.find((q) => q.key === 'security_report')!.finding
+          .out_of_date,
+      }),
+    ]);
+    const cover = evaluateVendorRisk('staff', dated('staff', 'insurance', '2025-06-29'), on);
+    expect(brief(cover)).toBe('moderate adequate low  approve_with_conditions');
+    expect(cover.items.map((i) => [i.questionKey, i.answer])).toEqual([
+      ['insurance', 'out_of_date'],
+    ]);
+    const student = evaluateVendorRisk('student', dated('student', 'insurance', '2001-01-01'), on);
+    expect(brief(student)).toBe('high adequate moderate  approve_with_conditions');
+  });
+
+  it('keeps a date exactly 12 months before, a later one, and no date as Yes', () => {
+    for (const d of ['2025-06-30', '2026-06-30', '2027-01-01']) {
+      expect(brief(evaluateVendorRisk('staff', dated('staff', 'security_report', d), on)), d).toBe(
+        'moderate strong low  approve',
+      );
+      expect(brief(evaluateVendorRisk('staff', dated('staff', 'insurance', d), on)), d).toBe(
+        'moderate strong low  approve',
+      );
+    }
+    expect(evaluateVendorRisk('staff', answers('staff'), on).outOfDate).toEqual([]);
+  });
+
+  it('judges no other date, and no date without the day of the review', () => {
+    expect(
+      brief(evaluateVendorRisk('staff', dated('staff', 'data_agreement', '2001-01-01'), on)),
+    ).toBe('moderate strong low  approve');
+    expect(
+      brief(evaluateVendorRisk('staff', dated('staff', 'security_report', '2001-01-01'))),
+    ).toBe('moderate strong low  approve');
+    // A No stays a No whatever its date.
+    const no = { ...answers('staff'), insurance: { answer: 'no' as const, date: '2001-01-01' } };
+    expect(evaluateVendorRisk('staff', no, on).items.map((i) => i.answer)).toEqual(['no']);
+    expect(() =>
+      evaluateVendorRisk('staff', answers('staff'), { reviewedOn: '2026-02-30' }),
+    ).toThrow(RangeError);
+  });
+
+  it("takes 12 months back as Postgres does (the month's last day): a review on 2028-02-29", () => {
+    const leap = { reviewedOn: '2028-02-29' };
+    expect(
+      evaluateVendorRisk('staff', dated('staff', 'insurance', '2027-02-28'), leap).result,
+    ).toBe('approve');
+    expect(
+      evaluateVendorRisk('staff', dated('staff', 'insurance', '2027-02-27'), leap).result,
+    ).toBe('approve_with_conditions');
+  });
+
+  it('asks the vendor again for an out-of-date report', () => {
+    expect(
+      vendorRiskFollowUps('staff', dated('staff', 'security_report', '2020-01-01'), on),
+    ).toEqual([VENDOR_RISK_QUESTIONS.find((q) => q.key === 'security_report')!.followUp]);
+  });
+});
+
+describe('with student data, over every answer set (3^14 = 4,782,969)', () => {
+  it('a hard-stop question that is not Yes is never Approve or Approve with conditions; any gap is never Approve; more than three gaps never Approve with conditions', () => {
+    const asked = vendorRiskQuestionsFor('student');
+    const stopAt = asked.map((q) => q.hardStop !== null);
+    const VALUES = VENDOR_RISK_ANSWERS;
+    const digits = new Array<number>(asked.length).fill(0);
+    const a: Record<string, { answer: VendorRiskAnswer }> = {};
+    for (const q of asked) a[q.key] = { answer: 'yes' };
+    let bad = 0;
+    let n = 0;
+    for (;;) {
+      const e = evaluateVendorRisk('student', a as VendorRiskAnswers);
+      let stopNotYes = false;
+      let gaps = 0;
+      for (let i = 0; i < digits.length; i += 1) {
+        if (digits[i] !== 0) {
+          gaps += 1;
+          if (stopAt[i]) stopNotYes = true;
+        }
+      }
+      if (stopNotYes && (e.result === 'approve' || e.result === 'approve_with_conditions'))
+        bad += 1;
+      if (gaps > 0 && e.result === 'approve') bad += 1;
+      if (gaps > 3 && e.result === 'approve_with_conditions') bad += 1;
+      n += 1;
+      let i = 0;
+      while (i < digits.length && digits[i] === 2) {
+        digits[i] = 0;
+        a[asked[i]!.key] = { answer: VALUES[0] };
+        i += 1;
+      }
+      if (i === digits.length) break;
+      digits[i] = digits[i]! + 1;
+      a[asked[i]!.key] = { answer: VALUES[digits[i]!]! };
+    }
+    expect(n).toBe(3 ** 14);
+    expect(bad).toBe(0);
+  }, 120_000);
+});
+
 describe('the follow-up questions', () => {
   it('asks one question for each gap, in question order, and nothing when there is none', () => {
     const a = answers('staff', { insurance: 'no', hosting_known: 'not_shown' });
@@ -451,12 +629,15 @@ describe('what the database refuses', () => {
     expect(vendorRiskTextOk('\u{10400}'.repeat(20), 1, 20)).toBe(true);
   });
 
-  it('holds an override reason to 10 to 2000 characters once the ends are trimmed', () => {
-    expect(vendorRiskOverrideReasonOk('Vendor fixed it.')).toBe(true);
-    expect(vendorRiskOverrideReasonOk('Too short')).toBe(false);
-    expect(vendorRiskOverrideReasonOk('   Too short   ')).toBe(false);
-    expect(vendorRiskOverrideReasonOk('y'.repeat(2000))).toBe(true);
-    expect(vendorRiskOverrideReasonOk('y'.repeat(2001))).toBe(false);
+  it('holds a reason to 20 to 2000 characters once the ends are trimmed, and not one character repeated', () => {
+    expect(vendorRiskOverrideReasonOk('The vendor fixed it.')).toBe(true);
+    expect(vendorRiskOverrideReasonOk('The vendor fixed it')).toBe(false);
+    expect(vendorRiskOverrideReasonOk('   The vendor fixed it   ')).toBe(false);
+    expect(vendorRiskOverrideReasonOk('xy'.repeat(1000))).toBe(true);
+    expect(vendorRiskOverrideReasonOk('xy'.repeat(1000) + 'z')).toBe(false);
+    expect(vendorRiskOverrideReasonOk('a'.repeat(20))).toBe(false);
+    expect(vendorRiskOverrideReasonOk('aaaa aaaa aaaa aaaa aaaa')).toBe(false);
+    expect(vendorRiskOverrideReasonOk('aaaa aaaa\taaaa\naaaa aaab')).toBe(true);
     expect(vendorRiskOverrideReasonOk(null)).toBe(false);
   });
 

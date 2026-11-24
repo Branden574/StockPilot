@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 416 foreign keys, 9 junctions, 35 ambiguous pairs.
+-- 418 foreign keys, 9 junctions, 36 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -421,6 +421,8 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('stock_reservations', 'stock_reservations_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('stock_reservations', 'stock_reservations_rental_id_fkey', 'rentals', 'rental_id', 'id'),
   ('stock_reservations', 'stock_reservations_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
+  ('supplier_risk_items', 'supplier_risk_items_accepted_by_fkey', 'user_profiles', 'accepted_by', 'id'),
+  ('supplier_risk_items', 'supplier_risk_items_changed_by_fkey', 'user_profiles', 'changed_by', 'id'),
   ('supplier_risk_items', 'supplier_risk_items_owner_user_id_fkey', 'user_profiles', 'owner_user_id', 'id'),
   ('supplier_risk_items', 'supplier_risk_items_review_fkey', 'supplier_risk_reviews', 'organization_id,review_id', 'organization_id,id'),
   ('supplier_risk_reviews', 'supplier_risk_reviews_organization_id_fkey', 'organizations', 'organization_id', 'id'),
@@ -504,6 +506,7 @@ insert into expected_pairs (a, b, relationships) values
   ('returns', 'user_profiles', 'returns_approved_by_fkey,returns_closed_by_fkey,returns_denied_by_fkey,returns_received_by_fkey,returns_requested_by_fkey'),
   ('schedule_events', 'warehouses', 'schedule_events_bundle_warehouse_id_fkey,schedule_events_warehouse_id_fkey'),
   ('size_count_sessions', 'user_profiles', 'size_count_sessions_canceled_by_fkey,size_count_sessions_completed_by_fkey,size_count_sessions_started_by_fkey'),
+  ('supplier_risk_items', 'user_profiles', 'supplier_risk_items_accepted_by_fkey,supplier_risk_items_changed_by_fkey,supplier_risk_items_owner_user_id_fkey'),
   ('uom_conversions', 'user_profiles', 'uom_conversions_approved_by_fkey,uom_conversions_created_by_fkey'),
   ('user_category_assignments', 'user_profiles', 'user_category_assignments_assigned_by_fkey,user_category_assignments_user_id_fkey'),
   ('user_permission_overrides', 'user_profiles', 'user_permission_overrides_updated_by_fkey,user_permission_overrides_user_id_fkey'),

@@ -3,7 +3,10 @@
 # Two-session checks of the vendor risk reviews
 # (supabase/migrations/*_supplier_risk_reviews.sql). The daily job claims a
 # reminder by stamping it first (supplier_risk_reminder_claim: a guarded
-# UPDATE under READ COMMITTED, a lock wait ends after 2 s); the admins'
+# UPDATE under READ COMMITTED, a lock wait ends after 2 s), offers a due
+# reminder never confirmed once more 24 hours on (the same function's second
+# guarded UPDATE) and confirms what it sent (supplier_risk_due_reminder_sent,
+# one guarded UPDATE); the admins'
 # writes take one advisory lock for the supplier (a wait ends after 5 s).
 # Two job runs that overlap must send each reminder once, and two admins
 # finishing the same supplier's review at once must still leave one current
@@ -29,7 +32,17 @@
 #   7. Ten finishes and ten draft saves of one supplier at once: no error;
 #      the versions run 1 to N with no gap, one current (the newest final),
 #      at most one draft and then the newest version.
-#   8. No session anywhere met a deadlock or a serialization failure.
+#   8. Twenty sessions make the second claim of one due reminder first
+#      claimed 25 hours ago and never confirmed, at once: one true,
+#      nineteen false; the second stamp is set beside the first, and the
+#      review leaves the job's list.
+#   9. Twenty sessions confirm one due reminder as sent, at once: one true,
+#      nineteen false; the confirmation is stamped once.
+#  10. Ten second claims and ten confirmations of one due reminder first
+#      claimed 25 hours ago, at once: no error; one confirmation true; at
+#      most one second claim true, and a second stamp exactly when one was;
+#      the reminder ends confirmed.
+#  11. No session anywhere met a deadlock or a serialization failure.
 #
 # LOCAL stack only (docker container supabase_db_stockpilot by default;
 # CONTAINER=<name> for another local stack, the migration scratch stack is
@@ -57,10 +70,16 @@ S4="$NS-0000000000e4"
 S5="$NS-0000000000e5"
 S6="$NS-0000000000e6"
 S7="$NS-0000000000e7"
+S8="$NS-0000000000e8"
+S9="$NS-0000000000e9"
+S10="$NS-0000000000ea"
 R1="$NS-0000000000f1"
 R2="$NS-0000000000f2"
 R3="$NS-0000000000f3"
 R5="$NS-0000000000f5"
+R8="$NS-0000000000f8"
+R9="$NS-0000000000f9"
+R10="$NS-0000000000fa"
 
 FAILS=0
 ok()   { printf 'ok     %s\n' "$*"; }
@@ -116,20 +135,23 @@ YES="$(q "select jsonb_object_agg(q.key, jsonb_build_object('answer', 'yes'))
 case "$YES" in '{"'*) ;; *) echo "could not read the question list: $YES"; exit 1 ;; esac
 
 # A final, current review written straight into the table (as the reminders
-# need dates the functions would not take): next review on today + $2 days,
-# finished $3 days ago.
-final_sql() { # final_sql <review id> <supplier id> <days to next review> <days since finished>
+# need dates the functions would not take): next review on today + $3 days,
+# finished $4 days ago (the organization's zone is UTC), and when $5 is
+# given, its due reminder first claimed $5 hours ago.
+final_sql() { # final_sql <review id> <supplier id> <days to next review> <days since finished> [<hours since claimed>]
+  local due="null"
+  if [ -n "${5:-}" ]; then due="now() - interval '$5 hours'"; fi
   printf "insert into public.supplier_risk_reviews
     (id, organization_id, supplier_id, supplier_name, version, status, is_current, data_level, answers,
      starting_risk, evidence, residual_risk, hard_stops, computed_result, reviewer_id, reviewer_name,
-     reviewed_at, next_review_on)
+     reviewed_at, reviewed_on, next_review_on, reminded_due_at)
   select '%s', '%s', '%s', 'Race fixture', 1, 'final', true, 'staff', a.ans,
          e ->> 'starting_risk', e ->> 'evidence', e ->> 'residual_risk',
          array(select jsonb_array_elements_text(e -> 'hard_stops')), e ->> 'result',
-         null, 'Made-up Reviewer', now() - interval '%s days', (now() at time zone 'UTC')::date + %s
-    from (select '%s'::jsonb as ans) a,
-         lateral public._supplier_risk_evaluate(1::smallint, 'staff', a.ans) e;\n" \
-    "$1" "$ORG" "$2" "$4" "$3" "$YES"
+         null, 'Made-up Reviewer', now() - interval '%s days', a.day, (now() at time zone 'UTC')::date + %s, %s
+    from (select '%s'::jsonb as ans, ((now() - interval '%s days') at time zone 'UTC')::date as day) a,
+         lateral public._supplier_risk_evaluate(1::smallint, 'staff', a.ans, a.day) e;\n" \
+    "$1" "$ORG" "$2" "$4" "$3" "$due" "$YES" "$4"
 }
 
 SETUP="$(q "
@@ -146,11 +168,17 @@ insert into public.suppliers (id, organization_id, name) values
   ('$S4', '$ORG', 'Race Finish Twenty Co'),
   ('$S5', '$ORG', 'Race Claim And Finish Co'),
   ('$S6', '$ORG', 'Race Draft Twenty Co'),
-  ('$S7', '$ORG', 'Race Mixed Writes Co');
+  ('$S7', '$ORG', 'Race Mixed Writes Co'),
+  ('$S8', '$ORG', 'Race Second Chance Co'),
+  ('$S9', '$ORG', 'Race Confirm Co'),
+  ('$S10', '$ORG', 'Race Second Chance And Confirm Co');
 $(final_sql "$R1" "$S1" 0 200)
 $(final_sql "$R2" "$S2" 20 200)
 $(final_sql "$R3" "$S3" 0 200)
 $(final_sql "$R5" "$S5" 0 200)
+$(final_sql "$R8" "$S8" 0 200 25)
+$(final_sql "$R9" "$S9" 0 200 1)
+$(final_sql "$R10" "$S10" 0 200 25)
 select 'setup done';" | tail -n 1)"
 if [ "$SETUP" != "setup done" ]; then echo "setup failed: $SETUP"; exit 1; fi
 
@@ -161,6 +189,7 @@ ADMIN="set \"request.jwt.claims\" = '{\"sub\": \"$U1\", \"role\": \"authenticate
 set \"request.jwt.claim.sub\" = '$U1';
 set role authenticated;"
 claim() { printf "%s select public.supplier_risk_reminder_claim('%s', '%s');" "$SR" "$1" "$2"; }
+sent() { printf "%s select public.supplier_risk_due_reminder_sent('%s');" "$SR" "$1"; }
 finish() { printf "%s select public.supplier_risk_finalise('%s', '%s', 'staff', '%s'::jsonb)::text;" "$ADMIN" "$ORG" "$1" "$YES"; }
 draft() {
   printf "%s select public.supplier_risk_draft_save('%s', '%s', 'staff', '{\"insurance\": {\"answer\": \"no\"}}'::jsonb)::text;" \
@@ -318,13 +347,58 @@ else
   bad "7: $ERR7 errors; checks $FACTS7; $(one_line "$TMP/7f.1") $(one_line "$TMP/7d.1")"
 fi
 
-# ── 8. No deadlock, no serialization failure ────────────────────────────────
-N8=0
-for w in 40P01 40001 deadlock 'could not serialize'; do N8=$((N8 + $(files_with "$w" "$TMP"/*))); done
-if [ "$N8" != "0" ]; then
-  bad "8: a session met a deadlock or a serialization failure"
+# ── 8. Twenty second claims of one due reminder at once ─────────────────────
+if [ "$(q "select count(*) from public.supplier_risk_reminders_due(500) d where d.review_id = '$R8' and d.kind = 'due' and d.attempt = 2")" != "1" ]; then
+  bad "8: the fixture's review is not on the job's list for its second chance"
+fi
+at_once 8 20 "$(claim "$R8" due)"
+A8="$(answers_of 8)"
+if [ "$A8" = "19 f;1 t;" ] \
+   && [ "$(q "select reminded_due_retry_at is not null and reminded_due_at < now() - interval '24 hours' and reminded_due_sent_at is null
+                from public.supplier_risk_reviews where id = '$R8'")" = "t" ] \
+   && [ "$(q "select count(*) from public.supplier_risk_reminders_due(500) d where d.review_id = '$R8'")" = "0" ]; then
+  ok "8: twenty second claims at once: one true, nineteen false; the second stamp beside the first, and off the job's list"
 else
-  ok "8: no session met a deadlock or a serialization failure"
+  bad "8: the second claims answered $A8"
+fi
+
+# ── 9. Twenty confirmations of one due reminder at once ─────────────────────
+at_once 9 20 "$(sent "$R9")"
+A9="$(answers_of 9)"
+if [ "$A9" = "19 f;1 t;" ] \
+   && [ "$(q "select reminded_due_sent_at is not null and reminded_due_retry_at is null from public.supplier_risk_reviews where id = '$R9'")" = "t" ]; then
+  ok "9: twenty confirmations at once: one true, nineteen false; confirmed once"
+else
+  bad "9: the confirmations answered $A9"
+fi
+
+# ── 10. Ten second claims and ten confirmations at once ─────────────────────
+PIDS=()
+for i in $(seq 1 10); do
+  ( q "$(claim "$R10" due)" > "$TMP/10c.$i" ) &
+  PIDS+=($!)
+  ( q "$(sent "$R10")" > "$TMP/10s.$i" ) &
+  PIDS+=($!)
+done
+for p in "${PIDS[@]}"; do wait "$p"; done
+ERR10="$(files_with ERROR "$TMP"/10c.* "$TMP"/10s.*)"
+A10C="$(answers_of 10c)"
+A10S="$(answers_of 10s)"
+FACTS10="$(q "select (reminded_due_sent_at is not null) || '/' || (reminded_due_retry_at is not null) from public.supplier_risk_reviews where id = '$R10'")"
+if [ "$ERR10" = "0" ] && [ "$A10S" = "9 f;1 t;" ] \
+   && { { [ "$A10C" = "10 f;" ] && [ "$FACTS10" = "true/false" ]; } || { [ "$A10C" = "9 f;1 t;" ] && [ "$FACTS10" = "true/true" ]; }; }; then
+  ok "10: ten second claims and ten confirmations at once: no error; claims $A10C confirmations $A10S; confirmed, second stamp $FACTS10"
+else
+  bad "10: $ERR10 errors; claims $A10C confirmations $A10S; sent/second stamp $FACTS10; $(one_line "$TMP/10c.1")"
+fi
+
+# ── 11. No deadlock, no serialization failure ───────────────────────────────
+N11=0
+for w in 40P01 40001 deadlock 'could not serialize'; do N11=$((N11 + $(files_with "$w" "$TMP"/*))); done
+if [ "$N11" != "0" ]; then
+  bad "11: a session met a deadlock or a serialization failure"
+else
+  ok "11: no session met a deadlock or a serialization failure"
 fi
 
 remove_rows

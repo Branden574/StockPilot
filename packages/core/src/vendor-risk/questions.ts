@@ -6,9 +6,12 @@
  * The database holds the same list (migration 0481, the block between the
  * vendor-risk-questions markers in _supplier_risk_questions) and refuses an
  * answer whose key or value is not on it; vendor-risk.parity.test.ts holds the
- * two lists equal, field by field. A change here is a change there, under a new
- * rules version (VENDOR_RISK_RULES_VERSION): a stored review keeps the version
- * it was judged by.
+ * two lists equal, field by field. The rules are versioned: every review stores
+ * the rules version it was judged under (VENDOR_RISK_RULES_VERSION), and a
+ * stored review keeps it. Once a review is finished anywhere, a change here is
+ * a change there under a new rules version, with the old version's list and
+ * rules kept beside it (the database holds every stored final to its own
+ * version's rules).
  *
  * Every question is put so that Yes is the safe answer, and Yes means the
  * admin has SEEN it (a document, a contract clause, a report). A vendor's
@@ -53,6 +56,20 @@ export const VENDOR_RISK_ANSWER_WORDS: Readonly<Record<VendorRiskAnswer, string>
   not_shown: 'Not shown to us',
 };
 
+/**
+ * The answer an item records: No, Not shown to us, or Out of date (a Yes whose
+ * report or certificate is dated too long before the review: it counts as Not
+ * shown to us).
+ */
+export const VENDOR_RISK_ITEM_ANSWERS = ['no', 'not_shown', 'out_of_date'] as const;
+export type VendorRiskItemAnswer = (typeof VENDOR_RISK_ITEM_ANSWERS)[number];
+
+export const VENDOR_RISK_ITEM_ANSWER_WORDS: Readonly<Record<VendorRiskItemAnswer, string>> = {
+  no: 'No',
+  not_shown: 'Not shown to us',
+  out_of_date: 'Out of date (counted as not shown to us)',
+};
+
 /** The four groups, in the order the form shows them. */
 export const VENDOR_RISK_GROUPS = ['holds', 'paper', 'proof', 'student'] as const;
 export type VendorRiskGroup = (typeof VENDOR_RISK_GROUPS)[number];
@@ -84,10 +101,19 @@ export const VENDOR_RISK_SEVERITY_WORDS: Readonly<Record<VendorRiskSeverity, str
   critical: 'Critical',
 };
 
-/** The rules that override the sum: any one of them makes the result "Do not use". */
+/**
+ * The rules that override the sum: any one of them makes the result "Do not
+ * use". Each is a No to one question, and applies only with student data (the
+ * design lists "no breach notice" with no condition; here every hard stop needs
+ * student data, so a vendor that holds only staff contact details is never
+ * stopped by one).
+ */
 export const VENDOR_RISK_HARD_STOPS = [
   'student_data_no_agreement',
   'student_data_no_breach_notice',
+  'student_data_no_direct_control',
+  'student_data_no_purpose_limit',
+  'student_data_redisclosure',
   'student_data_sale_or_ads',
   'student_data_ai_training',
 ] as const;
@@ -97,6 +123,12 @@ export const VENDOR_RISK_HARD_STOP_WORDS: Readonly<Record<VendorRiskHardStop, st
   student_data_no_agreement: 'They hold student data and there is no signed data agreement.',
   student_data_no_breach_notice:
     'They hold student data and the contract does not say how soon they must tell us about a breach.',
+  student_data_no_direct_control:
+    'The contract does not keep their use and keeping of student data under our direct control.',
+  student_data_no_purpose_limit:
+    'The contract does not limit their use of student data to the service we buy.',
+  student_data_redisclosure:
+    'The contract does not forbid them passing student data on without our written permission.',
   student_data_sale_or_ads:
     'The contract does not forbid selling student data or using it for advertising.',
   student_data_ai_training: 'The contract does not forbid using student data to train AI.',
@@ -127,8 +159,13 @@ export interface VendorRiskQuestion {
   text: string;
   /** What counts as Yes. */
   help: string;
-  /** A date the form asks for beside the answer (optional; never invented), or null when none applies. */
-  date: { label: string } | null;
+  /**
+   * A date the form asks for beside the answer (optional; never invented), or
+   * null when none applies. maxAgeMonths: a Yes dated more than this many
+   * months before the review counts as Not shown to us (out of date); null when
+   * the date is kept but not judged. A Yes with no date is not judged.
+   */
+  date: { label: string; maxAgeMonths: number | null } | null;
   /**
    * Asked only when they hold student data. Every question needs some data of
    * ours: with the level "No data of ours" none is asked.
@@ -140,8 +177,8 @@ export interface VendorRiskQuestion {
   hardStop: VendorRiskHardStop | null;
   /** The severity of the item a No or Not shown makes, by level (null where the question is not asked). */
   severity: { staff: VendorRiskSeverity | null; student: VendorRiskSeverity };
-  /** The item's finding, for each of the two answers that make one. */
-  finding: { no: string; not_shown: string };
+  /** The item's finding, for each answer that makes one (out_of_date only where a date is judged). */
+  finding: { no: string; not_shown: string; out_of_date?: string };
   /** What to do, suggested for the item (the admin may change it). */
   action: string;
   /** The question to put to the vendor, for the list to paste into an email. */
@@ -208,7 +245,7 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     group: 'paper',
     text: 'Is a data agreement signed with them?',
     help: 'Yes only when it is signed by both sides. One offered but not signed is No.',
-    date: { label: 'Date signed' },
+    date: { label: 'Date signed', maxAgeMonths: null },
     studentDataOnly: false,
     keyEvidence: true,
     hardStop: 'student_data_no_agreement',
@@ -281,8 +318,8 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     key: 'security_report',
     group: 'proof',
     text: 'Have they shown us a SOC 2 Type II or ISO 27001 report that covers this product?',
-    help: 'Yes only for the report itself, and only when it covers the product we use. A badge, a claim on their website or a report on another product is No.',
-    date: { label: 'Report period end' },
+    help: 'Yes only for the report itself, and only when it covers the product we use. A badge, a claim on their website or a report on another product is No. A report whose period ended more than 12 months before the review counts as Not shown to us.',
+    date: { label: 'Report period end', maxAgeMonths: 12 },
     studentDataOnly: false,
     keyEvidence: true,
     hardStop: null,
@@ -290,6 +327,8 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     finding: {
       no: 'They have no SOC 2 Type II or ISO 27001 report that covers this product.',
       not_shown: 'We have not seen a SOC 2 Type II or ISO 27001 report that covers this product.',
+      out_of_date:
+        'The report we have seen is out of date: its period ended more than 12 months before this review.',
     },
     action:
       'Ask for a current SOC 2 Type II or ISO 27001 report that covers this product, or for their answers to a security questionnaire.',
@@ -300,8 +339,8 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     key: 'insurance',
     group: 'proof',
     text: 'Have they shown us proof of cyber insurance?',
-    help: 'Yes when we have seen a certificate of insurance.',
-    date: { label: 'Cover ends' },
+    help: 'Yes when we have seen a certificate of insurance. One dated more than 12 months before the review counts as Not shown to us.',
+    date: { label: 'Cover ends', maxAgeMonths: 12 },
     studentDataOnly: false,
     keyEvidence: false,
     hardStop: null,
@@ -309,6 +348,8 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     finding: {
       no: 'They have no cyber insurance.',
       not_shown: 'We have not seen proof of cyber insurance.',
+      out_of_date:
+        'The proof of cyber insurance we have seen is out of date: dated more than 12 months before this review.',
     },
     action: 'Ask for a certificate of their cyber insurance.',
     followUp: 'Please send us a certificate of your cyber insurance, with the date the cover ends.',
@@ -317,17 +358,18 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     key: 'direct_control',
     group: 'student',
     text: 'Does the contract keep their use and keeping of student data under our direct control?',
-    help: 'One of the conditions for sharing student records with a vendor as a school official (FERPA).',
+    help: 'One of the conditions for sharing student records with a vendor as a school official (FERPA). With student data, a No is Do not use.',
     date: null,
     studentDataOnly: true,
     keyEvidence: false,
-    hardStop: null,
-    severity: { staff: null, student: 'high' },
+    hardStop: 'student_data_no_direct_control',
+    severity: { staff: null, student: 'critical' },
     finding: {
       no: 'The contract does not keep student data under our direct control.',
       not_shown: 'We have not seen terms that keep student data under our direct control.',
     },
-    action: 'Add terms that keep their use and keeping of student data under our direct control.',
+    action:
+      'Send no student data until the contract has terms that keep their use and keeping of student data under our direct control.',
     followUp:
       'Please show us where the contract says that your use and keeping of student data is under our direct control.',
   },
@@ -335,18 +377,19 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     key: 'purpose_only',
     group: 'student',
     text: 'Does the contract limit their use of student data to the service we buy?',
-    help: 'One of the conditions for sharing student records with a vendor as a school official (FERPA).',
+    help: 'One of the conditions for sharing student records with a vendor as a school official (FERPA). With student data, a No is Do not use.',
     date: null,
     studentDataOnly: true,
     keyEvidence: false,
-    hardStop: null,
-    severity: { staff: null, student: 'high' },
+    hardStop: 'student_data_no_purpose_limit',
+    severity: { staff: null, student: 'critical' },
     finding: {
       no: 'The contract does not limit their use of student data to the service we buy.',
       not_shown:
         'We have not seen terms that limit their use of student data to the service we buy.',
     },
-    action: 'Add terms that limit their use of student data to the service we buy.',
+    action:
+      'Send no student data until the contract has terms that limit their use of student data to the service we buy.',
     followUp:
       'Please show us where the contract limits your use of student data to the service we buy.',
   },
@@ -354,18 +397,19 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     key: 'no_redisclosure',
     group: 'student',
     text: 'Does the contract forbid them passing student data on without our written permission?',
-    help: 'One of the conditions for sharing student records with a vendor as a school official (FERPA).',
+    help: 'One of the conditions for sharing student records with a vendor as a school official (FERPA). With student data, a No is Do not use.',
     date: null,
     studentDataOnly: true,
     keyEvidence: false,
-    hardStop: null,
-    severity: { staff: null, student: 'high' },
+    hardStop: 'student_data_redisclosure',
+    severity: { staff: null, student: 'critical' },
     finding: {
       no: 'The contract does not forbid passing student data on without our permission.',
       not_shown:
         'We have not seen terms that forbid passing student data on without our permission.',
     },
-    action: 'Add terms that forbid passing student data on without our written permission.',
+    action:
+      'Send no student data until the contract has terms that forbid passing student data on without our written permission.',
     followUp:
       'Please show us where the contract forbids you passing student data to anyone else without our written permission.',
   },
