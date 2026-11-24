@@ -1,5 +1,6 @@
 import 'server-only';
 
+import type { UploadKind } from '@/lib/upload-inspect';
 import { ServiceError } from '@/server/services/context';
 
 import { normalizeIsbn } from './lookup';
@@ -92,6 +93,41 @@ export function detectFileKind(
   if (mt.startsWith('text/')) return 'txt';
   return null;
 }
+
+/**
+ * PART 6: the kind a file CLAIMS (its name, then its MIME, above) is only a
+ * declaration. Both ISBN extractors pass the bytes through the one upload
+ * check, which must find exactly this kind in them before any parser or
+ * model sees the file: a PDF's header in its first kilobyte (the PO import's
+ * rule: this file is parsed and dropped, never stored or served), a Word or
+ * Excel container with that program's own parts and no macro or control
+ * parts, text with no binary bytes, or a picture.
+ */
+export function uploadKindsForIsbnFile(kind: SupportedFileKind): readonly UploadKind[] {
+  switch (kind) {
+    case 'pdf':
+      return ['pdf'];
+    case 'docx':
+      return ['docx'];
+    case 'xlsx':
+      return ['xlsx'];
+    case 'csv':
+    case 'txt':
+      return ['text'];
+    case 'image':
+      return ['png', 'jpeg', 'webp', 'heic'];
+  }
+}
+
+/** The sentence for a file whose bytes are not the kind it claims: what to do, not what was seen. */
+export const ISBN_FILE_WRONG_TYPE_MESSAGE: Readonly<Record<SupportedFileKind, string>> = {
+  pdf: 'This file is not a PDF we can read. Save it as a PDF and upload it again.',
+  docx: 'This file is not a Word document we can read. Save it as .docx and upload it again.',
+  xlsx: 'This file is not an Excel workbook we can read. Save it as .xlsx and upload it again.',
+  csv: 'This file is not plain text. Save it as CSV or TXT and upload it again.',
+  txt: 'This file is not plain text. Save it as CSV or TXT and upload it again.',
+  image: 'This file is not a picture we can read. Use a PNG, JPG, WEBP or HEIC image.',
+};
 
 async function fileToText(buffer: Buffer, kind: SupportedFileKind): Promise<string> {
   switch (kind) {

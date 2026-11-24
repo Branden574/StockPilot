@@ -5,11 +5,16 @@ import {
   aiExtractIsbns,
   aiExtractIsbnsFromBuffer,
 } from '@/lib/books/isbn-ai-extract';
-import { detectFileKind } from '@/lib/books/isbn-extract';
+import {
+  detectFileKind,
+  ISBN_FILE_WRONG_TYPE_MESSAGE,
+  uploadKindsForIsbnFile,
+} from '@/lib/books/isbn-extract';
 import { reportError } from '@/lib/error-reporter';
 import { classifyAiError } from '@/lib/ai/errors';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { answerModuleState } from '@/server/lib/api-error-response';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -121,16 +126,31 @@ export async function POST(req: Request) {
     );
   }
 
-  try {
-    const buffer = Buffer.from(await file.arrayBuffer());
+  // Part 6: the bytes must be the kind the name claims, through the one
+  // upload check, before any parser or model sees them (a refusal is
+  // recorded as a security event in this organization). Outside the try
+  // below: a refusal is the check's sentence, never a model error.
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const checked = await checkUploadBytes(new Uint8Array(buffer), {
+    surface: 'isbn_file',
+    accept: uploadKindsForIsbnFile(kind),
+    pdfHeader: 'in_first_kilobyte',
+    organizationId: ctx.organizationId,
+    headers: req.headers,
+    wrongTypeMessage: ISBN_FILE_WRONG_TYPE_MESSAGE[kind],
+  });
+  if (!checked.ok) {
+    return NextResponse.json({ error: 'validation_error', message: checked.message }, { status: 400 });
+  }
 
+  try {
     // PDFs (including scanned/image PDFs) and standalone images go
     // through Gemini's multimodal API — it does the OCR for us, no
     // tesseract dependency. Office docs and text get pre-extracted
     // locally to keep tokens cheap.
     if (kind === 'pdf' || kind === 'image') {
-      const mime =
-        kind === 'pdf' ? 'application/pdf' : (file.type || 'image/png');
+      // The type the BYTES are (part 6), never the client's word for it.
+      const mime = checked.mime;
       // A failed model call is reported by the helper and answered as a
       // fixed note, never the vendor's text (S16 review).
       const result = await aiExtractIsbnsFromBuffer(buffer, mime, {

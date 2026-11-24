@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { extractIsbnsFromFile } from '@/lib/books/isbn-extract';
+import {
+  detectFileKind,
+  extractIsbnsFromFile,
+  ISBN_FILE_WRONG_TYPE_MESSAGE,
+  uploadKindsForIsbnFile,
+} from '@/lib/books/isbn-extract';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import { ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
@@ -61,6 +67,24 @@ export async function POST(req: Request) {
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
+    // Part 6: the bytes must be the kind the name claims, through the one
+    // upload check, before any parser reads them (a refusal is recorded as a
+    // security event in this organization). A name we have no parser for is
+    // still the parser's own sentence below, with nothing judged.
+    const claimed = detectFileKind(file.name, file.type || null);
+    if (claimed) {
+      const checked = await checkUploadBytes(new Uint8Array(buffer), {
+        surface: 'isbn_file',
+        accept: uploadKindsForIsbnFile(claimed),
+        pdfHeader: 'in_first_kilobyte',
+        organizationId: ctx.organizationId,
+        headers: req.headers,
+        wrongTypeMessage: ISBN_FILE_WRONG_TYPE_MESSAGE[claimed],
+      });
+      if (!checked.ok) {
+        return NextResponse.json({ error: 'validation_error', message: checked.message }, { status: 400 });
+      }
+    }
     const result = await extractIsbnsFromFile(buffer, file.name, file.type || null);
     if (result.kind === 'image') {
       // Regex can't read images. Tell the client to use the AI path.

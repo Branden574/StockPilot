@@ -58,7 +58,9 @@ describe('POST /api/books/extract-isbns', () => {
       'Invalid PDF structure: bad XRef entry at /var/task/node_modules/pdfjs/build/pdf.js',
     );
     vi.mocked(extractIsbnsFromFile).mockRejectedValueOnce(err);
-    const res = await POST(upload('order.pdf', 'application/pdf'));
+    // A real (tiny, made-up) PDF header: the upload check (part 6) lets only a
+    // PDF through to the parser.
+    const res = await POST(upload('order.pdf', 'application/pdf', '%PDF-1.4 placeholder'));
     expect(res.status).toBe(400);
     const text = await res.text();
     expect(JSON.parse(text)).toEqual({
@@ -69,7 +71,7 @@ describe('POST /api/books/extract-isbns', () => {
     expect(reportError).toHaveBeenCalledWith(err, {
       tag: 'books.extract-isbns',
       organizationId: 'org-1',
-      extra: { filename: 'order.pdf', size: 18 },
+      extra: { filename: 'order.pdf', size: 20 },
     });
   });
 });

@@ -108,3 +108,60 @@ export function expectOneRefusal(
   const recorded = JSON.stringify(record.mock.calls[0]);
   for (const s of mustNotContain) expect(recorded).not.toContain(s);
 }
+
+/** A ZIP built here: stored entries, a central directory, an end record. */
+export function tinyZip(files: ReadonlyArray<{ name: string; body: string }>): Uint8Array {
+  const locals: Uint8Array[] = [];
+  const centrals: Uint8Array[] = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = ascii(f.name);
+    const data = ascii(f.body);
+    const local = new Uint8Array(30 + name.length + data.length);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint32(18, data.length, true);
+    lv.setUint32(22, data.length, true);
+    lv.setUint16(26, name.length, true);
+    local.set(name, 30);
+    local.set(data, 30 + name.length);
+    const central = new Uint8Array(46 + name.length);
+    const cv = new DataView(central.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint32(20, data.length, true);
+    cv.setUint32(24, data.length, true);
+    cv.setUint16(28, name.length, true);
+    cv.setUint32(42, offset, true);
+    central.set(name, 46);
+    locals.push(local);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const cd = concat(...centrals);
+  const end = new Uint8Array(22);
+  const ev = new DataView(end.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true);
+  ev.setUint32(12, cd.length, true);
+  ev.setUint32(16, offset, true);
+  return concat(...locals, cd, end);
+}
+
+const CONTENT_TYPES = {
+  name: '[Content_Types].xml',
+  body: '<?xml version="1.0"?><Types><Default Extension="xml" ContentType="application/xml"/></Types>',
+};
+/** A Word file's container: its content types and its main part, nothing else. */
+export const TINY_DOCX = tinyZip([CONTENT_TYPES, { name: 'word/document.xml', body: '<w:document/>' }]);
+/** An Excel file's container: its content types and its workbook part. */
+export const TINY_XLSX = tinyZip([CONTENT_TYPES, { name: 'xl/workbook.xml', body: '<workbook/>' }]);
+/** A Word container that lists a macro part (its body is not a macro). */
+export const DOCX_WITH_MACRO_PART = tinyZip([
+  CONTENT_TYPES,
+  { name: 'word/document.xml', body: '<w:document/>' },
+  { name: 'word/vbaProject.bin', body: 'not a real macro' },
+]);
