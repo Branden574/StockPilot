@@ -61,6 +61,7 @@ import {
   securityMapModeWords,
   securityMapNextPollDelay,
   securityMapNextWholeDelay,
+  securityMapCutWords,
   securityMapNotes,
   securityMapOutcomeWords,
   securityMapRefusedWindowWords,
@@ -866,6 +867,7 @@ const WHOLE_KEYS = [
   'noPlace',
   'notDrawnOther',
   'notDrawnSignInAlerts',
+  'notDrawnSignInAlertsFloor',
   'oldestEventAt',
   'steps',
   'still',
@@ -1060,6 +1062,8 @@ describe('securityMapViewOf: what leaves the server', () => {
       expect(v.whole.tallies).toHaveLength(3);
       for (const row of v.whole.tallies) expect(row).toHaveLength(2);
       expect(v.whole.floors.every((name) => typeof name === 'string')).toBe(true);
+      // A hidden kind's name leaves in no part, the floors included (review round 2, N3).
+      expect(JSON.stringify(v), v.scope).not.toMatch(/phishing|malware/i);
     }
   });
 
@@ -1143,12 +1147,15 @@ describe('securityMapViewOf: what leaves the server', () => {
     expect(whole({ no_place: counts({ bots: { blocked: 3 } }) }).liveUndrawn).toBe(false);
   });
 
-  it('the floors, the partial day count and the window read are carried as the database gives them', () => {
-    expect(view.whole.floors).toEqual([
-      'flagged_window',
-      'totals.password_guessing.flagged',
-      'totals.phishing.flagged',
-    ]);
+  it("the floors, the partial day count and the window read are carried as the database gives them, a hidden kind's floor as one yes or no", () => {
+    // The database's floors were flagged_window, password guessing's flagged total
+    // and phishing's: the hidden kind's name stays on the server, and its line's
+    // "at least" leaves as one boolean.
+    expect(view.whole.floors).toEqual(['flagged_window', 'totals.password_guessing.flagged']);
+    expect(view.whole.notDrawnSignInAlertsFloor).toBe(true);
+    expect(whole({ ...busy(), floors: ['flagged_window'] }).whole.notDrawnSignInAlertsFloor).toBe(
+      false,
+    );
     expect(view.whole.blockedSinceDayStartPartial).toBe(false);
     expect(view.whole.lateFloor).toBe(false);
     expect([view.shortened, view.askedFrom, view.from]).toEqual([false, FROM, FROM]);
@@ -1179,6 +1186,16 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
   it('a row of a category this build does not show is not a view', () => {
     const view = JSON.parse(JSON.stringify(whole(busy()))) as SecurityMapView;
     const phishing = SECURITY_EVENT_CATEGORIES.indexOf('phishing');
+    // Nor is a floor that names one.
+    expect(
+      readSecurityMapView({
+        ...view,
+        whole: { ...view.whole, floors: [...view.whole!.floors, 'totals.phishing.flagged'] },
+      }),
+    ).toBeNull();
+    expect(
+      readSecurityMapView({ ...view, whole: { ...view.whole, notDrawnSignInAlertsFloor: 1 } }),
+    ).toBeNull();
     expect(readSecurityMapView({ ...view, live: [['PT', phishing, 1, 1]] })).toBeNull();
     expect(
       readSecurityMapView({ ...view, whole: { ...view.whole, table: [['PT', phishing, 1, 1]] } }),
@@ -1789,7 +1806,9 @@ describe('the words', () => {
   it('a floor is what the database names in `floors`, and nothing else', () => {
     const w = whole(busy());
     expect(securityMapIsFloor(w, 'flagged_window')).toBe(true);
-    expect(securityMapIsFloor(w, 'totals.phishing.flagged')).toBe(true);
+    expect(securityMapIsFloor(w, 'totals.password_guessing.flagged')).toBe(true);
+    // A hidden kind's floor stays on the server: its one line has its own yes or no.
+    expect(securityMapIsFloor(w, 'totals.phishing.flagged')).toBe(false);
     expect(securityMapIsFloor(w, 'blocked_window')).toBe(false);
     expect(securityMapIsFloor(w, 'totals.bots.blocked')).toBe(false);
     // Not guessed from the kind: flagged password guessing is a floor only when the database says so.
@@ -2023,6 +2042,33 @@ describe('the words', () => {
     expect(SECURITY_MAP_WORDS.showFewer).toBe('Show fewer');
     expect(SECURITY_MAP_WORDS.legendBlocked).toBe('Blocked');
     expect(SECURITY_MAP_WORDS.legendFlagged).toBe('Flagged, not blocked');
+    expect(SECURITY_MAP_WORDS.legendCounts).toBe('Numbers on the globe: events in this play');
+    // Reduced motion draws the globe still: the flat map's old reason is gone (review round 2, N7).
+    expect('globeReducedMotion' in SECURITY_MAP_WORDS).toBe(false);
+  });
+
+  it('more happened than the play can draw: said of the play on screen, naming it, and never beside a play that draws everything', () => {
+    const cutReplay = whole({ ...busy(), timeline_truncated: true });
+    expect(cutReplay.whole.drawingCut).toBe(true);
+    // The replay was cut, but the live play on screen draws everything: nothing is said.
+    const live = planSecurityMapPlayback(cutReplay, recent(busy()));
+    expect(live.mode).toBe('live');
+    expect(live.cut).toBe(false);
+    expect(securityMapCutWords(live)).toBeNull();
+    // The replay on screen was cut: it says so, naming the replay.
+    const quiet = busy();
+    quiet.timeline = quiet.timeline?.filter((c) => c.bucket_seconds === 600);
+    const replay = planSecurityMapPlayback(whole({ ...quiet, timeline_truncated: true }), null);
+    expect(replay.mode).toBe('replay');
+    expect(securityMapCutWords(replay)).toBe(
+      'More happened in some hours of this replay than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
+    );
+    // The live play on screen was cut: it says so, naming the last 10 minutes.
+    expect(securityMapCutWords({ ...live, cut: true })).toBe(
+      'More happened in the last 10 minutes than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
+    );
+    expect(securityMapCutWords({ ...replay, cut: false })).toBeNull();
+    expect(securityMapCutWords({ ...replay, mode: 'still', cut: true })).toBeNull();
   });
 
   it('why the map is not moving', () => {
@@ -2130,9 +2176,8 @@ describe('the words', () => {
     expect(one).toContain('Not on the map: 1 event has no country. It is in the totals.');
     expect(one).toContain('1 event in a flood: place not listed.');
     expect(one).toContain('1 event was allowed. Allowed events are counted here and never drawn.');
-    expect(one).toContain(
-      'More happened than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
-    );
+    // Whether the drawing was cut is said of the play on screen (securityMapCutWords), not here.
+    expect(one.some((line) => line.startsWith('More happened'))).toBe(false);
     expect(one).toContain(
       'The table is cut short: the 2,000 largest groups were read and smaller ones were left out.',
     );

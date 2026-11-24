@@ -193,6 +193,12 @@ const FLOOR_NAMES: ReadonlySet<string> = new Set([
 export const isSecurityMapFloorName = (name: unknown): name is SecurityMapFloorName =>
   typeof name === 'string' && FLOOR_NAMES.has(name);
 
+/** Whether a floor's name holds one of these kinds (`totals.<kind>.<outcome>`, `no_place.<kind>.<outcome>`). */
+function namesAHiddenKind(name: string, hidden: readonly SecurityEventCategory[]): boolean {
+  const kind = name.split('.')[1];
+  return kind !== undefined && (hidden as readonly string[]).includes(kind);
+}
+
 /** The twenty-four keys (contract VERSION 2), always all of them. */
 export interface SecurityMapAnswer {
   /** The window READ; `asked_from` is the start asked for (later only when the ceiling moved it). */
@@ -716,7 +722,11 @@ export interface SecurityMapWholeView {
   blockedSinceDayStart: number | null;
   /** The day began before the start read: the day's count is counted from `from`, a floor. */
   blockedSinceDayStartPartial: boolean;
-  /** The answer's numbers that are floors, by name: the words say "at least" beside them. */
+  /**
+   * The answer's numbers that are floors, by name: the words say "at least"
+   * beside them. Only names of shown kinds and of the window's sums: a hidden
+   * kind's name never leaves the server (review round 2, N3).
+   */
   floors: readonly SecurityMapFloorName[];
   /** The late sources' events hold a floor. */
   lateFloor: boolean;
@@ -731,6 +741,8 @@ export interface SecurityMapWholeView {
   tallies: readonly SecurityMapTallyRow[];
   /** Events of the categories the map does not show. */
   notDrawnSignInAlerts: number;
+  /** The not-drawn sign-in alerts hold a floor: their line says "at least". */
+  notDrawnSignInAlertsFloor: boolean;
   notDrawnOther: number;
 }
 
@@ -990,7 +1002,7 @@ export function securityMapViewOf(
     dayStart: answer.day_start,
     blockedSinceDayStart: answer.blocked_since_day_start,
     blockedSinceDayStartPartial: answer.blocked_since_day_start_partial,
-    floors: [...answer.floors],
+    floors: answer.floors.filter((name) => !namesAHiddenKind(name, hidden)),
     lateFloor: answer.late_sources.some((row) =>
       answer.floors.includes(`totals.${row.category}.${row.outcome}`),
     ),
@@ -1004,6 +1016,8 @@ export function securityMapViewOf(
     late: sumEvents(answer.late_sources),
     tallies: tallyRows(answer.tallies),
     notDrawnSignInAlerts: signInAlerts,
+    notDrawnSignInAlertsFloor:
+      signInAlerts > 0 && answer.floors.includes('totals.phishing.flagged'),
     notDrawnOther: sumCounts(answer.totals, hidden, OUTCOMES) - signInAlerts,
   };
   return view;
@@ -1129,6 +1143,7 @@ const WHOLE_KEYS = [
   'late',
   'tallies',
   'notDrawnSignInAlerts',
+  'notDrawnSignInAlertsFloor',
   'notDrawnOther',
 ] as const;
 
@@ -1147,11 +1162,20 @@ function isWholeView(v: unknown, shownIndexes: readonly number[]): v is Security
   if (!counts.every((key) => isCount(v[key]))) return false;
   if (!isTallyList(v.tallies)) return false;
   if (typeof v.tableCut !== 'boolean' || typeof v.drawingCut !== 'boolean') return false;
-  if (typeof v.blockedSinceDayStartPartial !== 'boolean' || typeof v.lateFloor !== 'boolean') {
+  if (
+    typeof v.blockedSinceDayStartPartial !== 'boolean' ||
+    typeof v.lateFloor !== 'boolean' ||
+    typeof v.notDrawnSignInAlertsFloor !== 'boolean'
+  ) {
     return false;
   }
   if (!Array.isArray(v.floors) || v.floors.length > SECURITY_MAP_MAX_FLOORS) return false;
   if (!(v.floors as unknown[]).every(isSecurityMapFloorName)) return false;
+  // A hidden kind's name never comes: the server leaves those out.
+  const hiddenKinds = SECURITY_EVENT_CATEGORIES.filter(
+    (category) => !shownIndexes.includes(categoryIndex(category)),
+  );
+  if ((v.floors as string[]).some((name) => namesAHiddenKind(name, hiddenKinds))) return false;
   if (v.oldestEventAt !== null && !isTime(v.oldestEventAt)) return false;
   if (v.dayStart !== null && !isTime(v.dayStart)) return false;
   if (v.blockedSinceDayStart !== null && !isCount(v.blockedSinceDayStart)) return false;
@@ -1926,8 +1950,22 @@ export function securityMapShortenedWords(
 }
 
 /**
+ * The line that says more happened than the play on screen can draw, naming
+ * that play: the live play's last ten minutes, or the replay's hours. Only
+ * while the mode on screen is the one that was cut: never beside a live play
+ * that draws everything, whatever the replay held (lab walk 2, note A).
+ */
+export function securityMapCutWords(plan: SecurityMapPlan): string | null {
+  if (!plan.cut) return null;
+  if (plan.mode === 'live') return SECURITY_MAP_WORDS.cutLive;
+  if (plan.mode === 'replay') return SECURITY_MAP_WORDS.cutReplay;
+  return null;
+}
+
+/**
  * The lines under the map that say what the numbers leave out, cut short or
- * cannot place. Each is there only when it has something to say.
+ * cannot place. Each is there only when it has something to say. (Whether
+ * the drawing was cut is said by securityMapCutWords, of the play on screen.)
  */
 export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string): string[] {
   const w = whole.whole;
@@ -1937,10 +1975,7 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
   if (w.notDrawnSignInAlerts > 0 || w.notDrawnOther > 0) {
     const parts: string[] = [];
     if (w.notDrawnSignInAlerts > 0) {
-      const count = securityMapCountWords(
-        w.notDrawnSignInAlerts,
-        securityMapIsFloor(whole, 'totals.phishing.flagged'),
-      );
+      const count = securityMapCountWords(w.notDrawnSignInAlerts, w.notDrawnSignInAlertsFloor);
       parts.push(`${count} flagged sign-in ${plural(w.notDrawnSignInAlerts, 'alert', 'alerts')}`);
     }
     if (w.notDrawnOther > 0) {
@@ -1974,11 +2009,6 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
     );
   }
   for (const [reason, counted] of w.tallies) notes.push(securityMapTallyWords(reason, counted));
-  if (w.drawingCut) {
-    notes.push(
-      'More happened than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
-    );
-  }
   if (w.tableCut) {
     notes.push(
       `The table is cut short: the ${num(SECURITY_MAP_MAX_BY_COUNTRY)} largest groups were read and smaller ones were left out.`,
@@ -2256,7 +2286,6 @@ export const SECURITY_MAP_WORDS = {
   openOrganization: 'Open organization',
   globeUnavailable: 'This browser cannot draw the globe, so the flat map is shown.',
   globeLost: 'The globe stopped drawing, so the flat map is shown.',
-  globeReducedMotion: 'The flat map is shown: your device asks for reduced motion.',
   pillLive: 'Live',
   pillReplay: 'Replay',
   pillNotUpdating: 'Not updating',
@@ -2266,6 +2295,11 @@ export const SECURITY_MAP_WORDS = {
   pillNothingToPlay: 'Nothing to play',
   legendBlocked: 'Blocked',
   legendFlagged: 'Flagged, not blocked',
+  legendCounts: 'Numbers on the globe: events in this play',
+  cutLive:
+    'More happened in the last 10 minutes than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
+  cutReplay:
+    'More happened in some hours of this replay than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
   showAll: (count: number): string => `Show all ${num(count)}`,
   showFewer: 'Show fewer',
 } as const;
