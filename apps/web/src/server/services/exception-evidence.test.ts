@@ -71,6 +71,9 @@ vi.mock('@/lib/auth/warehouse', () => {
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
 
+import { recordSecurityEvent } from '@/server/security/events';
+import { expectOneRefusal, HTML_PAGE, withArchiveAfter } from '@/test/upload-fixtures';
+
 import { audit } from './audit';
 import { ExceptionEvidenceService, normalizeCapturedAt } from './exception-evidence';
 
@@ -1011,5 +1014,73 @@ describe('remove', () => {
       details: { reason: 'reason_too_long' },
     });
     expect(user.fromCalls).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Security invariant (part 6, stage 6a): the finalize's sniff, declared type
+// and bucket kinds are the one upload check's, on the whole upload, which now
+// also refuses a file hidden after the picture (before the re-encode would
+// drop it). A refusal answers the same sentence as before, deletes the upload
+// and writes no row, and records exactly ONE malware / blocked event in the
+// organization with no path. An empty, oversize or missing object, a declared
+// type that disagrees with the extension, and the re-encode's refusals are
+// this path's own and record no security event.
+describe('finalize: the upload check (part 6)', () => {
+  const record = vi.mocked(recordSecurityEvent);
+  beforeEach(() => {
+    record.mockImplementation(async () => undefined);
+  });
+
+  it('a clean photo: recorded as before, and no event', async () => {
+    const { svc, admin } = setup();
+    await svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' });
+    expect(recordArgs(admin)).toBeDefined();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a web page declared as a JPEG', () => HTML_PAGE, 'upload_wrong_type'],
+    ['a PNG declared as a JPEG', () => new Uint8Array(pngBytes), 'upload_wrong_type'],
+    ['a real photo with an archive after it', () => withArchiveAfter(new Uint8Array(gpsJpeg)), 'upload_hidden_file'],
+  ])('%s: the same sentence, deleted, no row, one event', async (_what, make, reason) => {
+    const { svc, admin, storage } = setup({ object: make() });
+    await expect(svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' })).rejects.toMatchObject({
+      code: 'validation_error',
+      details: { reason: 'invalid_image' },
+    });
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(recordArgs(admin)).toBeUndefined();
+    expectOneRefusal(record, { reason, organizationId: ORG }, [PATH, FILE]);
+  });
+
+  it('an empty object or one never uploaded is this path\'s own refusal: no event', async () => {
+    for (const object of [new Uint8Array(0), null]) {
+      const { svc } = setup({ object });
+      await expect(svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' })).rejects.toMatchObject({
+        code: 'validation_error',
+      });
+    }
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a refusal when the "is it recorded" look fails: one event, and the upload is kept (as before)', async () => {
+    const { svc, storage } = setup({ object: HTML_PAGE, recorded: [null, 'error'] });
+    await expect(svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' })).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(storage.remove).not.toHaveBeenCalled();
+    expectOneRefusal(record, { reason: 'upload_wrong_type', organizationId: ORG });
+  });
+
+  it('a recorder that fails: still refused, still deleted, still no row', async () => {
+    record.mockRejectedValue(new Error('recorder down'));
+    const { svc, admin, storage } = setup({ object: HTML_PAGE });
+    await expect(svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' })).rejects.toMatchObject({
+      code: 'validation_error',
+    });
+    expect(storage.remove).toHaveBeenCalledWith([PATH]);
+    expect(recordArgs(admin)).toBeUndefined();
   });
 });

@@ -22,7 +22,7 @@ import {
 
 import { reportError } from '@/lib/error-reporter';
 import { reencodeWithoutMetadata } from '@/lib/image-reencode';
-import { isSniffedKindAllowedInBucket, MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
+import { MIME_FOR_KIND, SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   exceptionEvidencePathShape,
@@ -31,6 +31,8 @@ import {
   isValidStoragePath,
 } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { uploadKindsForMimes } from '@/lib/upload-inspect';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, type ServiceContext } from './context';
@@ -334,15 +336,20 @@ export class ExceptionEvidenceService {
     const whole = await downloadWhole(store, path);
     if (!whole || whole.byteLength === 0 || whole.byteLength > EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES)
       return reject();
-    const sniffed = sniffImage(whole);
-    if (
-      !sniffed ||
-      MIME_FOR_KIND[sniffed.kind] !== input.declaredMime ||
-      !isSniffedKindAllowedInBucket(sniffed.kind, 'exception-evidence')
-    ) {
-      return reject();
-    }
-    const kind = sniffed.kind as 'jpeg' | 'png' | 'webp';
+    //    Part 6: the sniff, the declared type and the bucket's kinds are the
+    //    one upload check's, which also looks for a file hidden after the
+    //    picture (the re-encode below would drop it from the stored copy,
+    //    but says nothing about the original) and records a refusal as a
+    //    security event in this organization. The person reads the same
+    //    sentence as before.
+    const checked = await checkUploadBytes(whole, {
+      surface: 'exception_evidence',
+      accept: uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['exception-evidence']),
+      declaredMime: input.declaredMime,
+      organizationId: this.ctx.organizationId,
+    });
+    if (!checked.ok) return reject();
+    const kind = checked.kind as 'jpeg' | 'png' | 'webp';
 
     // 2. Re-encoded without its metadata (EXIF, GPS), with a thumbnail made
     //    from the same pixels (lib/image-reencode.ts).
