@@ -1,5 +1,6 @@
 import {
   SECURITY_EVENT_CATEGORIES,
+  SECURITY_MAP_EARLY_WHOLE_GAP_MS,
   SECURITY_MAP_RECENT_POLL_MS,
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
@@ -65,11 +66,18 @@ export const CATEGORY_LOOKS: Readonly<Record<SecurityEventCategory, CategoryLook
 };
 
 /**
- * The one look of every kind the map does not draw, in the flagged list
- * only: a grey mark, the same for each such kind, so the list never tells
- * which hidden kind an entry was recorded under. Never drawn on the map.
+ * The one look of every kind the map's numbers leave out: a grey mark, the
+ * same for each such kind, so neither the list nor the map tells which
+ * hidden kind an entry was recorded under. Used by the flagged list and, since
+ * the owner's decision of 2026-11-24, by the flagged sign-in alerts drawn on
+ * the map from that list (an arc with no category: grey, hollow, dashed).
  */
 export const HIDDEN_KIND_LOOK: CategoryLook = look('#9aa6b8', 'triangle');
+
+/** An arc's look: its kind's own, or the grey one for a flagged sign-in alert (no category). */
+export function arcLookOf(category: SecurityEventCategory | null): CategoryLook {
+  return category === null ? HIDDEN_KIND_LOOK : CATEGORY_LOOKS[category];
+}
 
 /**
  * An entry's look in the flagged list: its kind's own when the map shows
@@ -186,7 +194,7 @@ export interface GlobeArc {
 /** The drawn arcs as the globe takes them. A flagged arc is never handed over as blocked. */
 export function globeArcsOf(drawn: readonly DrawnArc[]): GlobeArc[] {
   return drawn.map(({ arc, from }) => {
-    const look = CATEGORY_LOOKS[arc.category];
+    const look = arcLookOf(arc.category);
     return {
       key: arc.key,
       from,
@@ -329,7 +337,11 @@ export function sourceLabels(
 ): SourceLabel[] {
   const rows = new Map<string, { from: LonLat; events: number; floor: boolean }>();
   for (const { arc, from } of drawn) {
-    const floor = securityMapIsFloor(whole, `totals.${arc.category}.${arc.outcome}`);
+    // A flagged sign-in alert (no category) says "at least" when one of its entries did.
+    const floor =
+      arc.category === null
+        ? arc.atLeast === true
+        : securityMapIsFloor(whole, `totals.${arc.category}.${arc.outcome}`);
     const held = rows.get(arc.country);
     if (held) {
       held.events += arc.events;
@@ -416,6 +428,15 @@ export interface PollClock {
    * so the day's counter is right within a moment of the page opening.
    */
   dayUnread: boolean;
+  /**
+   * The kept lists hold entries newer than the last good whole read's totals
+   * (core's securityMapNewerThanTotals): read the whole window early, but
+   * never sooner than SECURITY_MAP_EARLY_WHOLE_GAP_MS after the last whole
+   * read started (the coordinator's change of 2026-11-24).
+   */
+  totalsBehind: boolean;
+  /** When the last read of the whole window was sent (the page's clock), or null. */
+  lastWholeStartAt: number | null;
 }
 
 export interface PollStep {
@@ -434,7 +455,11 @@ export interface PollStep {
  * viewer's midnight once a day has been counted, and as soon as may be when
  * the replay begins on a read more than a minute old. After a failed read of the
  * whole window the next waits 2, 4, 8, then 10 minutes from that attempt
- * (review S2), and neither the midnight nor the replay hurries it. In
+ * (review S2), and neither the midnight nor the replay hurries it. When the
+ * kept lists hold entries newer than the totals (`totalsBehind`), the whole
+ * window is read early, but never sooner than 45 seconds after the last
+ * whole read was sent, and never against the back-off: so a quiet page reads
+ * nothing more, and a busy one at most one whole read per 45 seconds. In
  * between, the last ten minutes every 30 seconds, against the last good
  * whole read or alone when there is none. After any failed read the wait
  * grows (30, 60, then 120 seconds) and nothing is sent sooner.
@@ -453,6 +478,14 @@ export function nextPoll(clock: PollClock, now: number): PollStep {
   } else {
     const every = clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
     wholeDue = clock.dayEndsAt === null ? every : Math.min(every, clock.dayEndsAt);
+    // New events past the totals: the whole window early, at most one start per gap.
+    if (clock.totalsBehind) {
+      const floor =
+        clock.lastWholeStartAt === null
+          ? now
+          : clock.lastWholeStartAt + SECURITY_MAP_EARLY_WHOLE_GAP_MS;
+      wholeDue = Math.min(wholeDue, Math.max(now, floor));
+    }
   }
   const wholeAt = Math.max(wholeDue, clock.failures > 0 ? afterLast : -Infinity);
   return wholeAt <= afterLast

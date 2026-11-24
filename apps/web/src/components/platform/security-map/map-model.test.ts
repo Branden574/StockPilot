@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   SECURITY_EVENT_CATEGORIES,
+  SECURITY_MAP_EARLY_WHOLE_GAP_MS,
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
   securityMapArcOf,
@@ -14,6 +15,8 @@ import {
 import { facingOf, heatOf } from './globe-math';
 import {
   CATEGORY_LOOKS,
+  HIDDEN_KIND_LOOK,
+  arcLookOf,
   SHAPE_INDEX,
   SOURCE_LABELS,
   countryName,
@@ -123,6 +126,34 @@ describe('what is on the map this moment', () => {
     ]);
     expect(arcs[0]!.rgb).toEqual(CATEGORY_LOOKS.exploit.rgb);
     expect(arcs[0]!.from).toEqual(countryPoint('DE'));
+  });
+
+  it('a flagged sign-in alert (no category) is handed to the globe grey, hollow and dashed, with no kind', () => {
+    const alert = {
+      key: 'PT:alert:flagged',
+      country: 'PT',
+      category: null,
+      outcome: 'flagged' as const,
+      events: 2,
+      width: 1.23,
+    };
+    const [globe] = globeArcsOf(drawnArcs([alert]));
+    expect(globe).toEqual({
+      key: 'PT:alert:flagged',
+      from: countryPoint('PT'),
+      rgb: HIDDEN_KIND_LOOK.rgb,
+      width: 1.23,
+      flagged: true,
+      shape: SHAPE_INDEX.triangle,
+      events: 2,
+    });
+    expect(arcLookOf(null)).toBe(HIDDEN_KIND_LOOK);
+    expect(arcLookOf('exploit')).toBe(CATEGORY_LOOKS.exploit);
+    // It can be a labelled source: its country's name and count, "at least" from its own entries.
+    expect(sourceLabels(drawnArcs([{ ...alert, atLeast: true }]), null)).toEqual([
+      { code: 'PT', from: countryPoint('PT'), name: 'Portugal', count: 'at least 2' },
+    ]);
+    expect(JSON.stringify(globe)).not.toMatch(/phishing|malware/i);
   });
 
   it("the globe faces the drawn arcs' sources, each country weighed by the square root of its events", () => {
@@ -331,6 +362,8 @@ describe('when to read', () => {
     dayEndsAt: null,
     wholeWanted: false,
     dayUnread: false,
+    totalsBehind: false,
+    lastWholeStartAt: T - 200,
   } as const;
 
   it("right after the page opens the whole window is read again at once, with the viewer's day (Q22)", () => {
@@ -364,6 +397,42 @@ describe('when to read', () => {
     expect(nextPoll({ ...WELL, lastPollAt: whole - 40_000 }, T)).toEqual({
       scope: 'recent',
       at: whole - 10_000,
+    });
+  });
+
+  it('a poll brought events newer than the totals: the whole window early, never sooner than 45 s after the last whole read began', () => {
+    // Quiet: the 5-minute rhythm, unchanged.
+    expect(nextPoll({ ...WELL, lastPollAt: T + 30_000 }, T + 30_000)).toEqual({
+      scope: 'recent',
+      at: T + 60_000,
+    });
+    // Behind, and the last whole read began long enough ago: at once.
+    expect(
+      nextPoll(
+        { ...WELL, lastPollAt: T + 30_000, totalsBehind: true, lastWholeStartAt: T - 60_000 },
+        T + 30_000,
+      ),
+    ).toEqual({ scope: 'whole', at: T + 30_000 });
+    // Behind, but the last whole read began 30 s ago: at its start plus 45 s.
+    expect(
+      nextPoll(
+        { ...WELL, lastPollAt: T + 30_000, totalsBehind: true, lastWholeStartAt: T },
+        T + 30_000,
+      ),
+    ).toEqual({ scope: 'whole', at: T + SECURITY_MAP_EARLY_WHOLE_GAP_MS });
+    // The gap is 45 seconds.
+    expect(SECURITY_MAP_EARLY_WHOLE_GAP_MS).toBe(45_000);
+    // Behind never hurries a whole read past its back-off after a failure...
+    const failed = { ...WELL, wholeFailures: 1, lastWholeTryAt: T, totalsBehind: true };
+    expect(nextPoll(failed, T + 30_000)).toEqual({ scope: 'recent', at: T + 30_000 });
+    // ...nor past the wait after a failed read of any kind.
+    expect(
+      nextPoll({ ...WELL, failures: 1, totalsBehind: true, lastWholeStartAt: T - 600_000 }, T + 5),
+    ).toEqual({ scope: 'whole', at: T + 60_000 });
+    // No start on record: at once.
+    expect(nextPoll({ ...WELL, totalsBehind: true, lastWholeStartAt: null }, T + 7)).toEqual({
+      scope: 'whole',
+      at: T + 7,
     });
   });
 
