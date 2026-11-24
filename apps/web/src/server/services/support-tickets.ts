@@ -30,10 +30,6 @@ import { keepAlive } from '@/server/services/lib/defer';
  * email is best-effort, so a bounced email never loses a ticket.
  */
 
-/** A support screenshot that could not be read at its finalize (part 6). */
-export const SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE =
-  'Your screenshot could not be read. Attach it again and send.';
-
 export const TICKET_CATEGORIES = ['bug', 'billing', 'account', 'feature', 'other'] as const;
 export type TicketCategory = (typeof TICKET_CATEGORIES)[number];
 
@@ -427,3 +423,11 @@ async function sendResolvedNotice(
     replyTo: SUPPORT_EMAIL,
   });
 }
+
+/**
+ * A support screenshot that could not be read at its finalize (part 6). Kept
+ * at the end of the file: kept-address-senders.guard.test.ts pins line numbers
+ * above.
+ */
+export const SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE =
+  'Your screenshot could not be read. Attach it again and send.';

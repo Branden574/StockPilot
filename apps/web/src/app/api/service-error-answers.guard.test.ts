@@ -69,6 +69,11 @@ const OWN_ANSWERS: Record<string, { branches: number; reason: string }> = {
     reason:
       "The file parser's refusal is a 400 about the uploaded file; faults go to internalErrorResponse.",
   },
+  'v1/support/route.ts': {
+    branches: 1,
+    reason:
+      "The screenshot's upload check (part 6): its refusal is a 400 invalid_attachment with the check's sentence, the same code as the path's shape refusal; a fault is reported and answered 500.",
+  },
   // Downloads (PDF, CSV, zip, label image).
   'cycle-counts/[id]/pdf/route.tsx': {
     branches: 1,
