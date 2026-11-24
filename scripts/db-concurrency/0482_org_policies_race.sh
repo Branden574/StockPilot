@@ -54,7 +54,8 @@ wait_for() { # <application_name> <wait_event or 'PgSleep'>
   return 1
 }
 as_member() { # <user id>: the SQL that makes the rest of a transaction run as that member
-  printf "set local role authenticated; select set_config('request.jwt.claims', '{\"sub\": \"%s\", \"role\": \"authenticated\", \"aal\": \"aal1\"}', true);" "$1"
+  # SET LOCAL prints nothing, so each session's output is only its function's answer (one line of JSON).
+  printf "set local role authenticated; set local \"request.jwt.claims\" to '{\"sub\": \"%s\", \"role\": \"authenticated\", \"aal\": \"aal1\"}';" "$1"
 }
 
 ORG=a0482900-0000-0000-0000-0000000000a1
