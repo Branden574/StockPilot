@@ -2671,6 +2671,22 @@ WEB_TESTS=(
   src/lib/security/probe-sample.test.ts
   'src/app/api/security/probe/[kind]/route.test.ts'
   src/server/security/event-samples.test.ts
+
+  # What was asked for, on the platform console (part 5, stage 3b): the read
+  # is imported by the panel's Server Action alone, which asks the console's
+  # own rule (checkPlatformConsoleRead) before its input or the table, and
+  # answers one fixed refusal; every argument is checked on both sides (a
+  # probe kind, a whole UTC hour within 7 days, two capitals); a missing
+  # function, a failed or refused read and an answer this build does not know
+  # are "could not check", never an empty list; what leaves the server is the
+  # view's keys alone (no organization). The panel's section reads once when
+  # it opens and renders every path and query string as text only, never a
+  # link, never markup; neither panel folder sets HTML from a string.
+  src/server/services/platform/security-event-samples.test.ts
+  src/server/services/platform/security-event-samples.callers.test.ts
+  src/server/actions/platform/security-event-samples.test.ts
+  src/components/platform/security-response/security-response-samples.test.tsx
+  src/components/platform/security-response/security-panels-no-raw-html.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3055,6 +3071,12 @@ CORE_TESTS=(
   # inputs; ordinary scanner shapes come out unchanged (apps/web's
   # probe-paths.test.ts holds every made-up scanner path to that too).
   src/security/request-scrub.test.ts
+  # What was asked for, on the console (part 5, stage 3b): the browser's
+  # reader takes exactly the view's keys, each path and query string passing
+  # the table's own text rules, else "could not check"; the refusal is one
+  # fixed answer; an entry asks for its own kind and UTC hour, never one more
+  # than 7 days back.
+  src/security/security-event-samples.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
