@@ -754,6 +754,55 @@ describe('the flagged list beside the map', () => {
     expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
   });
 
+  it('a poll that pushes entries past the 20 kept: the list says it leaves some out', async () => {
+    // Twenty flagged entries of one event each, and 20 flagged events: all of them listed.
+    const twenty = Array.from({ length: 20 }, (_, i) => ({
+      ...answer().flagged_feed[0]!,
+      minute: `2026-11-23T21:${String(10 + i).padStart(2, '0')}:00+00:00`,
+      events: 1,
+      at_least: false,
+    }));
+    const totals = answer().totals;
+    totals.password_guessing.flagged = 20;
+    const whole = answer({ flagged_feed: twenty, totals });
+    const newer = { ...twenty[0]!, minute: '2026-11-23T21:59:00+00:00', city: 'Example Newest' };
+    mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole'
+          ? wholeRead(whole)
+          : recentRead(answer({ ...liveAnswer(), flagged_feed: [newer] })),
+      wholeRead(whole),
+    );
+    await advance(0);
+    expect(entries()).toHaveLength(20);
+    expect(screen.queryByTestId('security-map-flagged-words')).toBeNull();
+    await advance(30_000);
+    expect(entries()).toHaveLength(20);
+    expect(entries()[0]!.textContent).toContain('Example Newest');
+    expect(screen.getByTestId('security-map-flagged-words').textContent).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedMore,
+    );
+  });
+
+  it('a new read of the whole window starts both lists again from its own', async () => {
+    let wholeReads = 0;
+    mount(async (input) => {
+      if ((input as { scope: string }).scope !== 'whole') {
+        return recentRead(answer({ ...liveAnswer(), feed: [], flagged_feed: [] }));
+      }
+      wholeReads += 1;
+      // The second read of the whole window no longer holds either entry.
+      return wholeReads === 1 ? dayRead()(input) : dayRead({ feed: [], flagged_feed: [] })(input);
+    });
+    await advance(0);
+    expect(entries()).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
+    for (let i = 0; i < 10; i += 1) await advance(30_000);
+    expect(wholeReads).toBe(2);
+    expect(entries()).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: /Request for a settings file/ })).toBeNull();
+  });
+
   it("a poll's flagged entries are merged in, newest first; the whole read's own all stay", async () => {
     const flaggedAt = (minute: string, city: string) =>
       feedEntry({
