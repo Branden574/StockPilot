@@ -38,7 +38,7 @@ const SIGN_IN_ALERTS_BUDGET_MS = 30_000;
 /** No event samples call starts after this long into that loop (part 5, stage 3). */
 const EVENT_SAMPLES_BUDGET_MS = 15_000;
 
-/** A function the database does not have yet (Postgres, then PostgREST's schema cache). */
+/** A function the database does not have (Postgres, then PostgREST's schema cache). */
 const MISSING_FUNCTION_CODES = new Set(['42883', 'PGRST202']);
 
 const TAG = 'cron.security-events-retention';
@@ -92,10 +92,14 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * hour began more than 90 days ago, at most 5,000 a call and answers
  * {"deleted": n}, by the same rule again, with EVENT_SAMPLES_BUDGET_MS of its
  * own, whether or not an earlier loop failed. The function missing (42883,
- * PGRST202: this code is live before the migration) is no failure: the loop
- * stops, says `missing: true` in the answer and its summary line, and reports
- * nothing. Its early stop and its errors are reported like the others',
- * marked with its table; an error answers 500.
+ * PGRST202) ends this loop only: this code ships after migration 0479 is
+ * live, so a missing function means the migration was rolled back or
+ * something is wrong. It is reported once per run (warning, marked with the
+ * table, the code and nothing else) and said in the answer as
+ * `eventSamples: { ok: false, missing: true, ... }` and in the summary line;
+ * the other purges' work and answer are unchanged. Its early stop and its
+ * errors are reported like the others', marked with its table; an error
+ * answers 500.
  *
  * The passkey upkeep (server/security/passkey-maintenance.ts: the purge of
  * old challenges and removed passkeys, the sweep, the counts, the Auth
@@ -286,19 +290,22 @@ async function purgeSignInAlerts(): Promise<SignInAlertsPurge | null> {
 
 /** The event samples loop's answer, for the run's own answer. */
 interface EventSamplesPurge {
+  /** False when the purge could not run at all (the function missing). */
+  ok: boolean;
   deleted: number;
   calls: number;
   stoppedEarly: boolean;
   stop: StopReason | null;
-  /** The purge function is not in the database yet (before migration 0479): nothing was purged, nothing reported. */
+  /** The purge function is not in the database (migration 0479 rolled back?): nothing was purged; reported. */
   missing: boolean;
 }
 
 /**
  * purge_security_event_samples() until a call removes fewer than PURGE_BATCH,
  * by the first loop's rule (see GET), within EVENT_SAMPLES_BUDGET_MS. The
- * function missing ends the loop with `missing` and no report. Null when it
- * failed (reported, counts only). Never throws.
+ * function missing ends the loop with `ok: false, missing: true`, reported
+ * once as a warning. Null when it failed (reported, counts only). Never
+ * throws.
  */
 async function purgeEventSamples(): Promise<EventSamplesPurge | null> {
   const started = Date.now();
@@ -306,7 +313,7 @@ async function purgeEventSamples(): Promise<EventSamplesPurge | null> {
   let calls = 0;
   let busyInARow = 0;
   let stop: StopReason | null = null;
-  let missing = false;
+  let missing: string | null = null;
   try {
     const admin = createAdminClient();
     for (;;) {
@@ -323,7 +330,7 @@ async function purgeEventSamples(): Promise<EventSamplesPurge | null> {
       if (error) {
         const code = String((error as { code?: unknown }).code ?? 'no code');
         if (MISSING_FUNCTION_CODES.has(code)) {
-          missing = true;
+          missing = code;
           break;
         }
         if (code === '55P03') {
@@ -364,5 +371,22 @@ async function purgeEventSamples(): Promise<EventSamplesPurge | null> {
       extra: { table: 'security_event_samples', calls, deleted, stop },
     });
   }
-  return { deleted, calls, stoppedEarly: stop !== null, stop, missing };
+  if (missing !== null) {
+    await reportError(
+      new Error('Security event samples retention: the purge function is missing'),
+      {
+        tag: TAG,
+        level: 'warning',
+        extra: { table: 'security_event_samples', code: missing },
+      },
+    );
+  }
+  return {
+    ok: missing === null,
+    deleted,
+    calls,
+    stoppedEarly: stop !== null,
+    stop,
+    missing: missing !== null,
+  };
 }

@@ -19,8 +19,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * Part 5, stage 3 (what scanners asked for): then
  * purge_security_event_samples() by the same rule, within 15 s of its own,
  * whether or not an earlier loop failed; its counts are answered under
- * eventSamples. The function missing (42883, PGRST202: the code is live
- * before migration 0479) is skipped, said in the answer, and reported nowhere.
+ * eventSamples. The function missing (42883, PGRST202) is no silent
+ * success: the code ships after migration 0479 is live, so it is reported
+ * once per run as a warning (the table and the code only) and answered as
+ * `eventSamples: { ok: false, missing: true }`, while the other purges'
+ * work and answer stand.
  *
  * The harness answers each function by its name: h.rpc is
  * purge_security_events, h.alerts is purge_sign_in_alerts, h.samples is
@@ -122,7 +125,14 @@ describe('the loop', () => {
         stoppedEarly: false,
         stop: null,
         signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
-        eventSamples: { deleted: 0, calls: 1, stoppedEarly: false, stop: null, missing: false },
+        eventSamples: {
+          ok: true,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: false,
+        },
       },
     });
     expect(h.rpc).toHaveBeenCalledWith('purge_security_events');
@@ -142,7 +152,14 @@ describe('the loop', () => {
       stoppedEarly: false,
       stop: null,
       signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
-      eventSamples: { deleted: 0, calls: 1, stoppedEarly: false, stop: null, missing: false },
+      eventSamples: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
     });
   });
 
@@ -156,7 +173,14 @@ describe('the loop', () => {
       stoppedEarly: true,
       stop: 'call_limit',
       signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
-      eventSamples: { deleted: 0, calls: 1, stoppedEarly: false, stop: null, missing: false },
+      eventSamples: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
     });
     expect(h.rpc).toHaveBeenCalledTimes(40);
     // The purge was outrun: more is left than one run takes. Once, as a warning, counts only.
@@ -218,7 +242,14 @@ describe('the loop', () => {
       stoppedEarly: false,
       stop: null,
       signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
-      eventSamples: { deleted: 0, calls: 1, stoppedEarly: false, stop: null, missing: false },
+      eventSamples: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
     });
     expect(h.report).not.toHaveBeenCalled();
   });
@@ -239,7 +270,14 @@ describe('the loop', () => {
         stoppedEarly: true,
         stop: 'busy',
         signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
-        eventSamples: { deleted: 0, calls: 1, stoppedEarly: false, stop: null, missing: false },
+        eventSamples: {
+          ok: true,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: false,
+        },
       },
     });
     expect(h.rpc).toHaveBeenCalledTimes(4);
@@ -401,7 +439,14 @@ describe('event samples (part 5, stage 3): the same run, the same rule', () => {
     h.samples.mockResolvedValueOnce(removed(9));
     expect((await run()).body).toMatchObject({
       ok: true,
-      eventSamples: { deleted: 9, calls: 1, stoppedEarly: false, stop: null, missing: false },
+      eventSamples: {
+        ok: true,
+        deleted: 9,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
     });
     expect(h.samples).toHaveBeenCalledWith('purge_security_event_samples');
     expect(h.alerts.mock.invocationCallOrder[0]!).toBeLessThan(
@@ -411,6 +456,7 @@ describe('event samples (part 5, stage 3): the same run, the same rule', () => {
       '[cron.security-events-retention]',
       JSON.stringify({
         table: TABLE,
+        ok: true,
         deleted: 9,
         calls: 1,
         stoppedEarly: false,
@@ -485,9 +531,10 @@ describe('event samples (part 5, stage 3): the same run, the same rule', () => {
   });
 
   it.each(['42883', 'PGRST202'])(
-    'the function missing (%s, before migration 0479) is skipped: said in the answer, reported nowhere, 200',
+    'the function missing (%s): the other purges stand, the samples half is not ok, reported once as a warning',
     async (code) => {
       h.rpc.mockResolvedValueOnce(counts(2, 3));
+      h.alerts.mockResolvedValueOnce({ data: 4, error: null });
       h.samples.mockResolvedValue({ data: null, error: { code, message: 'function not found' } });
       expect(await run()).toEqual({
         status: 200,
@@ -498,14 +545,65 @@ describe('event samples (part 5, stage 3): the same run, the same rule', () => {
           calls: 1,
           stoppedEarly: false,
           stop: null,
-          signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
-          eventSamples: { deleted: 0, calls: 1, stoppedEarly: false, stop: null, missing: true },
+          signInAlerts: { deleted: 4, calls: 1, stoppedEarly: false, stop: null },
+          eventSamples: {
+            ok: false,
+            deleted: 0,
+            calls: 1,
+            stoppedEarly: false,
+            stop: null,
+            missing: true,
+          },
         },
       });
+      // One call: a missing function is not tried again in the same run.
       expect(h.samples).toHaveBeenCalledTimes(1);
-      expect(h.report).not.toHaveBeenCalled();
+      expect(h.report).toHaveBeenCalledTimes(1);
+      expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'cron.security-events-retention',
+        level: 'warning',
+        extra: { table: TABLE, code },
+      });
+      expect(console.info).toHaveBeenCalledWith(
+        '[cron.security-events-retention]',
+        JSON.stringify({
+          table: TABLE,
+          ok: false,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: true,
+        }),
+      );
     },
   );
+
+  it('the function missing is reported once per run: each run reports it again', async () => {
+    h.samples.mockResolvedValue({
+      data: null,
+      error: { code: '42883', message: 'function not found' },
+    });
+    h.rpc.mockResolvedValue(counts(0, 0));
+    await run();
+    await run();
+    expect(h.report).toHaveBeenCalledTimes(2);
+  });
+
+  it('the function missing with the security events purge failing: both reported, and 500', async () => {
+    h.rpc.mockRejectedValueOnce(new Error('fetch failed'));
+    h.samples.mockResolvedValue({
+      data: null,
+      error: { code: 'PGRST202', message: 'function not found' },
+    });
+    expect((await run()).status).toBe(500);
+    expect(h.report).toHaveBeenCalledTimes(2);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { table: TABLE, code: 'PGRST202' },
+    });
+  });
 
   it.each([
     [
@@ -542,6 +640,7 @@ describe('event samples (part 5, stage 3): the same run, the same rule', () => {
       '[cron.security-events-retention]',
       JSON.stringify({
         table: TABLE,
+        ok: true,
         deleted: 4,
         calls: 1,
         stoppedEarly: false,
