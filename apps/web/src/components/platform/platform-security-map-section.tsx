@@ -1,3 +1,4 @@
+import { readPlatformViewerTimeZone } from '@/lib/platform/viewer-time-zone';
 import { readPlatformSecurityMap } from '@/server/services/platform/security-map';
 
 import { SecurityMapIsland } from './security-map/security-map-island';
@@ -16,14 +17,21 @@ import { SecurityMapIsland } from './security-map/security-map-island';
  * requirePlatformAdmin() has answered (security-map.callers.test.ts pins
  * both). What leaves the server is core's view of the answer, never the
  * database's document: a category the map does not show is in no drawing
- * and no plain feed, and its flagged entries are listed with no category,
- * no source and no organization.
+ * and no plain feed, and its flagged entries are listed with no category.
+ * Every flagged entry leaves with no source, and carries its organization
+ * (id, name and how many) as the feed does (the owner, 2026-11-24: "its fine
+ * showing org names so I know").
  */
 export async function PlatformSecurityMapSection() {
-  const initial = await readPlatformSecurityMap({ scope: 'whole', dayStart: null });
+  // The zone the viewer chose (their organization's Timezone setting), read
+  // beside the map's first read: the page's gate ran before either.
+  const [initial, timeZone] = await Promise.all([
+    readPlatformSecurityMap({ scope: 'whole', dayStart: null }),
+    readPlatformViewerTimeZone(),
+  ]);
   return (
     <section aria-label="Attack map" data-slot="platform-security-map" className="min-w-0">
-      <SecurityMapIsland initial={initial} />
+      <SecurityMapIsland initial={initial} timeZone={timeZone} />
     </section>
   );
 }

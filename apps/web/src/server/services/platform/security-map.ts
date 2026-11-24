@@ -53,8 +53,10 @@ import {
  * measures both), and far less on any ordinary day. A category the map does
  * not show is in no drawing, no table and no plain feed; its flagged entries
  * are in the flagged list with no category, and its other events are numbers
- * for one line of words. The flagged list carries no organization and no
- * source, and every entry's identity is a key core makes here.
+ * for one line of words. The flagged list carries its organization as the
+ * plain feed does (id, name, how many; review M1 reversed by the owner for his
+ * console, 2026-11-24) and no source, and every entry's identity is a key core
+ * makes here (it already held the organization's id, so it did not change).
  */
 
 /** How long the read may take before the page gives up on it. */

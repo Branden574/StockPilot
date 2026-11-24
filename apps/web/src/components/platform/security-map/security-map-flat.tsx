@@ -15,7 +15,7 @@ import {
   sourceMarkSize,
   type ArcTiming,
 } from './globe-math';
-import { CATEGORY_LOOKS, PANEL, type DrawnArc, type MarkShape } from './map-model';
+import { PANEL, arcLookOf, type DrawnArc, type MarkShape } from './map-model';
 import {
   FLAT_HEIGHT,
   FLAT_WIDTH,
@@ -117,7 +117,7 @@ export function SecurityMapFlat({
       />
       <g key={stepKey}>
         {arcs.map(({ arc, from }) => {
-          const look = CATEGORY_LOOKS[arc.category];
+          const look = arcLookOf(arc.category);
           const d = flatArcPath(from, STOCKPILOT_LON_LAT);
           const flagged = arc.outcome === 'flagged';
           const width = (flagged ? 0.6 : 1) * (0.8 + arc.width * 0.55);
@@ -130,7 +130,13 @@ export function SecurityMapFlat({
               : offset * REPLAY_SPREAD_MS + REPLAY_FLIGHT_MS;
           const shape = markPath(look.shape, x, y, sourceMarkSize(arc.width) / 2.6);
           return (
-            <g key={arc.key} data-arc={arc.key} data-outcome={arc.outcome}>
+            <g
+              key={arc.key}
+              data-arc={arc.key}
+              data-outcome={arc.outcome}
+              // A flagged sign-in alert drawn from the flagged list: the grey look, no kind's name.
+              data-look={arc.category === null ? 'sign-in-alert' : arc.category}
+            >
               <path
                 d={d}
                 fill="none"

@@ -147,8 +147,13 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // new devices or countries in a day that further ones are turned away
   // unrecorded (flagged, not blocked: the sign-in itself still happened).
   sign_in_alerts_held: 'Sign-in alerts held after too many in one day',
-  // Phishing: what a sign-in alert flags (part 3). Not refusals: the sign-in
-  // happened, and the alert asks the member whether it was them.
+  // Category `phishing`: what a sign-in alert flags (part 3). Not refusals:
+  // the sign-in happened, and the alert asks the member whether it was them.
+  // The record's code is phishing, but what it holds today is a sign-in alert,
+  // one a person answered or one we flagged, so the platform console names the
+  // category "Sign-in alert" (securityConsoleCategoryLabel), never "Phishing"
+  // (lab walk 3, F1, 2026-11-24). An organization's own pages and the phone
+  // app keep the shared label: their wording is a separate decision.
   sign_in_new_country: 'Sign-in from a new country',
   sign_in_not_me: 'A member said a sign-in was not them',
   // Read from the sign-in service's own log (the phone app and direct
@@ -205,6 +210,25 @@ export function securityEventReasonLabel(reason: unknown): string {
 
 export function securityEventCategoryLabel(category: unknown): string {
   return own(CATEGORY_LABELS, category) ?? 'Other';
+}
+
+/**
+ * THE PLATFORM CONSOLE'S name for a category (lab walk 3, F1): the console
+ * never says "Phishing". The category whose code is phishing holds sign-in
+ * alerts today, so the console says "Sign-in alert" for one entry's kind and
+ * "Sign-in alerts" for the kind as a whole (a row or heading of kinds, beside
+ * "Exploit attempts"); every other category is securityEventCategoryLabel's.
+ * Console only: the platform pages and core's console modules (the attack
+ * map's words, the security briefing). An organization's own pages and the
+ * phone app keep securityEventCategoryLabel (console-category-label.guard.test.ts
+ * in the web pins who may call this).
+ */
+export function securityConsoleCategoryLabel(
+  category: unknown,
+  form: 'one' | 'kind' = 'one',
+): string {
+  if (category === 'phishing') return form === 'kind' ? 'Sign-in alerts' : 'Sign-in alert';
+  return securityEventCategoryLabel(category);
 }
 
 export function securityEventOutcomeLabel(outcome: unknown): string {

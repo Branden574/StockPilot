@@ -295,4 +295,28 @@ describe('what an owner or admin sees', () => {
     expect(screen.getByText('No blocked activity yet.')).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
   });
+
+  // The platform console says "Sign-in alert" for this category (lab walk 3, F1); an
+  // organization's own page keeps the shared words, a separate decision: pinned, so
+  // the two cannot drift by accident.
+  it('the category whose code is phishing is still "Phishing" here, in the totals and the table', async () => {
+    h.role = 'admin';
+    h.activity.mockResolvedValueOnce({
+      totals: [{ category: 'phishing', events: 3 }],
+      rows: [
+        {
+          ...ACTIVITY.rows[0]!,
+          id: 'r9',
+          category: 'phishing',
+          outcome: 'flagged',
+          reason: 'sign_in_new_country',
+        },
+      ],
+    });
+    await renderPage();
+    const totals = screen.getByRole('region', { name: 'Last 7 days' });
+    expect(within(totals).getByText('Phishing')).toBeTruthy();
+    expect(screen.getByText('Phishing · Flagged')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('Sign-in alert');
+  });
 });

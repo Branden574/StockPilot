@@ -257,7 +257,7 @@ describe('the read', () => {
     expect(result.view.whole?.flagged).toBe(1);
   });
 
-  it('the flagged list carries no organization and no source, in a whole read and a poll; the plain feed only what it draws', async () => {
+  it('the flagged list carries the organization as the feed does and no source, in a whole read and a poll; a hidden kind is never named', async () => {
     const ORG_ID = 'a0478000-0000-4000-8000-0000000000aa';
     const ORG_NAME = 'Example Quiet Academy';
     const alert = feedEntry({
@@ -288,12 +288,17 @@ describe('the read', () => {
       if (!result.ok || result.view === null) throw new Error('expected a view');
       const flagged = JSON.stringify(result.view.flaggedFeed);
       expect(result.view.flaggedFeed, scope).toHaveLength(2);
-      expect(flagged).not.toContain(ORG_ID);
-      expect(flagged).not.toContain(ORG_NAME);
       expect(flagged).not.toMatch(/"(api|web|phone|server)"/);
-      for (const row of result.view.flaggedFeed) expect(row).toHaveLength(8);
-      // The hidden kind's alert: no category at all, and its organization nowhere in the answer.
+      // Exactly the parts the list draws: the plain feed's organization parts, no source, no outcome.
+      for (const row of result.view.flaggedFeed) expect(row).toHaveLength(11);
+      // Review M1 reversed by the owner (2026-11-24): the organization travels, as on the feed.
+      expect(result.view.flaggedFeed.map((row) => row.slice(8))).toEqual([
+        [ORG_ID, ORG_NAME, 1],
+        [ORG_ID, ORG_NAME, 1],
+      ]);
+      // The hidden kind's alert: no category at all, and its kind's name nowhere in the answer.
       expect(result.view.flaggedFeed[0]?.[4]).toBeNull();
+      expect(flagged).not.toMatch(/phishing/i);
       // The plain feed draws the organization of an entry of a shown kind: its name, and its id for the link.
       expect(result.view.feed.map((row) => row.slice(10, 12))).toEqual([
         [null, null],
