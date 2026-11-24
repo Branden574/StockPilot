@@ -112,6 +112,7 @@ export * from './rentals/emails';
 export * from './time/calendar-date';
 export * from './time/org-timezone';
 export * from './time/zoned-wall-clock';
+export * from './time/viewer-zone';
 export * from './b2b/pricing-mode';
 export * from './auth/account-status';
 export * from './auth/context-unavailable';

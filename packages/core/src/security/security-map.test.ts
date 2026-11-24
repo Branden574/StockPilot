@@ -1839,10 +1839,10 @@ describe('the words', () => {
       window_shortened: true,
     });
     expect(securityMapShortenedWords(cut, 'UTC')).toBe(
-      'Showing the last 3 hours 52 minutes only, from 18:08, your time: there were too many events to count all of the last 24 hours. Nothing before 18:08 is in these numbers.',
+      'Showing the last 3 hours 52 minutes only, from 18:08 UTC: there were too many events to count all of the last 24 hours. Nothing before 18:08 UTC is in these numbers.',
     );
-    expect(securityMapCounters(cut, true).map((c) => c.label)).toEqual([
-      'Blocked since midnight, your time',
+    expect(securityMapCounters(cut, true, { timeZone: 'UTC' }).map((c) => c.label)).toEqual([
+      'Blocked since midnight, UTC',
       'Blocked, last 3 hours 52 minutes',
       'Flagged, last 3 hours 52 minutes',
     ]);
@@ -1862,9 +1862,9 @@ describe('the words', () => {
     });
     expect(securityMapCounters(partial, true, { timeZone: 'UTC' })[0]).toEqual({
       id: 'blocked_today',
-      label: 'Blocked since midnight, your time',
+      label: 'Blocked since midnight, UTC',
       value: 'at least 40',
-      note: 'Counted from 18:08, your time: there were too many events to count the whole day.',
+      note: 'Counted from 18:08 UTC: there were too many events to count the whole day.',
     });
     // Partial alone is enough for "at least", even where the floor's name was left out.
     const partialOnly = { ...partial, whole: { ...partial.whole, floors: [] } };
@@ -1902,8 +1902,8 @@ describe('the words', () => {
       day_start: '2026-11-23T08:00:00+00:00',
       blocked_since_day_start: 61,
     });
-    expect(securityMapCounters(view, true)).toEqual([
-      { id: 'blocked_today', label: 'Blocked since midnight, your time', value: '61', note: null },
+    expect(securityMapCounters(view, true, { timeZone: 'UTC' })).toEqual([
+      { id: 'blocked_today', label: 'Blocked since midnight, UTC', value: '61', note: null },
       { id: 'blocked_window', label: 'Blocked, last 24 hours', value: '193', note: null },
       {
         id: 'flagged_window',
@@ -1965,7 +1965,7 @@ describe('the words', () => {
     const q = whole(quiet);
     const replay = planSecurityMapPlayback(q, null);
     expect(securityMapModeWords(replay, q, 0, 'UTC')).toBe(
-      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Now showing 03:00 to 04:00, your time. Hours with nothing to draw are skipped.',
+      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Now showing 03:00 to 04:00 UTC. Hours with nothing to draw are skipped.',
     );
     // Events of the last ten minutes the live play cannot draw: said, never "nothing".
     const api = whole({
@@ -1973,7 +1973,7 @@ describe('the words', () => {
       feed: [entry({ minute: '2026-11-23T21:56:00+00:00', source: 'api', country: null })],
     });
     expect(securityMapModeWords(planSecurityMapPlayback(api, null), api, 0, 'UTC')).toBe(
-      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Events of the last 10 minutes without a place, or from the phone app and the API, are counted in the numbers, but the live play does not draw them. Now showing 03:00 to 04:00, your time. Hours with nothing to draw are skipped.',
+      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Events of the last 10 minutes without a place, or from the phone app and the API, are counted in the numbers, but the live play does not draw them. Now showing 03:00 to 04:00 UTC. Hours with nothing to draw are skipped.',
     );
     for (const words of [
       securityMapModeWords(replay, q, 0),
@@ -1982,7 +1982,7 @@ describe('the words', () => {
       expect(words).not.toMatch(/nothing in the last 10 minutes/i);
     }
     expect(securityMapModeWords(replay, q, 1, 'America/Los_Angeles')).toContain(
-      'Now showing 13:00 to 14:00, your time.',
+      'Now showing 13:00 to 14:00 PST.',
     );
     // A step past the end is the last one, never an invented hour.
     expect(securityMapModeWords(replay, q, 99, 'UTC')).toContain('Now showing 21:00 to 22:00');
@@ -2011,15 +2011,15 @@ describe('the words', () => {
     const replay = planSecurityMapPlayback(whole(quiet), null);
     expect(securityMapPillWords(replay, null, health, 0, 'UTC')).toEqual({
       kind: 'replay',
-      text: 'Replay 03:00 to 04:00',
+      text: 'Replay 03:00 to 04:00 UTC',
     });
     // A step past the end is the last one, never an invented hour.
     expect(securityMapPillWords(replay, null, health, 99, 'UTC').text).toMatch(
-      /^Replay 21:00 to 22:00$/,
+      /^Replay 21:00 to 22:00 UTC$/,
     );
     expect(securityMapPillWords(live, 'not_updating', health, 0, 'UTC')).toEqual({
       kind: 'not_updating',
-      text: 'Not updating since 12:03',
+      text: 'Not updating since 12:03 UTC',
     });
     expect(
       securityMapPillWords(live, 'not_updating', { ...health, lastGoodAt: null }, 0, 'UTC').text,
@@ -2077,7 +2077,7 @@ describe('the words', () => {
     const at = Date.parse('2026-11-23T12:03:20Z');
     const health = { failures: 2, lastGoodAt: at, refused: false };
     expect(securityMapStopWords('not_updating', health, 'UTC')).toBe(
-      'Not updating since 12:03, your time. The map is stopped and shows what was read then.',
+      'Not updating since 12:03 UTC. The map is stopped and shows what was read then.',
     );
     expect(securityMapStopWords('not_updating', { ...health, lastGoodAt: null })).toBe(
       'Not updating. Nothing could be read, so the map is stopped.',
@@ -2273,14 +2273,14 @@ describe('the words', () => {
 
   it('when the totals were read', () => {
     expect(securityMapAsOfWords(whole(), 'UTC')).toBe(
-      'Totals and table as of 22:00, your time. They are counted again every 5 minutes; the live play and the feed every 30 seconds.',
+      'Totals and table as of 22:00 UTC. They are counted again every 5 minutes; the live play and the feed every 30 seconds.',
     );
     expect(securityMapAsOfWords(null)).toBe(
       "The day's picture is incomplete: the totals and the table could not be read. They are tried again within 10 minutes.",
     );
     // The newest whole read failed: the totals are those read before, and the page says so.
     expect(securityMapAsOfWords(whole(), 'UTC', true)).toBe(
-      'Totals and table as of 22:00, your time. The newest count could not be read, so these may be out of date; it is tried again within 10 minutes. The live play and the feed are read every 30 seconds.',
+      'Totals and table as of 22:00 UTC. The newest count could not be read, so these may be out of date; it is tried again within 10 minutes. The live play and the feed are read every 30 seconds.',
     );
   });
 
@@ -2292,6 +2292,7 @@ describe('the words', () => {
     const [first, held] = view.feed.map(securityMapFeedWords);
     expect(first).toMatchObject({
       time: '21:58 UTC',
+      at: Date.parse('2026-11-23T21:58:00+00:00'),
       categoryLabel: 'Password guessing',
       outcomeLabel: 'Blocked',
       reason: 'wrong_password',
@@ -2354,6 +2355,7 @@ describe('the words', () => {
     expect(pt).toEqual({
       key: securityMapEntryKey(busy().flagged_feed![0]!),
       time: '21:59 UTC',
+      at: Date.parse('2026-11-23T21:59:00+00:00'),
       category: null,
       what: 'Sign-in from a new country',
       country: 'PT',

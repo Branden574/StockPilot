@@ -36,6 +36,7 @@ import {
   type SecurityEventOutcome,
   type SecurityEventSource,
 } from './security-events';
+import { runtimeTimeZone, usableTimeZone, zoneLongWords, zoneShortName } from '../time/viewer-zone';
 
 /* ═════════════════════════════ 1. THE LISTS ═════════════════════════════ */
 
@@ -1856,7 +1857,7 @@ export const SECURITY_MAP_NOT_COUNTED_YET = 'Not counted yet';
 export function securityMapCounters(
   whole: SecurityMapWholeRead | null,
   dayStartAsked: boolean,
-  options: { dayStartNow?: string | null; timeZone?: string } = {},
+  options: { dayStartNow?: string | null; timeZone?: string; now?: number } = {},
 ): SecurityMapCounter[] {
   const window = whole ? securityMapWindowWords(whole.from, whole.to) : 'last 24 hours';
   const w = whole?.whole ?? null;
@@ -1887,10 +1888,11 @@ export function securityMapCounters(
   return [
     {
       id: 'blocked_today',
-      label: 'Blocked since midnight, your time',
+      // The midnight of the zone the times beside it are in, named.
+      label: `Blocked since midnight, ${zoneShortName(options.now ?? Date.now(), options.timeZone ?? runtimeTimeZone())}`,
       value: today,
       note: partial
-        ? `Counted from ${securityMapClock(whole.from, options.timeZone)}, your time: there were too many events to count the whole day.`
+        ? `Counted from ${securityMapZonedClock(whole.from, options.timeZone)}: there were too many events to count the whole day.`
         : null,
     },
     {
@@ -1968,6 +1970,26 @@ export function securityMapClock(at: number | string, timeZone?: string): string
   }).format(new Date(ms));
 }
 
+/**
+ * "21:58 PST": the clock in `timeZone` and the zone's short name at that
+ * instant, as the formatter gives it (the viewer's zone: the one they chose,
+ * else the browser's; the runtime's own when none is given).
+ */
+export function securityMapZonedClock(at: number | string, timeZone?: string): string {
+  const ms = typeof at === 'number' ? at : Date.parse(at);
+  if (!Number.isFinite(ms)) return '--:--';
+  const zone = timeZone ?? runtimeTimeZone();
+  return `${securityMapClock(ms, zone)} ${zoneShortName(ms, zone)}`;
+}
+
+/** The line under a list that says which zone its times are in: "Times in Pacific Standard Time (America/Los_Angeles)." */
+export function securityMapTimesWords(
+  timeZone: string | undefined,
+  at: number = Date.now(),
+): string {
+  return `Times in ${zoneLongWords(at, timeZone ?? runtimeTimeZone())}.`;
+}
+
 /** "November 21, 2026" in `timeZone`. */
 function dateWords(at: string, timeZone?: string): string {
   return new Intl.DateTimeFormat('en-US', {
@@ -1992,7 +2014,7 @@ export function securityMapModeWords(
   if (plan.mode === 'replay') {
     const step = plan.steps[Math.max(0, Math.min(stepIndex, plan.steps.length - 1))];
     const hour = step
-      ? ` Now showing ${securityMapClock(step.fromMs, timeZone)} to ${securityMapClock(step.toMs, timeZone)}, your time.`
+      ? ` Now showing ${securityMapClock(step.fromMs, timeZone ?? runtimeTimeZone())} to ${securityMapZonedClock(step.toMs, timeZone)}.`
       : '';
     const undrawn = plan.liveUndrawn ? ` ${SECURITY_MAP_WORDS.liveUndrawn}` : '';
     return `Replay of the ${window}. ${SECURITY_MAP_WORDS.liveNothingToDraw}${undrawn}${hour} Hours with nothing to draw are skipped.`;
@@ -2014,7 +2036,7 @@ export function securityMapStopWords(
     case 'not_updating':
       return health.lastGoodAt === null
         ? 'Not updating. Nothing could be read, so the map is stopped.'
-        : `Not updating since ${securityMapClock(health.lastGoodAt, timeZone)}, your time. The map is stopped and shows what was read then.`;
+        : `Not updating since ${securityMapZonedClock(health.lastGoodAt, timeZone)}. The map is stopped and shows what was read then.`;
     case 'reduced_motion':
       return 'Not moving: your device asks for reduced motion. The picture and the numbers are the same.';
     case 'paused':
@@ -2057,7 +2079,7 @@ export function securityMapPillWords(
         text:
           health.lastGoodAt === null
             ? SECURITY_MAP_WORDS.pillNotUpdating
-            : `${SECURITY_MAP_WORDS.pillNotUpdating} since ${securityMapClock(health.lastGoodAt, timeZone)}`,
+            : `${SECURITY_MAP_WORDS.pillNotUpdating} since ${securityMapZonedClock(health.lastGoodAt, timeZone)}`,
       };
     case 'reduced_motion':
       return { kind: 'reduced_motion', text: SECURITY_MAP_WORDS.pillReducedMotion };
@@ -2072,7 +2094,7 @@ export function securityMapPillWords(
     return {
       kind: 'replay',
       text: step
-        ? `${SECURITY_MAP_WORDS.pillReplay} ${securityMapClock(step.fromMs, timeZone)} to ${securityMapClock(step.toMs, timeZone)}`
+        ? `${SECURITY_MAP_WORDS.pillReplay} ${securityMapClock(step.fromMs, timeZone ?? runtimeTimeZone())} to ${securityMapZonedClock(step.toMs, timeZone)}`
         : SECURITY_MAP_WORDS.pillReplay,
     };
   }
@@ -2112,8 +2134,8 @@ export function securityMapShortenedWords(
   timeZone?: string,
 ): string | null {
   if (!whole || !whole.shortened) return null;
-  const at = securityMapClock(whole.from, timeZone);
-  return `Showing the ${securityMapWindowWords(whole.from, whole.to)} only, from ${at}, your time: there were too many events to count all of the ${securityMapWindowWords(whole.askedFrom, whole.to)}. Nothing before ${at} is in these numbers.`;
+  const at = securityMapZonedClock(whole.from, timeZone);
+  return `Showing the ${securityMapWindowWords(whole.from, whole.to)} only, from ${at}: there were too many events to count all of the ${securityMapWindowWords(whole.askedFrom, whole.to)}. Nothing before ${at} is in these numbers.`;
 }
 
 /**
@@ -2249,7 +2271,7 @@ export function securityMapAsOfWords(
   retrying = false,
 ): string {
   if (!whole) return SECURITY_MAP_WORDS.wholeUnread;
-  const at = `Totals and table as of ${securityMapClock(whole.generatedAt, timeZone)}, your time.`;
+  const at = `Totals and table as of ${securityMapZonedClock(whole.generatedAt, timeZone)}.`;
   return retrying
     ? `${at} ${SECURITY_MAP_WORDS.wholeRetrying}`
     : `${at} They are counted again every 5 minutes; the live play and the feed every 30 seconds.`;
@@ -2258,8 +2280,10 @@ export function securityMapAsOfWords(
 export interface SecurityMapFeedWords {
   /** Stable for an entry across reads. */
   key: string;
-  /** "21:58 UTC". */
+  /** "21:58 UTC", or "13:58 PST": the minute in the viewer's zone, named. */
   time: string;
+  /** The minute as an instant, for its exact UTC beside the words. */
+  at: number;
   category: SecurityEventCategory;
   categoryLabel: string;
   outcome: SecurityEventOutcome;
@@ -2291,7 +2315,12 @@ export function securityMapOutcomeWords(outcome: SecurityEventOutcome): string {
 }
 
 /** One feed entry's facts, ready to show. The reason's own words come from securityEventReasonLabel. */
-export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWords {
+export function securityMapFeedWords(
+  row: SecurityMapFeedRow,
+  /** The viewer's zone; anything else (an index from .map) is UTC. */
+  timeZone?: unknown,
+): SecurityMapFeedWords {
+  const zone = usableTimeZone(timeZone) ?? 'UTC';
   const [
     key,
     minute,
@@ -2312,7 +2341,8 @@ export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWo
   const flood = isSecurityMapFloodReason(reason);
   return {
     key,
-    time: `${securityMapClock(minute, 'UTC')} UTC`,
+    time: securityMapZonedClock(minute, zone),
+    at: Date.parse(minute),
     category,
     categoryLabel: securityEventCategoryLabel(category),
     outcome,
@@ -2337,8 +2367,10 @@ export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWo
 export interface SecurityMapFlaggedWords {
   /** The key the server made, stable for an entry across reads. */
   key: string;
-  /** "21:58 UTC". */
+  /** "21:58 UTC", or "13:58 PST": the minute in the viewer's zone, named. */
   time: string;
+  /** The minute as an instant, for its exact UTC beside the words. */
+  at: number;
   /** The kind, when the map shows it (its mark's colour); null for a kind it does not (a neutral mark). */
   category: SecurityEventCategory | null;
   /** What it was, in its own plain words; a neutral name for a code this build does not know. */
@@ -2352,12 +2384,18 @@ export interface SecurityMapFlaggedWords {
 }
 
 /** One flagged entry's facts, ready to show: time, place, count, and its plain name. Nothing else. */
-export function securityMapFlaggedWords(row: SecurityMapFlaggedRow): SecurityMapFlaggedWords {
+export function securityMapFlaggedWords(
+  row: SecurityMapFlaggedRow,
+  /** The viewer's zone; anything else (an index from .map) is UTC. */
+  timeZone?: unknown,
+): SecurityMapFlaggedWords {
+  const zone = usableTimeZone(timeZone) ?? 'UTC';
   const [key, minute, events, atLeast, c, reason, country, city] = row;
   const flood = isSecurityMapFloodReason(reason);
   return {
     key,
-    time: `${securityMapClock(minute, 'UTC')} UTC`,
+    time: securityMapZonedClock(minute, zone),
+    at: Date.parse(minute),
     category:
       c === null
         ? null
@@ -2430,11 +2468,10 @@ export const SECURITY_MAP_WORDS = {
   viewLabel: 'Map view',
   loading: 'Loading the map...',
   feedTitle: 'Newest entries',
-  feedTimes: 'Times in UTC.',
   feedEmpty: 'No entries to list.',
   flaggedFeedTitle: 'Flagged, not blocked: the newest',
   flaggedFeedNote:
-    'The newest 20 flagged entries of the window read, so a flood of blocked ones never hides them. Times in UTC.',
+    'The newest 20 flagged entries of the window read, so a flood of blocked ones never hides them.',
   flaggedFeedSplit:
     'Flagged sign-in alerts are listed here and drawn on the map with a grey mark. They are not in the numbers by kind.',
   flaggedFeedEmpty: 'Nothing was flagged.',
