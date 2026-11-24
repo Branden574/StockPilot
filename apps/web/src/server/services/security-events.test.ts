@@ -225,6 +225,24 @@ describe('the database’s answers', () => {
     ]);
   });
 
+  it('part 6: an upload refusal (malware) is left out of the rows and the totals, so the page is as it was', async () => {
+    const upload = { ...ROW, id: 'a1b2c3d4-0000-4000-8000-000000000003', category: 'malware', reason: 'upload_hidden_file' };
+    const db = client(
+      { data: [upload, ROW], error: null },
+      {
+        data: [
+          { category: 'malware', outcome: 'blocked', reason: 'upload_wrong_type', source: 'web', country: null, events: 4 },
+          { category: 'password_guessing', outcome: 'blocked', reason: 'wrong_password', source: 'web', country: 'NL', events: 3 },
+        ],
+        error: null,
+      },
+    );
+    const { rows, totals } = await service(db).activity();
+    expect(rows.map((r) => r.reason)).toEqual(['wrong_password']);
+    expect(totals).toEqual([{ category: 'password_guessing', events: 3 }]);
+    expect(JSON.stringify({ rows, totals })).not.toMatch(/malware|upload_/);
+  });
+
   it('nothing recorded: no totals and no rows', async () => {
     const db = client({ data: [], error: null }, { data: [], error: null });
     expect(await service(db).activity()).toEqual({ totals: [], rows: [] });
