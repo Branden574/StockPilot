@@ -12,9 +12,14 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMoc
 // download stub used to serve, and the refusal assertions check IT was never
 // reached — same property as before (no storage read happens on hostile
 // input), stated against the call that now performs the read.
-const { fetchObjectPrefixMock } = vi.hoisted(() => ({ fetchObjectPrefixMock: vi.fn() }));
+const { fetchObjectPrefixMock, fetchObjectWindowMock } = vi.hoisted(() => ({
+  fetchObjectPrefixMock: vi.fn(),
+  // A procedure video's finalize reads only its leading window (part 6).
+  fetchObjectWindowMock: vi.fn(),
+}));
 vi.mock('@/lib/storage-object-prefix', () => ({
   fetchObjectPrefix: fetchObjectPrefixMock,
+  fetchObjectWindow: fetchObjectWindowMock,
 }));
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
@@ -323,6 +328,12 @@ describe('ProcedureVideosService.record — HI-8', () => {
   });
 
   it('PAIRED POSITIVE — the real video path and its .poster.jpg sibling are both accepted', async () => {
+    // Part 6: both are read by the finalize check, so both must be real: an
+    // MP4's first box for the video, a JPEG for the poster (made up, tiny).
+    const mp4 = new Uint8Array([0, 0, 0, 0x14, ...[...'ftypisom'].map((c) => c.charCodeAt(0)), 0, 0, 2, 0, ...[...'mp41'].map((c) => c.charCodeAt(0))]);
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0, 0x0b, 8, 0, 5, 0, 4, 1, 0, 0xff, 0xd9]);
+    makeStorageSpy(jpeg);
+    fetchObjectWindowMock.mockResolvedValue({ prefix: mp4, totalSize: mp4.byteLength });
     const { svc } = svcWith();
     const row = await svc.record({
       procedureId: ENTITY,

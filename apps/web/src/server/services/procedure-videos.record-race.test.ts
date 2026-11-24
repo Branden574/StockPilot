@@ -14,7 +14,18 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('next/cache', () => ({ unstable_cache: vi.fn((fn: unknown) => fn) }));
-vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
+vi.mock('@/lib/supabase/admin', () => ({
+  createAdminClient: vi.fn(() => ({ storage: { from: () => ({ remove: vi.fn() }) } })),
+}));
+// Part 6: the finalize reads the video's first bytes; here they are an MP4's
+// first box (made up), so the record reaches the slot races this file is about.
+vi.mock('@/lib/storage-object-prefix', () => ({
+  fetchObjectPrefix: vi.fn(),
+  fetchObjectWindow: vi.fn(async () => {
+    const box = new Uint8Array([0, 0, 0, 0x14, ...[...'ftypisom'].map((c) => c.charCodeAt(0)), 0, 0, 2, 0, ...[...'mp41'].map((c) => c.charCodeAt(0))]);
+    return { prefix: box, totalSize: box.byteLength };
+  }),
+}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 

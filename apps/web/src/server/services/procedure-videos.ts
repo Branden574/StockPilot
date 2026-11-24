@@ -7,6 +7,7 @@ import type { RecordProcedureVideoInput } from '@stockpilot/core';
 import { reportError } from '@/lib/error-reporter';
 import { isValidStoragePath, procedureVideoPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { checkStoredUpload, checkStoredUploadSignature } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
@@ -291,6 +292,42 @@ export class ProcedureVideosService {
     if (procErr) throw new ServiceError('internal_error', procErr.message);
     if (!proc) throw new ServiceError('not_found', 'Procedure not found');
 
+    // Part 6: the finalize check. Nothing had read these objects: the
+    // bucket's allowed_mime_types (0221) only see the Content-Type the
+    // browser sent. The video's container signature is read from its first
+    // bytes only (MP4, QuickTime or WebM; a video may be a gigabyte, and what
+    // it carries is not inspected); the poster is checked as a picture (JPEG
+    // or WebP, the bucket's image kinds) and is optional, as before: one that
+    // was never uploaded is no poster. A refusal removes both objects, records
+    // a security event in this organization and writes no row. The row keeps
+    // the declared MIME, as before. The service client reads them: the paths
+    // were shape-pinned to this organization and procedure above.
+    const videos = createAdminClient().storage.from(PROCEDURE_VIDEOS_BUCKET);
+    const uploaded = input.thumbnailPath ? [input.storagePath, input.thumbnailPath] : [input.storagePath];
+    const video = await checkStoredUploadSignature(videos, input.storagePath, {
+      surface: 'procedure_video',
+      accept: ['mp4', 'quicktime', 'webm'],
+      organizationId: this.ctx.organizationId,
+      removeOnRefusal: uploaded,
+      unreadableMessage: 'This video could not be read. Try uploading it again.',
+      wrongTypeMessage: 'This file is not an MP4, MOV or WebM video. Pick a real video file.',
+    });
+    if (!video.ok) throw new ServiceError('validation_error', video.message);
+    let posterPath: string | null = input.thumbnailPath ?? null;
+    if (posterPath) {
+      const poster = await checkStoredUpload(videos, posterPath, {
+        surface: 'procedure_poster',
+        accept: ['jpeg', 'webp'],
+        organizationId: this.ctx.organizationId,
+        removeOnRefusal: uploaded,
+        unreadableMessage: 'This video could not be read. Try uploading it again.',
+      });
+      if (!poster.ok) {
+        if (poster.absent) posterPath = null;
+        else throw new ServiceError('validation_error', poster.message);
+      }
+    }
+
     // Insert with retry-on-unique-conflict. Two concurrent uploads can
     // both read max=N and try to insert at N+1; the unique constraint
     // added in migration 0089 turns the loser into a 23505, which we
@@ -319,7 +356,7 @@ export class ProcedureVideosService {
           procedure_id: input.procedureId,
           title: input.title ?? null,
           storage_path: input.storagePath,
-          thumbnail_path: input.thumbnailPath ?? null,
+          thumbnail_path: posterPath,
           duration_seconds: input.durationSeconds ?? null,
           size_bytes: input.sizeBytes ?? null,
           mime_type: input.mimeType ?? null,
