@@ -74,17 +74,54 @@ export function arcHeight(angle: number): number {
 export const ARC_SEGMENTS = 72;
 
 /**
+ * How far an arc bows sideways off its great circle at most (a long arc; a
+ * shorter one bows less). Without it, an arc whose plane is edge-on to the
+ * camera is drawn as a perfectly straight line across the globe's face and
+ * reads as a line through the Earth.
+ */
+export const ARC_BOW = 7 * RADIANS;
+/** Arcs this long or longer bow by the whole ARC_BOW; shorter ones in proportion. */
+const BOW_FULL_AT = 60 * RADIANS;
+/** The largest value of sin(pi t) * (1 + cos(pi t)), at t = 1/3. */
+const BOW_PEAK = (3 * Math.sqrt(3)) / 4;
+
+/**
+ * The sideways bow of the arc from `from` to `to` at its widest, in radians
+ * off the great circle (signed: which side). Always the same for the same
+ * pair, so an arc never flips or jitters between reads.
+ */
+export function arcBow(from: LonLat, to: LonLat): number {
+  const side = arcOffset(`${from[0]},${from[1]}>${to[0]},${to[1]}`) < 0.5 ? -1 : 1;
+  return side * ARC_BOW * Math.min(1, centralAngle(from, to) / BOW_FULL_AT);
+}
+
+/**
+ * The share of an arc's bow at `t` (0 at the source, 1 at StockPilot): none
+ * at either end, widest a third of the way from the source, and meeting
+ * StockPilot along the great circle. It is lopsided on purpose: a bow shaped
+ * like the arc's own rise (widest in the middle) only turns the straight
+ * view to another angle, but a lopsided one leaves no view from which the
+ * arc is a straight line.
+ */
+export function arcBowAt(t: number): number {
+  const clamped = Math.min(1, Math.max(0, t));
+  return (Math.sin(Math.PI * clamped) * (1 + Math.cos(Math.PI * clamped))) / BOW_PEAK;
+}
+
+/**
  * Writes the arc from `from` to `to` on a globe of radius 1 into `out`:
  * `segments + 1` points (x, y, z each) along the great circle between them,
- * lifted off the surface by arcHeight(angle) * sin(pi * t). Two places at
- * the same point make a small loop straight up; two opposite each other go
- * over the north side.
+ * turned `bow * arcBowAt(t)` radians off it to one side (arcBow), and lifted
+ * off the surface by arcHeight(angle) * sin(pi * t). Two places at the same
+ * point make a small loop straight up; two opposite each other go over the
+ * north side.
  */
 export function writeArcPoints(
   from: LonLat,
   to: LonLat,
   out: Float32Array,
   segments: number = ARC_SEGMENTS,
+  bow = 0,
 ): void {
   const a = [0, 0, 0];
   const b = [0, 0, 0];
@@ -105,6 +142,15 @@ export function writeArcPoints(
     Math.cos(fromLat),
     -Math.sin(fromLat) * Math.cos(fromLon),
   ];
+  // The normal of the arc's plane: the bow turns each point along it.
+  const other = opposite ? mid : b;
+  const n = [
+    a[1]! * other[2]! - a[2]! * other[1]!,
+    a[2]! * other[0]! - a[0]! * other[2]!,
+    a[0]! * other[1]! - a[1]! * other[0]!,
+  ];
+  const nLength = Math.hypot(n[0]!, n[1]!, n[2]!);
+  const bows = nLength > 1e-9 && bow !== 0;
   for (let i = 0; i <= segments; i += 1) {
     const t = i / segments;
     let x: number;
@@ -131,6 +177,17 @@ export function writeArcPoints(
       x = k0 * a[0]! + k1 * b[0]!;
       y = k0 * a[1]! + k1 * b[1]!;
       z = k0 * a[2]! + k1 * b[2]!;
+    }
+    if (bows) {
+      // Off the great circle by up to `bow`, none at the ends: the point turned
+      // toward the plane's normal (both unit length and at right angles).
+      const turn = bow * arcBowAt(t);
+      const c = Math.cos(turn);
+      const s = Math.sin(turn) / nLength;
+      const unit = Math.hypot(x, y, z) || 1;
+      x = (x / unit) * c + n[0]! * s;
+      y = (y / unit) * c + n[1]! * s;
+      z = (z / unit) * c + n[2]! * s;
     }
     const length = Math.hypot(x, y, z) || 1;
     const lift = (1 + height * Math.sin(Math.PI * t)) / length;

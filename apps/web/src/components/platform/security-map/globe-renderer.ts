@@ -23,6 +23,7 @@ import {
   GLOBE_HEIGHT_SHARE,
   TRAIL,
   advanceGlobeMotion,
+  arcBow,
   arcFrameAt,
   arcOffset,
   createArcFrame,
@@ -279,8 +280,12 @@ void main() {
   vec3 n = normalize(normalMatrix * position);
   vFacing = dot(n, normalize(-mv.xyz));
   vLight = dot(n, normalize(vec3(-0.5, 0.62, 0.6)));
-  vHeat = aHeat * (0.78 + 0.22 * uPulse);
-  gl_PointSize = uSize * uScale * (1.0 + 0.35 * aHeat) / -mv.z;
+  // Toward the limb the dots crowd together on the screen: they shrink, and a
+  // source country's glow thins out, so neither bands into stripes there.
+  float face = clamp(vFacing, 0.0, 1.0);
+  float thin = smoothstep(0.0, 0.65, face);
+  vHeat = aHeat * (0.78 + 0.22 * uPulse) * smoothstep(0.12, 0.7, face);
+  gl_PointSize = uSize * uScale * mix(0.5, 1.0, thin) * (1.0 + 0.35 * aHeat * thin) / -mv.z;
   gl_Position = projectionMatrix * mv;
 }`;
 
@@ -1050,7 +1055,13 @@ export function createGlobe(canvas: HTMLCanvasElement, options: GlobeOptions): G
       ringState[i * 4] = -1;
       if (!arc) continue;
       const slot = slots[i]!;
-      writeArcPoints(arc.from, options.stockpilot, slot.points);
+      writeArcPoints(
+        arc.from,
+        options.stockpilot,
+        slot.points,
+        ARC_SEGMENTS,
+        arcBow(arc.from, options.stockpilot),
+      );
       writeRibbon(slot.points, ARC_SEGMENTS, ribbon, i * perRibbon);
       for (let v = i * perRibbon; v < (i + 1) * perRibbon; v += 1) {
         arcOrigin[v * 3] = slot.points[0] as number;

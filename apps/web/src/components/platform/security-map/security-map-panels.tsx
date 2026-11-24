@@ -231,18 +231,20 @@ export function SecurityMapViewControls({
 }) {
   const stage = tone === 'stage';
   const button = stage
-    ? `h-8 px-3 text-[12.5px] text-[#e8eef8] hover:bg-white/10 ${FOCUS_STAGE}`
-    : `text-foreground hover:bg-muted h-8 px-3 text-[13px] ${FOCUS_PAGE}`;
+    ? `px-3 text-[12.5px] leading-none text-[#e8eef8] hover:bg-white/10 ${FOCUS_STAGE}`
+    : `text-foreground hover:bg-muted px-3 text-[13px] leading-none ${FOCUS_PAGE}`;
   const frame = stage ? 'sm-glass' : 'border-border bg-card border';
+  // One row of one height: Pause and the Globe / Flat map pair are both 32 px boxes with the same
+  // frame, and the pair's two buttons fill the space inside its frame, so nothing sticks out of it.
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="security-map-controls">
-      <button type="button" onClick={onPause} className={`${frame} ${button} rounded-md`}>
+      <button type="button" onClick={onPause} className={`${frame} ${button} h-8 rounded-md`}>
         {paused ? SECURITY_MAP_WORDS.play : SECURITY_MAP_WORDS.pause}
       </button>
       <div
         role="group"
         aria-label={SECURITY_MAP_WORDS.viewLabel}
-        className={`${frame} inline-flex h-8 rounded-md p-0.5`}
+        className={`${frame} inline-flex h-8 items-stretch rounded-md p-0.5`}
       >
         {(['globe', 'flat'] as const).map((v) => (
           <button
@@ -251,7 +253,7 @@ export function SecurityMapViewControls({
             aria-pressed={view === v}
             disabled={v === 'globe' && !globeOffered}
             onClick={() => onView(v)}
-            className={`${button} h-7 rounded-[5px] disabled:cursor-not-allowed disabled:opacity-50 ${
+            className={`${button} rounded-[5px] disabled:cursor-not-allowed disabled:opacity-50 ${
               stage
                 ? 'aria-pressed:bg-white aria-pressed:text-[#0a1020] aria-pressed:hover:bg-white'
                 : 'aria-pressed:bg-foreground aria-pressed:text-background'
@@ -699,15 +701,17 @@ export function SecurityMapFlaggedList({
                   >
                     {placeOf(w)}
                     {stage ? ' · ' : null}
+                    {/* The time and the count stay together on one line ("at least N"
+                        never breaks): the line wraps between the place and them. */}
                     {stage ? (
-                      <span className="font-mono text-[11px] tabular-nums">
+                      <span className="whitespace-nowrap font-mono text-[11px] tabular-nums">
                         {w.time} · {w.count}
                       </span>
                     ) : null}
                   </span>
                   {stage ? null : (
                     <span
-                      className={`${quiet ?? ''} font-mono text-[11.5px] tabular-nums`}
+                      className={`${quiet ?? ''} whitespace-nowrap font-mono text-[11.5px] tabular-nums`}
                       style={quietStyle}
                     >
                       {w.time} · {w.count}

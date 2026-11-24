@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ARC_BOW,
   ARC_MAX_HEIGHT,
   ARC_MIN_HEIGHT,
   ARC_SEGMENTS,
@@ -30,6 +31,8 @@ import {
   TRAIL,
   advanceGlobeMotion,
   angleFromView,
+  arcBow,
+  arcBowAt,
   arcFrameAt,
   arcHeight,
   arcOffset,
@@ -257,6 +260,120 @@ describe('arcs', () => {
     expect(out.every(Number.isFinite)).toBe(true);
     // The middle is over the north pole.
     near(out[(ARC_SEGMENTS / 2) * 3 + 1]!, 1 + ARC_MAX_HEIGHT, 4);
+  });
+
+  it('bow to one side: always the same side for the same pair, at most ARC_BOW, less for a short arc', () => {
+    const far = [28, -26] as const;
+    const bow = arcBow(far, STOCKPILOT_LON_LAT);
+    expect(Math.abs(bow)).toBeCloseTo(ARC_BOW, 9);
+    expect(arcBow(far, STOCKPILOT_LON_LAT)).toBe(bow);
+    // A short arc (30 degrees) bows half as much.
+    const short = arcBow([0, 0], [30, 0]);
+    near(Math.abs(short), ARC_BOW / 2, 9);
+    near(arcBow([20, 10], [20, 10]), 0, 9);
+    // Both sides happen.
+    const sides = new Set<number>();
+    for (let lon = -170; lon <= 170; lon += 10)
+      sides.add(Math.sign(arcBow([lon, 5], STOCKPILOT_LON_LAT)));
+    expect([...sides].sort()).toEqual([-1, 1]);
+    // Lopsided: none at the ends, widest a third of the way from the source.
+    near(arcBowAt(0), 0, 9);
+    near(arcBowAt(1), 0, 9);
+    near(arcBowAt(1 / 3), 1, 9);
+    expect(arcBowAt(0.25)).toBeLessThan(1);
+    expect(arcBowAt(0.5)).toBeLessThan(1);
+    expect(arcBowAt(0.5)).toBeGreaterThan(arcBowAt(2 / 3));
+  });
+
+  it('a bowed arc keeps its ends and its rise, and leaves its plane by the bow', () => {
+    const from = [28, -26] as const;
+    const to = STOCKPILOT_LON_LAT;
+    const flat = new Float32Array((ARC_SEGMENTS + 1) * 3);
+    const bowed = new Float32Array((ARC_SEGMENTS + 1) * 3);
+    const bow = arcBow(from, to);
+    writeArcPoints(from, to, flat);
+    writeArcPoints(from, to, bowed, ARC_SEGMENTS, bow);
+    const at = (out: Float32Array, i: number) => [out[i * 3]!, out[i * 3 + 1]!, out[i * 3 + 2]!];
+    for (const i of [0, ARC_SEGMENTS]) {
+      for (let k = 0; k < 3; k += 1) near(at(bowed, i)[k]!, at(flat, i)[k]!, 5);
+    }
+    const start = vec(from[0], from[1]);
+    const end = vec(to[0], to[1]);
+    const normal = [
+      start[1]! * end[2]! - start[2]! * end[1]!,
+      start[2]! * end[0]! - start[0]! * end[2]!,
+      start[0]! * end[1]! - start[1]! * end[0]!,
+    ];
+    const nLength = Math.hypot(normal[0]!, normal[1]!, normal[2]!);
+    for (let i = 0; i <= ARC_SEGMENTS; i += 1) {
+      const p = at(bowed, i);
+      const q = at(flat, i);
+      const length = Math.hypot(p[0]!, p[1]!, p[2]!);
+      // The same height off the surface as the arc without a bow.
+      near(length, Math.hypot(q[0]!, q[1]!, q[2]!), 5);
+      // Off the plane by bow * arcBowAt(t), on the bow's side.
+      const off = Math.asin(
+        (p[0]! * normal[0]! + p[1]! * normal[1]! + p[2]! * normal[2]!) / nLength / length,
+      );
+      near(off, bow * arcBowAt(i / ARC_SEGMENTS), 4);
+    }
+  });
+
+  it('seen from any direction, a long bowed arc is never a straight line', () => {
+    // Without the bow every arc is flat, and from some direction it is a
+    // straight line across the globe's face. The bow must leave a curve of at
+    // least 2.5% of the globe's radius (about 5 px on a 1440 x 900 page) from
+    // every direction that shows the arc at least 0.8 radii long.
+    const straightest = (from: readonly [number, number], bow: number) => {
+      const points = new Float32Array((ARC_SEGMENTS + 1) * 3);
+      writeArcPoints(from, STOCKPILOT_LON_LAT, points, ARC_SEGMENTS, bow);
+      let least = Infinity;
+      for (let lat = -60; lat <= 60; lat += 3) {
+        for (let lon = -180; lon < 180; lon += 3) {
+          const eye = vec(lon, lat);
+          // Two screen directions at right angles to the eye.
+          const right = [eye[2]!, 0, -eye[0]!];
+          const r = Math.hypot(right[0]!, right[2]!);
+          right[0]! /= r;
+          right[2]! /= r;
+          const up = [
+            eye[1]! * right[2]! - eye[2]! * right[1]!,
+            eye[2]! * right[0]! - eye[0]! * right[2]!,
+            eye[0]! * right[1]! - eye[1]! * right[0]!,
+          ];
+          const screen = (i: number) => {
+            const p = [points[i * 3]!, points[i * 3 + 1]!, points[i * 3 + 2]!];
+            return [
+              p[0]! * right[0]! + p[1]! * right[1]! + p[2]! * right[2]!,
+              p[0]! * up[0]! + p[1]! * up[1]! + p[2]! * up[2]!,
+            ];
+          };
+          const a = screen(0);
+          const b = screen(ARC_SEGMENTS);
+          const chord = Math.hypot(b[0]! - a[0]!, b[1]! - a[1]!);
+          if (chord < 0.8) continue;
+          let widest = 0;
+          for (let i = 1; i < ARC_SEGMENTS; i += 1) {
+            const p = screen(i);
+            const away =
+              Math.abs((b[0]! - a[0]!) * (a[1]! - p[1]!) - (a[0]! - p[0]!) * (b[1]! - a[1]!)) /
+              chord;
+            widest = Math.max(widest, away);
+          }
+          least = Math.min(least, widest);
+        }
+      }
+      return least;
+    };
+    for (const from of [
+      [28, -26],
+      [-50, -12],
+      [100, 35],
+      [10, 50],
+    ] as const) {
+      expect(straightest(from, 0)).toBeLessThan(0.005);
+      expect(straightest(from, arcBow(from, STOCKPILOT_LON_LAT))).toBeGreaterThan(0.025);
+    }
   });
 
   it('a point along the line, straight between its two nearest points', () => {

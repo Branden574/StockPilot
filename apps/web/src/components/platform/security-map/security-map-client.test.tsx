@@ -586,7 +586,8 @@ describe('the reads', () => {
 
   it('one read at a time: a tab hidden and shown while a read is out sends no second read', async () => {
     const { spy } = mount(() => new Promise(() => {}));
-    await advance(30_000);
+    // The read right after it opens is out (not yet counted out at 20 seconds).
+    await advance(0);
     expect(spy).toHaveBeenCalledTimes(1);
     visibility = 'hidden';
     act(() => {
@@ -1298,6 +1299,42 @@ describe('the stage', () => {
     const entry = screen.getAllByRole('button', { name: /Request for a settings file/ })[0]!;
     expect(entry.className).toContain('focus-visible:outline-solid');
     expect(entry.className).toContain('focus-visible:-outline-offset-2');
+  });
+});
+
+describe('the controls and the flagged entries line up', () => {
+  it('Pause and the Globe / Flat map pair: one row, both boxes the same height, the pair filling its frame', () => {
+    notPhone = true;
+    mount(async () => new Promise(() => {}));
+    const pause = screen.getByRole('button', { name: SECURITY_MAP_WORDS.pause });
+    const pair = screen.getByRole('group', { name: SECURITY_MAP_WORDS.viewLabel });
+    expect(pause.parentElement).toBe(pair.parentElement);
+    expect(pause.className.split(' ')).toContain('h-8');
+    expect(pair.className.split(' ')).toContain('h-8');
+    expect(pair.className.split(' ')).toContain('items-stretch');
+    // The pair's buttons take no height of their own: a taller one would stick out of the frame.
+    for (const name of [SECURITY_MAP_WORDS.globe, SECURITY_MAP_WORDS.flat]) {
+      const button = within(pair).getByRole('button', { name });
+      expect(button.className).not.toMatch(/(^|\s)h-/);
+    }
+  });
+
+  it("a flagged entry's time and count stay together on one line, beside the map and under it", () => {
+    for (const layout of ['wide', 'phone'] as const) {
+      wide = layout === 'wide';
+      notPhone = layout === 'wide';
+      const { unmount } = mount(async () => new Promise(() => {}));
+      // The first entry's count is a floor: "21:44 UTC · at least 4".
+      const entry = screen
+        .getByTestId('security-map-flagged')
+        .querySelector('[data-flagged-entry]')!;
+      const timeAndCount = [...entry.querySelectorAll('span')].find((el) =>
+        /^\d\d:\d\d UTC · at least 4$/.test(el.textContent ?? ''),
+      );
+      expect(timeAndCount, layout).toBeDefined();
+      expect(timeAndCount!.className.split(' '), layout).toContain('whitespace-nowrap');
+      unmount();
+    }
   });
 });
 
