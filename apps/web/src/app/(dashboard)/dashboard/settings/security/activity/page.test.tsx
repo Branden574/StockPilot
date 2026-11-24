@@ -298,7 +298,7 @@ describe('what an owner or admin sees', () => {
 
   // Part 6: a file the upload checks refused is a row here like any other, in
   // plain words, never with the file's name or which check it met.
-  it('a refused file is a row in plain words, and its kind is in the totals', async () => {
+  it('a refused file is a row in plain words, its kind "Refused file", never "Malware"', async () => {
     h.role = 'owner';
     h.activity.mockResolvedValueOnce({
       totals: [{ category: 'malware', events: 2 }],
@@ -309,13 +309,15 @@ describe('what an owner or admin sees', () => {
     });
     await renderPage();
     const totals = screen.getByRole('region', { name: 'Last 7 days' });
-    expect(within(totals).getByText('Malware')).toBeTruthy();
+    expect(within(totals).getByText('Refused files')).toBeTruthy();
     const rows = screen.getAllByRole('row').slice(1);
     const what = rows.map((r) => within(r).getAllByRole('cell')[1]!.textContent);
     expect(what).toEqual([
-      'A file that could run something when opened was refusedMalware · Blocked',
-      'A file that could not be checked was refusedMalware · Blocked',
+      'A file that could run something when opened was refusedRefused file · Blocked',
+      'A file that could not be checked was refusedRefused file · Blocked',
     ]);
+    // Our checks are not an antivirus: the organization's page never says Malware.
+    expect(document.body.innerHTML).not.toMatch(/malware/i);
     expect(document.body.textContent).not.toMatch(/upload_|javascript|macro|\.pdf|\.png/i);
   });
 

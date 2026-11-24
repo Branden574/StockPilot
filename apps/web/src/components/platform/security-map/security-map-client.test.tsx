@@ -1797,6 +1797,8 @@ describe('how to respond, from the map', () => {
     let panel = await openCard(notChecked);
     expect(panel).toHaveAttribute('data-card', 'upload-not-checked');
     expect(contextOf(panel)[0]).toEqual(['Kind', 'Malware']);
+    // The console's name for the kind is "Malware"; "Refused file" is the organization's page's.
+    expect(document.body.textContent).not.toMatch(/Refused file/);
     fireEvent.keyDown(panel, { key: 'Escape' });
     await advance(0);
     // A file with another file hidden inside it: the refused-file card, Stopped.
