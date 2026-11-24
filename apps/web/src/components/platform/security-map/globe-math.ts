@@ -599,7 +599,8 @@ function startEase(m: GlobeMotion): void {
  *   it, with no coasting.
  * - `mayTurn` false (paused, not updating, hidden): the globe holds where it
  *   is; only the viewer's drag and its coasting move it. The very first
- *   target is taken straight, so a stopped page still faces its sources.
+ *   target is taken straight, so a stopped page still faces its sources; a
+ *   later one is eased to once it may turn again.
  * - Otherwise: a new target (further than TARGET_MOVE from the old, in yaw
  *   or tilt) is eased to over EASE_MS, yaw and tilt together; in between, a
  *   slow sway either side of its yaw, as far as the target's sway, never
@@ -670,6 +671,15 @@ export function advanceGlobeMotion(
     m.yaw = wrapAngle(m.easeFrom + wrapAngle(goal - m.easeFrom) * k);
     m.pitch = m.easeFromPitch + (m.target.pitch - m.easeFromPitch) * k;
     if (m.easeMs >= EASE_MS) m.easeMs = -1;
+    return;
+  }
+  // Off its target with no ease under way (a target taken while it could not
+  // turn, paused or hidden): it eases there, yaw and tilt together, never jumps.
+  if (
+    Math.abs(wrapAngle(goal - m.yaw)) > TARGET_MOVE ||
+    Math.abs(m.target.pitch - m.pitch) > TARGET_MOVE
+  ) {
+    startEase(m);
     return;
   }
   m.yaw = wrapAngle(goal);

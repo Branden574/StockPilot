@@ -907,6 +907,24 @@ describe("the globe's turn", () => {
     expect(m.target).toEqual(at(2));
   });
 
+  it('a target taken while it could not turn is eased to when it may turn again, yaw and tilt together, never a jump', () => {
+    const m = createGlobeMotion(0);
+    run(m, EASE_MS + 100, { target: at(0) });
+    run(m, 1000, { mayTurn: false, target: at(1, 50 * DEG) });
+    expect(m.target).toEqual(at(1, 50 * DEG));
+    near(m.pitch, GLOBE_TILT);
+    const [yaw, pitch] = [m.yaw, m.pitch];
+    advanceGlobeMotion(m, { ...frame, target: at(1, 50 * DEG) });
+    expect(Math.abs(wrapAngle(m.yaw - yaw))).toBeLessThan(0.02);
+    expect(Math.abs(m.pitch - pitch)).toBeLessThan(0.02);
+    run(m, EASE_MS / 2, { target: at(1, 50 * DEG) });
+    expect(m.pitch).toBeGreaterThan(GLOBE_TILT + 8 * DEG);
+    expect(m.pitch).toBeLessThan(50 * DEG - 8 * DEG);
+    run(m, EASE_MS, { target: at(1, 50 * DEG) });
+    near(m.pitch, 50 * DEG);
+    expect(Math.abs(wrapAngle(m.yaw - 1))).toBeLessThanOrEqual(SWAY + 1e-9);
+  });
+
   it('reduced motion (still): straight on its target, no ease, no sway, and a drag does not coast', () => {
     const m = createGlobeMotion(0);
     advanceGlobeMotion(m, { ...frame, still: true, target: at(0.8, 45 * DEG) });
