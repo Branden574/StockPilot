@@ -257,7 +257,10 @@ describe('the upload cards (part 6)', () => {
     const card = securityResponseCard('upload-checks');
     expect(card.title).toBe('A file the upload checks refused or could not check');
     expect(card.reasons).toEqual([]);
-    expect(card.whatThisIs).toMatch(/counts the files those checks refused, or could not finish checking/);
+    // Its first part says what the console's word means here, and what it does not.
+    expect(card.whatThisIs).toMatch(
+      /^Malware here means a file the upload checks refused or could not finish checking, not a confirmed virus\./,
+    );
     // No outcome an entry may not have: nothing deleted, blocked, stopped or "not used".
     for (const line of card.alreadyDid) {
       expect(line, line).not.toMatch(/delet|remov|blocked|stopped|not used|not attached|let through/i);
@@ -288,13 +291,20 @@ describe('the card text keeps the rules', () => {
 
   it("no hidden kind's name: never Phishing, in any case (Malware is shown since part 6)", () => {
     for (const text of ALL_TEXT) expect(text, text).not.toMatch(/phishing/i);
+    // The console's word for the shown kind is said once, in the kind's own card, with its meaning.
+    expect(ALL_TEXT.filter((t) => /malware/i.test(t))).toEqual([
+      securityResponseCard('upload-checks').whatThisIs,
+    ]);
     for (const card of SECURITY_RESPONSE_CARDS) expect(card.id).not.toMatch(/phishing/i);
   });
 
   it('the upload cards claim no virus scan: our own checks read how a file is built (part 6)', () => {
+    // "Malware" only where the general card says what the word means here.
+    const MEANING = securityResponseCard('upload-checks').whatThisIs;
     for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked'] as const) {
       for (const text of cardTexts(securityResponseCard(id))) {
-        expect(text, `${id}: ${text}`).not.toMatch(/antivirus|virus scan|malware|infected|quarantin|\bheld\b/i);
+        expect(text, `${id}: ${text}`).not.toMatch(/antivirus|virus scan|infected|quarantin|\bheld\b/i);
+        if (text !== MEANING) expect(text, `${id}: ${text}`).not.toMatch(/malware/i);
       }
       expect(securityResponseCard(id).cannotTell, id).toMatch(/hold no list of known viruses/);
     }

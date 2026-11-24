@@ -796,7 +796,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
     title: 'A file the upload checks refused or could not check',
     reasons: [],
     whatThisIs:
-      'StockPilot reads most files sent to it with its own file checks before anything uses them. This kind counts the files those checks refused, or could not finish checking.',
+      "Malware here means a file the upload checks refused or could not finish checking, not a confirmed virus. StockPilot reads most files sent to it with its own file checks before anything uses them.",
     alreadyDid: [
       'What was done with each file depends on the reason of its entry: open the entry in the events list to read the card of that reason.',
       'The record keeps the kind of refusal, the organization when there is one, and the time, never the file, its name or what was in it.',
