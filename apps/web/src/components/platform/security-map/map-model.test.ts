@@ -6,26 +6,34 @@ import {
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
   securityMapArcOf,
+  type SecurityMapFeedRow,
   type SecurityMapPlan,
   type SecurityMapWholeRead,
 } from '@stockpilot/core';
 
-import { facingOf } from './globe-math';
+import { facingYaw, heatOf } from './globe-math';
 import {
   CATEGORY_LOOKS,
   SHAPE_INDEX,
+  SOURCE_LABELS,
   countryName,
   drawnArcs,
   focusOf,
   globeArcsOf,
+  heatByCountry,
+  planDrawnArcs,
   REPLAY_REREAD_AFTER_MS,
   localDayStart,
   nextLocalMidnight,
   nextPoll,
   notOnMapWords,
   replayWantsWhole,
+  sourceLabels,
   stageOf,
+  stageSpan,
+  tickerRowOf,
   viewShown,
+  webglAvailable,
 } from './map-model';
 import { STOCKPILOT_LON_LAT, countryPoint } from './world-geometry';
 
@@ -114,10 +122,158 @@ describe('what is on the map this moment', () => {
     expect(arcs[0]!.from).toEqual(countryPoint('DE'));
   });
 
-  it("the globe faces the drawn arcs' starts and StockPilot", () => {
-    const drawn = drawnArcs([arc('DE', 1, 0, 5)]);
-    expect(focusOf(drawn)).toEqual(facingOf([countryPoint('DE')!, STOCKPILOT_LON_LAT]));
-    expect(focusOf([])).toBeNull();
+  it("the globe faces the drawn arcs' sources, each country weighed by the square root of its events", () => {
+    const drawn = drawnArcs([arc('DE', 1, 0, 5), arc('DE', 0, 1, 4), arc('BR', 2, 0, 16)]);
+    expect(focusOf(drawn)).toBe(
+      facingYaw(
+        [
+          { lonLat: countryPoint('DE')!, weight: 3 },
+          { lonLat: countryPoint('BR')!, weight: 4 },
+        ],
+        STOCKPILOT_LON_LAT,
+      ),
+    );
+    // Nothing to draw: StockPilot.
+    expect(focusOf([])).toBe(facingYaw([], STOCKPILOT_LON_LAT));
+  });
+
+  it('every arc of the play: live, every hour of the replay, or the still picture once it stops', () => {
+    expect(planDrawnArcs(plan('live'), false).map((d) => d.arc.key)).toEqual([
+      'DE:exploit:blocked',
+    ]);
+    expect(planDrawnArcs(plan('replay'), false).map((d) => d.arc.country)).toEqual(['BR', 'SG']);
+    expect(planDrawnArcs(plan('replay'), true).map((d) => d.arc.country)).toEqual(['SG', 'BR']);
+    expect(planDrawnArcs(plan('still'), false)).toEqual([]);
+  });
+
+  it("each source country's glow: its events in the arcs on the map against the most (log scale)", () => {
+    const heat = heatByCountry(
+      drawnArcs([arc('DE', 1, 0, 90), arc('DE', 0, 1, 10), arc('BR', 2, 0, 5)]),
+    );
+    expect([...heat.keys()]).toEqual(['DE', 'BR']);
+    expect(heat.get('DE')).toBe(1);
+    expect(heat.get('BR')).toBe(heatOf(5, 100));
+    expect(heatByCountry([]).size).toBe(0);
+  });
+});
+
+describe("the sources' labels", () => {
+  const whole = (floors: string[]) => ({ whole: { floors } }) as unknown as SecurityMapWholeRead;
+
+  it('the top five sources by their events, with the country name and the count', () => {
+    const drawn = drawnArcs([
+      arc('DE', 1, 0, 9),
+      arc('DE', 0, 0, 3),
+      arc('BR', 1, 0, 20),
+      arc('US', 1, 0, 1),
+      arc('JP', 1, 0, 2),
+      arc('IN', 1, 0, 4),
+      arc('FR', 1, 0, 5),
+      arc('QY', 1, 0, 99),
+    ]);
+    const labels = sourceLabels(drawn, whole([]));
+    expect(SOURCE_LABELS).toBe(5);
+    expect(labels.map((l) => [l.code, l.name, l.count])).toEqual([
+      ['BR', 'Brazil', '20'],
+      ['DE', 'Germany', '12'],
+      ['FR', 'France', '5'],
+      ['IN', 'India', '4'],
+      ['JP', 'Japan', '2'],
+    ]);
+    expect(labels[0]!.from).toEqual(countryPoint('BR'));
+  });
+
+  it('"at least" where the newest whole read counts that kind and outcome as a floor', () => {
+    const drawn = drawnArcs([arc('DE', 1, 0, 9), arc('DE', 0, 1, 3), arc('BR', 0, 0, 2)]);
+    const labels = sourceLabels(drawn, whole(['totals.password_guessing.flagged']));
+    expect(labels.map((l) => l.count)).toEqual(['at least 12', '2']);
+    expect(sourceLabels(drawn, null).map((l) => l.count)).toEqual(['12', '2']);
+  });
+});
+
+describe('the ticker: the newest entry the stage draws', () => {
+  const MIN = 60_000;
+  const T0 = Date.parse('2026-11-23T10:00:00.000Z');
+  const at = (m: number) => new Date(T0 + m * MIN).toISOString();
+  const row = (
+    key: string,
+    minute: number,
+    category: number,
+    outcome: 0 | 1 | 2,
+    country: string | null,
+    source = 'web',
+  ): SecurityMapFeedRow => [
+    key,
+    at(minute),
+    1,
+    false,
+    category,
+    outcome,
+    'Example reason',
+    source,
+    country,
+    'Example City',
+    null,
+    null,
+    1,
+  ];
+  const drawn = drawnArcs([arc('DE', 1, 0, 5), arc('BR', 0, 1, 2)]);
+  const live = { fromMs: T0, toMs: Number.POSITIVE_INFINITY };
+
+  it('the newest entry whose country, kind and outcome is an arc on the stage', () => {
+    const rows = [
+      row('a', 3, 1, 0, 'DE'),
+      row('b', 5, 0, 1, 'BR'),
+      row('c', 7, 1, 1, 'DE'),
+      row('d', 8, 2, 0, 'SG'),
+    ];
+    expect(tickerRowOf(rows, drawn, live, true)?.[0]).toBe('b');
+  });
+
+  it('never an allowed entry, one with no place, one before the span drawn, or a late source in the live play', () => {
+    const rows = [
+      row('allowed', 9, 1, 2, 'DE'),
+      row('no-place', 9, 1, 0, null),
+      row('phone', 9, 1, 0, 'DE', 'phone'),
+      row('old', -5, 1, 0, 'DE'),
+    ];
+    expect(tickerRowOf(rows, drawn, live, true)).toBeNull();
+    // A replay draws the late sources' events: the phone entry is in its hour.
+    expect(tickerRowOf(rows, drawn, { fromMs: T0, toMs: T0 + 60 * MIN }, false)?.[0]).toBe('phone');
+  });
+
+  it('nothing drawn, or no span: no entry', () => {
+    const rows = [row('a', 3, 1, 0, 'DE')];
+    expect(tickerRowOf(rows, [], live, true)).toBeNull();
+    expect(tickerRowOf(rows, drawn, null, true)).toBeNull();
+  });
+
+  it("the span the stage draws: the replay's hour, the live play's ten minutes, the still replay's whole window", () => {
+    const replay = plan('replay');
+    expect(stageSpan(replay, stageOf(replay, null, 1), null)).toEqual({ fromMs: 1, toMs: 2 });
+    expect(stageSpan(plan('live'), stageOf(plan('live'), null, 0), at(0))).toEqual(live);
+    expect(stageSpan(plan('live'), stageOf(plan('live'), null, 0), null)).toBeNull();
+    expect(stageSpan(replay, stageOf(replay, 'paused', 0), null)).toEqual({
+      fromMs: Number.NEGATIVE_INFINITY,
+      toMs: Number.POSITIVE_INFINITY,
+    });
+    expect(stageSpan(plan('still'), stageOf(plan('still'), null, 0), at(0))).toBeNull();
+  });
+});
+
+describe('a WebGL 2 context, asked for before three.js is loaded', () => {
+  const canvas = (gl: unknown) => () => ({ getContext: () => gl }) as unknown as HTMLCanvasElement;
+
+  it('none: the flat map; one: the globe, and the test context is given back at once', () => {
+    expect(webglAvailable(canvas(null))).toBe(false);
+    let lost = 0;
+    const gl = { getExtension: () => ({ loseContext: () => (lost += 1) }) };
+    expect(webglAvailable(canvas(gl))).toBe(true);
+    expect(lost).toBe(1);
+    const throws = () => {
+      throw new Error('no canvas');
+    };
+    expect(webglAvailable(throws as unknown as () => HTMLCanvasElement)).toBe(false);
   });
 });
 
@@ -157,11 +313,28 @@ describe('when to read', () => {
     wholeFailures: 0,
     dayEndsAt: null,
     wholeWanted: false,
+    dayUnread: false,
   } as const;
 
-  it("the server's first read is the page's one read of the whole window when it opens: then the last ten minutes, 30 seconds on", () => {
+  it("right after the page opens the whole window is read again at once, with the viewer's day (Q22)", () => {
+    // The server's first read could not carry the viewer's midnight.
+    expect(nextPoll({ ...WELL, dayUnread: true }, T + 5)).toEqual({ scope: 'whole', at: T + 5 });
+    // After a failed read it waits out the back-off; after a failed whole read, its own.
+    expect(nextPoll({ ...WELL, dayUnread: true, failures: 1 }, T + 5)).toEqual({
+      scope: 'whole',
+      at: T + 60_000,
+    });
+    expect(
+      nextPoll(
+        { ...WELL, dayUnread: true, wholeFailures: 1, failures: 1, lastWholeTryAt: T },
+        T + 5,
+      ),
+    ).toEqual({ scope: 'recent', at: T + 60_000 });
+  });
+
+  it("once a whole read has carried the viewer's day: the last ten minutes, 30 seconds on", () => {
     expect(nextPoll(WELL, T)).toEqual({ scope: 'recent', at: T + 30_000 });
-    // No read at all yet: the last ten minutes at once, never a second read of the whole window.
+    // No read at all yet: the last ten minutes at once.
     expect(nextPoll({ ...WELL, lastPollAt: null }, T)).toEqual({ scope: 'recent', at: T });
   });
 
@@ -318,34 +491,26 @@ describe('when to read', () => {
 });
 
 describe('which view', () => {
-  it("the viewer's choice when the globe can be drawn", () => {
-    expect(viewShown('globe', false, 'ok')).toEqual({
+  it("the viewer's choice when the globe can be drawn (under reduced motion too: it is drawn still)", () => {
+    expect(viewShown('globe', 'ok')).toEqual({
       view: 'globe',
       globeOffered: true,
       note: null,
     });
-    expect(viewShown('flat', false, 'ok')).toEqual({
+    expect(viewShown('flat', 'ok')).toEqual({
       view: 'flat',
       globeOffered: true,
       note: null,
     });
   });
 
-  it('reduced motion: the flat map, never the globe, and why', () => {
-    expect(viewShown('globe', true, 'ok')).toEqual({
-      view: 'flat',
-      globeOffered: false,
-      note: SECURITY_MAP_WORDS.globeReducedMotion,
-    });
-  });
-
   it('a globe that cannot be drawn, or stopped drawing: the flat map, and one plain sentence', () => {
-    expect(viewShown('globe', false, 'unavailable')).toEqual({
+    expect(viewShown('globe', 'unavailable')).toEqual({
       view: 'flat',
       globeOffered: false,
       note: SECURITY_MAP_WORDS.globeUnavailable,
     });
-    expect(viewShown('globe', false, 'lost')).toEqual({
+    expect(viewShown('globe', 'lost')).toEqual({
       view: 'flat',
       globeOffered: false,
       note: SECURITY_MAP_WORDS.globeLost,

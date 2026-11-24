@@ -50,16 +50,28 @@ export function centralAngle(a: LonLat, b: LonLat): number {
   return 2 * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/** How high an arc rises at its middle, in globe radii: higher the farther it goes. */
-export const ARC_MIN_HEIGHT = 0.06;
-export const ARC_MAX_HEIGHT = 0.42;
+/**
+ * The globe's radius is this share of the stage's height, and the globe sits
+ * in the middle of the stage's height, so the room above its top (and below
+ * its bottom) is STAGE_HEADROOM globe radii.
+ */
+export const GLOBE_HEIGHT_SHARE = 0.36;
+export const STAGE_HEADROOM = (0.5 - GLOBE_HEIGHT_SHARE) / GLOBE_HEIGHT_SHARE;
+
+/**
+ * How high an arc rises at its middle, in globe radii: higher the farther it
+ * goes, and never higher than ARC_MAX_HEIGHT, which is well under the room
+ * the stage leaves above the globe, so no arc is cut by the stage's edge.
+ */
+export const ARC_MIN_HEIGHT = 0.05;
+export const ARC_MAX_HEIGHT = 0.26;
 export function arcHeight(angle: number): number {
   const share = Math.min(1, Math.max(0, angle / Math.PI));
   return ARC_MIN_HEIGHT + (ARC_MAX_HEIGHT - ARC_MIN_HEIGHT) * Math.sqrt(share);
 }
 
 /** Points along every arc. */
-export const ARC_SEGMENTS = 48;
+export const ARC_SEGMENTS = 72;
 
 /**
  * Writes the arc from `from` to `to` on a globe of radius 1 into `out`:
@@ -144,111 +156,81 @@ export function pointAlong(points: Float32Array, t: number, out: Float32Array, o
   }
 }
 
-/** Sides of the tube an arc is drawn as. */
-export const TUBE_SIDES = 5;
+/* ───────────────────────────── the arcs' ribbons ───────────────────────────── */
 
-/** Vertices of a tube around `segments + 1` points with `sides` around. */
-export const tubeVertexCount = (segments: number, sides: number): number => (segments + 1) * sides;
+/** Vertices of one arc's ribbon: two for each point of its line, one either side. */
+export const ribbonVertexCount = (segments: number): number => (segments + 1) * 2;
 
-/**
- * Writes a thin tube around a line of points: positions (x, y, z), for each
- * vertex how far along the line it is (0 to 1), and, when `normals` is given,
- * the direction each vertex faces. The tube is thinnest where it leaves the
- * ground and lands, and `radius` thick at the middle.
- */
-export function writeTube(
-  points: Float32Array,
-  segments: number,
-  sides: number,
-  radius: number,
-  positions: Float32Array,
-  along: Float32Array,
-  normals?: Float32Array,
-): void {
-  for (let i = 0; i <= segments; i += 1) {
-    const prev = Math.max(0, i - 1) * 3;
-    const next = Math.min(segments, i + 1) * 3;
-    const px = points[i * 3] as number;
-    const py = points[i * 3 + 1] as number;
-    const pz = points[i * 3 + 2] as number;
-    // Tangent along the line.
-    let tx = (points[next] as number) - (points[prev] as number);
-    let ty = (points[next + 1] as number) - (points[prev + 1] as number);
-    let tz = (points[next + 2] as number) - (points[prev + 2] as number);
-    const tl = Math.hypot(tx, ty, tz) || 1;
-    tx /= tl;
-    ty /= tl;
-    tz /= tl;
-    // Up (away from the centre), made square to the tangent.
-    const ul = Math.hypot(px, py, pz) || 1;
-    let nx = px / ul;
-    let ny = py / ul;
-    let nz = pz / ul;
-    const d = nx * tx + ny * ty + nz * tz;
-    nx -= d * tx;
-    ny -= d * ty;
-    nz -= d * tz;
-    let nl = Math.hypot(nx, ny, nz);
-    if (nl < 1e-9) {
-      // The tangent points straight up: any square direction will do.
-      nx = Math.abs(tx) < 0.9 ? 1 : 0;
-      ny = Math.abs(tx) < 0.9 ? 0 : 1;
-      nz = 0;
-      const e = nx * tx + ny * ty + nz * tz;
-      nx -= e * tx;
-      ny -= e * ty;
-      nz -= e * tz;
-      nl = Math.hypot(nx, ny, nz) || 1;
-    }
-    nx /= nl;
-    ny /= nl;
-    nz /= nl;
-    // The third direction: tangent x up.
-    const bx = ty * nz - tz * ny;
-    const by = tz * nx - tx * nz;
-    const bz = tx * ny - ty * nx;
-    const t = i / segments;
-    const r = radius * (0.35 + 0.65 * Math.sin(Math.PI * t));
-    for (let k = 0; k < sides; k += 1) {
-      const angle = (k / sides) * TAU;
-      const c = Math.cos(angle) * r;
-      const s = Math.sin(angle) * r;
-      const v = i * sides + k;
-      positions[v * 3] = px + c * nx + s * bx;
-      positions[v * 3 + 1] = py + c * ny + s * by;
-      positions[v * 3 + 2] = pz + c * nz + s * bz;
-      along[v] = t;
-      if (normals) {
-        const cu = Math.cos(angle);
-        const su = Math.sin(angle);
-        normals[v * 3] = cu * nx + su * bx;
-        normals[v * 3 + 1] = cu * ny + su * by;
-        normals[v * 3 + 2] = cu * nz + su * bz;
-      }
-    }
-  }
+/** The arrays an arc's ribbon is written into (shared by every arc, each at its own place). */
+export interface RibbonArrays {
+  /** The point itself (x, y, z), the same for both vertices of a point. */
+  position: Float32Array;
+  /** The points before and after it (the first point's "before" is itself, as is the last one's "after"). */
+  previous: Float32Array;
+  next: Float32Array;
+  /** -1 or +1: which side of the line the vertex is pushed to. */
+  side: Float32Array;
+  /** How far along the line, 0 at the start to 1 at StockPilot. */
+  along: Float32Array;
+  /** The length of line before the point, in globe radii. */
+  distance: Float32Array;
 }
 
 /**
- * The triangles of a tube made by writeTube, as indexes (the same for every
- * arc), wound so each faces out of the tube (counter-clockwise seen from
- * outside), which is the side three.js draws.
+ * Writes one arc's ribbon into `out`, starting at vertex `first`. The
+ * renderer turns each vertex's "before" and "after" into the line's direction
+ * on the screen and pushes the vertex out sideways by half the ribbon's width
+ * in pixels, so every arc is the same width on the screen however far away
+ * it is. `distance` lets a dashed line keep dashes of one length on every
+ * arc. Returns the line's whole length, in globe radii.
  */
-export function tubeIndexes(segments: number, sides: number): Uint16Array {
-  const out = new Uint16Array(segments * sides * 6);
+export function writeRibbon(
+  points: Float32Array,
+  segments: number,
+  out: RibbonArrays,
+  first: number,
+): number {
+  let distance = 0;
+  for (let i = 0; i <= segments; i += 1) {
+    const prev = Math.max(0, i - 1) * 3;
+    const next = Math.min(segments, i + 1) * 3;
+    if (i > 0) {
+      distance += Math.hypot(
+        (points[i * 3] as number) - (points[prev] as number),
+        (points[i * 3 + 1] as number) - (points[prev + 1] as number),
+        (points[i * 3 + 2] as number) - (points[prev + 2] as number),
+      );
+    }
+    for (let s = 0; s < 2; s += 1) {
+      const v = first + i * 2 + s;
+      for (let k = 0; k < 3; k += 1) {
+        out.position[v * 3 + k] = points[i * 3 + k] as number;
+        out.previous[v * 3 + k] = points[prev + k] as number;
+        out.next[v * 3 + k] = points[next + k] as number;
+      }
+      out.side[v] = s === 0 ? -1 : 1;
+      out.along[v] = i / segments;
+      out.distance[v] = distance;
+    }
+  }
+  return distance;
+}
+
+/** The triangles of `count` ribbons of `segments` segments each, laid one after another. */
+export function ribbonIndexes(segments: number, count: number): Uint16Array {
+  const perRibbon = ribbonVertexCount(segments);
+  const out = new Uint16Array(segments * 6 * count);
   let n = 0;
-  for (let i = 0; i < segments; i += 1) {
-    for (let k = 0; k < sides; k += 1) {
-      const a = i * sides + k;
-      const b = i * sides + ((k + 1) % sides);
-      const c = a + sides;
-      const d = b + sides;
+  for (let r = 0; r < count; r += 1) {
+    const base = r * perRibbon;
+    for (let i = 0; i < segments; i += 1) {
+      const a = base + i * 2;
       out[n++] = a;
-      out[n++] = b;
-      out[n++] = c;
-      out[n++] = b;
-      out[n++] = d;
-      out[n++] = c;
+      out[n++] = a + 2;
+      out[n++] = a + 1;
+      out[n++] = a + 1;
+      out[n++] = a + 2;
+      out[n++] = a + 3;
     }
   }
   return out;
@@ -275,43 +257,116 @@ export function turnPoint(v: Float32Array | number[], yaw: number, pitch: number
   v[2] = z;
 }
 
-/** Which way to turn the globe to face a set of places. */
-export interface GlobeFacing {
-  yaw: number;
-  pitch: number;
-  /** The angle from the facing direction to the farthest place, in radians. */
-  spread: number;
+/** The camera, as the stage sees it: on the globe's axis at `distance` radii, looking at its centre. */
+export interface StageCamera {
+  distance: number;
+  /** tan(half the vertical field of view). */
+  tanHalf: number;
+  /** Width over height. */
+  aspect: number;
+  width: number;
+  height: number;
+  /** The view moved right by this many CSS pixels (the globe drawn this much left). */
+  shift: number;
 }
 
 /**
- * The yaw and pitch that bring the middle of `places` to the front, and how
- * far the farthest of them is from it. Null for no places, or for places
- * spread so evenly round the world that they have no middle.
+ * Where a point of the globe (unturned, in globe radii) is on the stage, in
+ * CSS pixels from its top-left corner, once the globe is turned by `yaw` and
+ * `pitch`; and the cosine of its angle from the middle of the view, seen
+ * from the globe's centre (for limbFade). Writes [x, y, cos] into `out`.
  */
-export function facingOf(places: readonly LonLat[]): GlobeFacing | null {
-  if (places.length === 0) return null;
-  const v = [0, 0, 0];
-  let sx = 0;
-  let sy = 0;
-  let sz = 0;
-  for (const [lon, lat] of places) {
-    lonLatToVector(lon, lat, 1, v);
-    sx += v[0]!;
-    sy += v[1]!;
-    sz += v[2]!;
+export function projectToStage(
+  point: ArrayLike<number>,
+  yaw: number,
+  pitch: number,
+  camera: StageCamera,
+  out: Float32Array | number[],
+): void {
+  const cy = Math.cos(yaw);
+  const sy = Math.sin(yaw);
+  const px = point[0] as number;
+  const py = point[1] as number;
+  const pz = point[2] as number;
+  const x = px * cy + pz * sy;
+  const z1 = -px * sy + pz * cy;
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  const y = py * cp - z1 * sp;
+  const z = py * sp + z1 * cp;
+  const depth = Math.max(1e-6, camera.distance - z);
+  const ndcX = x / depth / (camera.tanHalf * camera.aspect);
+  const ndcY = y / depth / camera.tanHalf;
+  out[0] = (ndcX * 0.5 + 0.5) * camera.width - camera.shift;
+  out[1] = (0.5 - ndcY * 0.5) * camera.height;
+  out[2] = z / (Math.hypot(x, y, z) || 1);
+}
+
+/* ─────────────────────────── which way the globe faces ─────────────────────────── */
+
+/** The camera's tilt: the globe is seen from this far north of its equator (pitch = latitude at the front). */
+export const GLOBE_TILT = 18 * RADIANS;
+/** A source is seen in full up to this far from the middle of the view, and not at all past SOURCE_GONE. */
+export const SOURCE_SEEN = 42 * RADIANS;
+export const SOURCE_GONE = 76 * RADIANS;
+/** StockPilot is seen in full up to this far from the middle, and counts for nothing past STOCKPILOT_GONE. */
+export const STOCKPILOT_SEEN = 48 * RADIANS;
+export const STOCKPILOT_GONE = 68 * RADIANS;
+/** What keeping StockPilot in view is worth, against all the sources' weight together. */
+export const STOCKPILOT_WORTH = 0.6;
+
+/** A place the play draws arcs from, and how much it weighs in where the globe faces. */
+export interface WeightedPlace {
+  lonLat: LonLat;
+  weight: number;
+}
+
+/** The angle from the middle of the view (yaw, at the tilt's latitude) to a place, in radians. */
+export function angleFromView(yaw: number, place: LonLat, tilt = GLOBE_TILT): number {
+  return centralAngle([-yaw / RADIANS, tilt / RADIANS], place);
+}
+
+/** 1 up to `full`, 0 from `gone`, smooth in between. */
+function seen(angle: number, full: number, gone: number): number {
+  const x = Math.min(1, Math.max(0, (gone - angle) / (gone - full)));
+  return x * x * (3 - 2 * x);
+}
+
+/**
+ * The yaw that faces the play's sources while keeping StockPilot on the
+ * visible side whenever that can be had. Every yaw, a degree apart, is given
+ * a score: the weight of the sources it shows well (a source in the middle
+ * counts a little more than one near the edge), and, when StockPilot is well
+ * inside the limb, STOCKPILOT_WORTH of all the sources' weight. The best
+ * wins; so StockPilot is kept in view unless that would hide most of the
+ * sources (a play from the far side of the world faces the sources). With no
+ * places (nothing to play) the globe faces StockPilot. A place's weight is
+ * the square root of its events, so one loud country does not hide the rest.
+ */
+export function facingYaw(places: readonly WeightedPlace[], stockpilot: LonLat): number {
+  const own = wrapAngle(-stockpilot[0] * RADIANS);
+  const weighed = places.filter((p) => p.weight > 0 && Number.isFinite(p.weight));
+  if (weighed.length === 0) return own;
+  const total = weighed.reduce((sum, p) => sum + p.weight, 0);
+  let best = own;
+  let bestScore = -Infinity;
+  for (let degree = -179; degree <= 180; degree += 1) {
+    const yaw = degree * RADIANS;
+    let score = 0;
+    for (const p of weighed) {
+      const angle = angleFromView(yaw, p.lonLat);
+      score += p.weight * (seen(angle, SOURCE_SEEN, SOURCE_GONE) + 0.25 * Math.cos(angle));
+    }
+    score +=
+      STOCKPILOT_WORTH *
+      total *
+      seen(angleFromView(yaw, stockpilot), STOCKPILOT_SEEN, STOCKPILOT_GONE);
+    if (score > bestScore + 1e-9) {
+      bestScore = score;
+      best = yaw;
+    }
   }
-  const length = Math.hypot(sx, sy, sz);
-  if (length < 1e-6 * places.length) return null;
-  sx /= length;
-  sy /= length;
-  sz /= length;
-  let spread = 0;
-  for (const [lon, lat] of places) {
-    lonLatToVector(lon, lat, 1, v);
-    const dot = Math.min(1, Math.max(-1, v[0]! * sx + v[1]! * sy + v[2]! * sz));
-    spread = Math.max(spread, Math.acos(dot));
-  }
-  return { yaw: -Math.atan2(sx, sz), pitch: Math.asin(Math.min(1, Math.max(-1, sy))), spread };
+  return wrapAngle(best);
 }
 
 /* ─────────────────────────── turning the globe ─────────────────────────── */
@@ -319,143 +374,211 @@ export function facingOf(places: readonly LonLat[]): GlobeFacing | null {
 /** The globe's turn, kept between frames. advanceGlobeMotion() changes it in place. */
 export interface GlobeMotion {
   yaw: number;
+  /** The tilt: the globe is only ever turned left and right. */
   pitch: number;
+  /** The yaw the globe faces (its sway goes either side of it); null before the first. */
+  target: number | null;
+  /** An ease toward the target: the yaw it started from, and how far it is (ms); -1 when none. */
+  easeFrom: number;
+  easeMs: number;
   /** Turn speed left over from a drag, radians per millisecond. */
   yawSpeed: number;
-  pitchSpeed: number;
   /** Milliseconds since the viewer last let go of the globe. */
   idleMs: number;
-  /** Milliseconds of turning on its own, for the gentle sway. */
+  /** The viewer turned the globe away from its target, and it has not eased back yet. */
+  away: boolean;
+  /** Milliseconds of sway since the last ease began. */
   swayMs: number;
 }
 
-/** The pitch never goes past this, so the globe is never seen from a pole. */
-export const MAX_PITCH = 1.05;
-/** After the viewer lets go, the globe waits this long before it turns on its own again. */
-export const RESUME_AFTER_MS = 2500;
+/** An ease to a new facing takes this long, slow at both ends. */
+export const EASE_MS = 1200;
+/** After the viewer lets go, the globe waits this long before it eases back. */
+export const RETURN_AFTER_MS = 6000;
 /** A drag's speed halves about every this many milliseconds once let go. */
-export const INERTIA_MS = 420;
-/** Turning on its own: one turn in this many milliseconds. */
-export const TURN_MS = 90_000;
-/** Places that fit within this angle of their middle stay in view: the globe sways instead of turning. */
-export const FITS_IN_VIEW = 1.15;
-const SWAY = 0.16;
-const SWAY_MS = 26_000;
-const EASE_MS = 1800;
-const RESTING_PITCH = 0.32;
+export const INERTIA_MS = 380;
+/** The sway's reach either side of the target. */
+export const SWAY = 22 * RADIANS;
+/** At its fastest the sway turns as fast as one whole turn in this long. */
+export const DRIFT_TURN_MS = 240_000;
+/** So one sway, there and back, takes this long. */
+export const SWAY_PERIOD_MS = SWAY * DRIFT_TURN_MS;
+/** A new target closer than this to the old one is not worth an ease. */
+export const TARGET_MOVE = 3 * RADIANS;
 const MAX_STEP_MS = 64;
 
-export function createGlobeMotion(yaw = 0, pitch = RESTING_PITCH): GlobeMotion {
-  return { yaw, pitch, yawSpeed: 0, pitchSpeed: 0, idleMs: RESUME_AFTER_MS, swayMs: 0 };
+export function createGlobeMotion(yaw = 0): GlobeMotion {
+  return {
+    yaw: wrapAngle(yaw),
+    pitch: GLOBE_TILT,
+    target: null,
+    easeFrom: 0,
+    easeMs: -1,
+    yawSpeed: 0,
+    idleMs: RETURN_AFTER_MS,
+    away: false,
+    swayMs: 0,
+  };
 }
 
-const clampPitch = (p: number): number => Math.min(MAX_PITCH, Math.max(-MAX_PITCH, p));
+/** Slow at both ends (cubic). */
+export function easeInOut(x: number): number {
+  const t = Math.min(1, Math.max(0, x));
+  return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+}
+
+/** The sway's offset from the target after `ms` of swaying. */
+export const swayAt = (ms: number): number => SWAY * Math.sin((TAU * ms) / SWAY_PERIOD_MS);
+
+function startEase(m: GlobeMotion): void {
+  m.easeFrom = m.yaw;
+  m.easeMs = 0;
+  m.swayMs = 0;
+  m.away = false;
+}
 
 /**
- * One frame of the globe's turn, in place. A drag's leftover speed dies away
- * whatever else is true (it is the viewer's own push). Turning on its own
- * happens only when `mayTurn` (not paused, not stopped, not hidden) and the
- * viewer let go a while ago: towards `focus` with a gentle sway when its
- * places fit in view, otherwise a slow steady turn. A long gap between
- * frames (a tab that comes back) counts as a short one, so nothing jumps.
+ * One frame of the globe's turn, in place.
+ *
+ * - `still` (reduced motion): nothing moves on its own. The globe is put
+ *   straight on its target (no ease, no sway); a drag turns it, with no
+ *   coasting.
+ * - `mayTurn` false (paused, not updating, hidden): the globe holds where it
+ *   is; only the viewer's drag and its coasting move it. The very first
+ *   target is taken straight, so a stopped page still faces its sources.
+ * - Otherwise: a new target (further than TARGET_MOVE from the old) is eased
+ *   to over EASE_MS; in between, a slow sway either side of it, never faster
+ *   than one turn in DRIFT_TURN_MS. After a drag the globe coasts, waits
+ *   RETURN_AFTER_MS, then eases back.
+ *
+ * A long gap between frames (a tab that comes back) counts as a short one.
  */
 export function advanceGlobeMotion(
   m: GlobeMotion,
-  input: { dtMs: number; dragging: boolean; mayTurn: boolean; focus: GlobeFacing | null },
+  input: {
+    dtMs: number;
+    dragging: boolean;
+    mayTurn: boolean;
+    still: boolean;
+    target: number | null;
+  },
 ): void {
   const dt = Math.min(MAX_STEP_MS, Math.max(0, input.dtMs));
+  const target = input.target;
+  const moved =
+    target !== null && (m.target === null || Math.abs(wrapAngle(target - m.target)) > TARGET_MOVE);
   if (input.dragging) {
     m.idleMs = 0;
     return;
   }
   m.idleMs += dt;
-  if (m.yawSpeed !== 0 || m.pitchSpeed !== 0) {
-    m.yaw = wrapAngle(m.yaw + m.yawSpeed * dt);
-    m.pitch = clampPitch(m.pitch + m.pitchSpeed * dt);
-    const keep = Math.exp(-dt / INERTIA_MS);
-    m.yawSpeed *= keep;
-    m.pitchSpeed *= keep;
-    if (Math.abs(m.yawSpeed) < 1e-6) m.yawSpeed = 0;
-    if (Math.abs(m.pitchSpeed) < 1e-6) m.pitchSpeed = 0;
+  if (input.still) {
+    m.yawSpeed = 0;
+    m.easeMs = -1;
+    if (moved) {
+      m.target = target;
+      m.yaw = wrapAngle(target);
+      m.away = false;
+    }
     return;
   }
-  if (!input.mayTurn || m.idleMs < RESUME_AFTER_MS) return;
-  m.swayMs += dt;
-  const ease = 1 - Math.exp(-dt / EASE_MS);
-  const focus = input.focus;
-  if (focus && focus.spread <= FITS_IN_VIEW) {
-    const target = focus.yaw + SWAY * Math.sin((TAU * m.swayMs) / SWAY_MS);
-    m.yaw = wrapAngle(m.yaw + wrapAngle(target - m.yaw) * ease);
-    m.pitch = clampPitch(m.pitch + (clampPitch(focus.pitch * 0.8) - m.pitch) * ease);
-  } else {
-    m.yaw = wrapAngle(m.yaw + (TAU * dt) / TURN_MS);
-    m.pitch = clampPitch(m.pitch + (RESTING_PITCH - m.pitch) * ease);
+  if (m.yawSpeed !== 0) {
+    m.yaw = wrapAngle(m.yaw + m.yawSpeed * dt);
+    m.yawSpeed *= Math.exp(-dt / INERTIA_MS);
+    if (Math.abs(m.yawSpeed) < 1e-6) m.yawSpeed = 0;
+    if (moved) m.target = target;
+    return;
   }
+  if (!input.mayTurn) {
+    if (moved && m.target === null) m.yaw = wrapAngle(target);
+    if (moved) m.target = target;
+    m.easeMs = -1;
+    return;
+  }
+  if (moved) {
+    m.target = target;
+    if (!m.away) startEase(m);
+  }
+  if (m.target === null) return;
+  if (m.away) {
+    if (m.idleMs < RETURN_AFTER_MS) return;
+    startEase(m);
+  }
+  m.swayMs += dt;
+  const goal = m.target + swayAt(m.swayMs);
+  if (m.easeMs >= 0) {
+    m.easeMs += dt;
+    const k = easeInOut(m.easeMs / EASE_MS);
+    m.yaw = wrapAngle(m.easeFrom + wrapAngle(goal - m.easeFrom) * k);
+    if (m.easeMs >= EASE_MS) m.easeMs = -1;
+    return;
+  }
+  m.yaw = wrapAngle(goal);
 }
 
 /**
- * A drag of (dx, dy) screen pixels over `dtMs` on a globe drawn `radiusPx`
- * pixels across its half: the globe turns with the pointer, and remembers
- * the speed so it can coast a little when let go.
+ * A drag of `dx` screen pixels over `dtMs` on a globe drawn `radiusPx`
+ * pixels across its half: the globe turns left or right with the pointer
+ * (never up or down: the tilt stays), and remembers the speed so it can
+ * coast a little when let go. `still` (reduced motion): no coasting.
  */
 export function dragGlobe(
   m: GlobeMotion,
   dx: number,
-  dy: number,
   dtMs: number,
   radiusPx: number,
+  still = false,
 ): void {
   const r = Math.max(40, radiusPx);
   const dYaw = dx / r;
-  const dPitch = dy / r;
   m.yaw = wrapAngle(m.yaw + dYaw);
-  m.pitch = clampPitch(m.pitch + dPitch);
   m.idleMs = 0;
-  if (dtMs > 0) {
-    m.yawSpeed = 0.7 * m.yawSpeed + 0.3 * (dYaw / dtMs);
-    m.pitchSpeed = 0.7 * m.pitchSpeed + 0.3 * (dPitch / dtMs);
-  }
+  m.away = true;
+  m.easeMs = -1;
+  if (still) m.yawSpeed = 0;
+  else if (dtMs > 0) m.yawSpeed = 0.7 * m.yawSpeed + 0.3 * (dYaw / dtMs);
 }
 
 /** The pointer was held still before letting go: no coasting. */
 export function stopCoasting(m: GlobeMotion): void {
   m.yawSpeed = 0;
-  m.pitchSpeed = 0;
 }
 
-/* ───────────────────────── the arcs' moving heads ───────────────────────── */
+/* ───────────────────────── the arcs' comets ───────────────────────── */
 
 /** How the arcs move: looping (live), once per replay step, or not at all. */
 export type ArcTiming = 'live' | 'replay' | 'still';
 
-/** A live arc's head takes this long from its start to StockPilot, and starts again after this long. */
-export const LIVE_TRAVEL_MS = 2000;
-export const LIVE_PERIOD_MS = 3600;
-/** In a replay step, each arc starts within this much of the step's start, and travels this long. */
-export const REPLAY_SPREAD_MS = 600;
-export const REPLAY_TRAVEL_MS = 1300;
-/** The trail behind the head, as a share of the arc. */
-export const TRAIL = 0.4;
-/** A pulse where an arc starts or lands lasts this long. */
-export const PULSE_MS = 900;
+/** Live: each arc launches once every LIVE_PERIOD_MS, at its own moment in the period. */
+export const LIVE_PERIOD_MS = 5200;
+/** A flight from the source to StockPilot takes between these, by the arc's own offset. */
+export const FLIGHT_MIN_MS = 1600;
+export const FLIGHT_MAX_MS = 2400;
+/** Replay: each arc launches within REPLAY_SPREAD_MS of its step's start and flies REPLAY_FLIGHT_MS. */
+export const REPLAY_SPREAD_MS = 400;
+export const REPLAY_FLIGHT_MS = 1600;
+/** The comet's tail, as a share of the arc. */
+export const TRAIL = 0.32;
+/** The ring where a head lands lasts this long. */
+export const RING_MS = 900;
+/** The faint full-length track: fades in at launch, stays this long after landing, then fades out. */
+export const TRACK_IN_MS = 250;
+export const TRACK_HOLD_MS = 1100;
+export const TRACK_OUT_MS = 700;
+/** A still arc (reduced motion, paused, stopped): its whole track at this strength. */
+export const STILL_TRACK = 0.6;
 
 /** What one arc shows in one frame. */
 export interface ArcFrame {
-  /** Where the head is along the arc (0 to 1 + TRAIL); below 0, not started. */
+  /** Where the head is along the arc (0 to 1, then up to 1 + TRAIL while its tail drains in); -1: none. */
   head: number;
-  /** How bright the whole path is, under the head and its trail (0 to 1). */
-  base: number;
-  /** The start's and the landing's pulse: 0 to 1 while it runs, -1 when there is none. */
-  startPulse: number;
-  landPulse: number;
+  /** How strong the faint full-length track is (0 to 1). */
+  track: number;
+  /** The landing ring: 0 to 1 while it runs, -1 when there is none. */
+  ring: number;
 }
 
-export const createArcFrame = (): ArcFrame => ({
-  head: -1,
-  base: 0,
-  startPulse: -1,
-  landPulse: -1,
-});
+export const createArcFrame = (): ArcFrame => ({ head: -1, track: 0, ring: -1 });
 
 /** A number from 0 to 1 that stays the same for a key, so arcs do not all move together. */
 export function arcOffset(key: string): number {
@@ -467,39 +590,182 @@ export function arcOffset(key: string): number {
   return (h >>> 0) / 4294967296;
 }
 
-const pulse = (sinceMs: number): number =>
-  sinceMs >= 0 && sinceMs < PULSE_MS ? sinceMs / PULSE_MS : -1;
+/** A live arc's flight time, between FLIGHT_MIN_MS and FLIGHT_MAX_MS, the same for the same offset. */
+export function flightMs(offset: number): number {
+  const spread = (((offset * 7.31 + 0.13) % 1) + 1) % 1;
+  return FLIGHT_MIN_MS + (FLIGHT_MAX_MS - FLIGHT_MIN_MS) * spread;
+}
+
+/** The track's strength `since` ms after launch, for a flight of `flight` ms. */
+function trackAt(since: number, flight: number): number {
+  if (since < 0) return 0;
+  if (since < TRACK_IN_MS) return since / TRACK_IN_MS;
+  const out = since - flight - TRACK_HOLD_MS;
+  if (out <= 0) return 1;
+  return Math.max(0, 1 - out / TRACK_OUT_MS);
+}
 
 /**
  * One arc's frame, written into `out`. `elapsedMs` is the time since the
- * play began (live) or since the replay step began (replay). Still: the
- * whole path drawn, no head and no pulse.
+ * play began (live) or since the replay step began (replay). Live arcs
+ * launch at their own moment in the period, so they never all go at once;
+ * a replay step's arcs launch within its first REPLAY_SPREAD_MS, and their
+ * tracks fade out as the step ends. Still: the whole track, no head, no ring.
  */
 export function arcFrameAt(
   out: ArcFrame,
   timing: ArcTiming,
   elapsedMs: number,
   offset: number,
+  stepMs: number = Number.POSITIVE_INFINITY,
 ): void {
   if (timing === 'still') {
     out.head = -1;
-    out.base = 0.6;
-    out.startPulse = -1;
-    out.landPulse = -1;
+    out.track = STILL_TRACK;
+    out.ring = -1;
     return;
   }
   let since: number;
-  let travel: number;
+  let flight: number;
   if (timing === 'live') {
     const shifted = elapsedMs + offset * LIVE_PERIOD_MS;
     since = ((shifted % LIVE_PERIOD_MS) + LIVE_PERIOD_MS) % LIVE_PERIOD_MS;
-    travel = LIVE_TRAVEL_MS;
+    flight = flightMs(offset);
   } else {
     since = elapsedMs - offset * REPLAY_SPREAD_MS;
-    travel = REPLAY_TRAVEL_MS;
+    flight = REPLAY_FLIGHT_MS;
   }
-  out.head = since < 0 ? -1 : since / travel;
-  out.base = since < 0 && timing === 'replay' ? 0 : 0.08;
-  out.startPulse = pulse(since);
-  out.landPulse = pulse(since - travel);
+  const head = since < 0 ? -1 : since / flight;
+  out.head = head > 1 + TRAIL ? -1 : head;
+  const landed = since - flight;
+  out.ring = landed >= 0 && landed < RING_MS ? landed / RING_MS : -1;
+  let track = trackAt(since, flight);
+  if (timing === 'replay' && Number.isFinite(stepMs)) {
+    // The step's arcs leave together at its end: their tracks fade out first.
+    const left = stepMs - elapsedMs;
+    track *= Math.min(1, Math.max(0, left / 350));
+  }
+  out.track = track;
+}
+
+/* ───────────────────────── marks, labels, the land ───────────────────────── */
+
+/** A source's mark, in CSS pixels across: 10 for one event to 18 at core's widest (log scale). */
+export function sourceMarkSize(width: number): number {
+  const w = Math.min(4, Math.max(1, Number.isFinite(width) ? width : 1));
+  return 10 + ((w - 1) / 3) * 8;
+}
+
+/**
+ * How strongly a source country's land glows: its events against the most of
+ * any country in the play, on a log scale: over 0.35 for any events, 1 for
+ * the most; 0 for none.
+ */
+export function heatOf(events: number, most: number): number {
+  if (!(events > 0) || !(most > 0)) return 0;
+  return 0.35 + 0.65 * (Math.log1p(Math.min(events, most)) / Math.log1p(most));
+}
+
+/**
+ * How visible a place on the globe is, by its angle from the middle of the
+ * view as seen from the globe's centre (its cosine): 1 well inside the limb,
+ * fading to 0 over the last `fade` radians before it, 0 beyond. `limbCos` is
+ * the cosine of the limb's angle (the camera's distance gives it: 1 / d).
+ */
+export function limbFade(cosAngle: number, limbCos: number, fade: number): number {
+  const angle = Math.acos(Math.min(1, Math.max(-1, cosAngle)));
+  const limb = Math.acos(Math.min(1, Math.max(-1, limbCos)));
+  return Math.min(1, Math.max(0, (limb - angle) / fade));
+}
+
+/** A label to place: its mark's point on the screen, its own size, whether its mark is visible. */
+export interface LabelAnchor {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  visible: boolean;
+  /** Which spots it may take, in order (StockPilot's label: right, then left). */
+  spots: readonly LabelSpot[];
+}
+export type LabelSpot = 'right' | 'left' | 'above' | 'below';
+/** A box on the screen (top-left, size). */
+export interface ScreenBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export interface PlacedLabel {
+  x: number;
+  y: number;
+  shown: boolean;
+}
+
+const overlaps = (a: ScreenBox, b: ScreenBox, pad: number): boolean =>
+  a.x < b.x + b.w + pad && b.x < a.x + a.w + pad && a.y < b.y + b.h + pad && b.y < a.y + a.h + pad;
+
+/**
+ * Places labels beside their marks, in the order given (the most important
+ * first): each takes the first of its spots that stays inside `bounds` (with
+ * `margin` to spare) and clear of the labels already placed and of the
+ * `reserved` boxes (the in-stage panels). A label with no free spot, or whose
+ * mark is hidden, is not shown. Writes into `out`, one entry per anchor.
+ */
+export function placeLabels(
+  anchors: readonly LabelAnchor[],
+  bounds: { w: number; h: number },
+  reserved: readonly ScreenBox[],
+  out: PlacedLabel[],
+  gap = 10,
+  margin = 8,
+): void {
+  const placed: ScreenBox[] = [];
+  for (let i = 0; i < anchors.length; i += 1) {
+    const a = anchors[i]!;
+    const slot = out[i] ?? { x: 0, y: 0, shown: false };
+    out[i] = slot;
+    slot.shown = false;
+    if (!a.visible) continue;
+    for (const spot of a.spots) {
+      const x = spot === 'right' ? a.x + gap : spot === 'left' ? a.x - gap - a.w : a.x - a.w / 2;
+      const y = spot === 'above' ? a.y - gap - a.h : spot === 'below' ? a.y + gap : a.y - a.h / 2;
+      const box = { x, y, w: a.w, h: a.h };
+      if (x < margin || y < margin || x + a.w > bounds.w - margin || y + a.h > bounds.h - margin) {
+        continue;
+      }
+      if (placed.some((p) => overlaps(p, box, 4)) || reserved.some((r) => overlaps(r, box, 0))) {
+        continue;
+      }
+      placed.push(box);
+      slot.x = x;
+      slot.y = y;
+      slot.shown = true;
+      break;
+    }
+  }
+}
+
+/**
+ * The scenery's stars: `count` points, the same on every load (a fixed seed),
+ * as x and y from -1 to 1 across the stage and a brightness from 0.25 to 1.
+ * Scenery only: they never move but with the globe's turn, never pulse, and
+ * are far smaller and dimmer than any mark.
+ */
+export function writeStars(count: number, seed: number): Float32Array {
+  const out = new Float32Array(count * 3);
+  let s = seed >>> 0;
+  const next = (): number => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < count; i += 1) {
+    out[i * 3] = next() * 2 - 1;
+    out[i * 3 + 1] = next() * 2 - 1;
+    out[i * 3 + 2] = 0.25 + 0.75 * next() ** 2.2;
+  }
+  return out;
 }

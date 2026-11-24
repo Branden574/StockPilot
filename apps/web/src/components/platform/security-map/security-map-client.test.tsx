@@ -27,15 +27,18 @@ import {
  * blocked" in words; a flagged sum says "at least"; an organization's name
  * that looks like markup is put on the page as plain text; after two failed
  * reads the page says "Not updating since" and nothing moves; a refused read
- * says "Sign in again" and nothing moves; the first read carries the
- * viewer's day start, then the last ten minutes every 30 seconds and the
- * whole window every 5 minutes, at the viewer's midnight and when the replay
- * begins on an old read, never while the tab is hidden; a read of the last
+ * says "Sign in again" and nothing moves; right after the page opens the
+ * island reads the whole window once more, with the viewer's day start (the
+ * server's read cannot carry it: QUESTIONS Q22), then the last ten minutes
+ * every 30 seconds and the whole window every 5 minutes, at the viewer's
+ * midnight and when the replay begins on an old read, never while the tab is
+ * hidden; a read of the last
  * ten minutes never replaces the window's table; a shortened window says so
  * and is never labelled as the whole one; a number the database calls a
  * floor says "at least", and no other; the flagged list beside the map shows
  * flagged entries only, with the hollow mark, city and country and nothing
- * else of where; reduced motion shows the flat map, still; a globe that
+ * else of where; reduced motion draws the globe still (no flight, no pulse,
+ * no turning) and the pill says so; a globe that
  * cannot be drawn, or loses its context, gives way to the flat map with one
  * plain sentence. Made-up data only.
  */
@@ -83,8 +86,9 @@ vi.mock('./security-map-globe', async () => {
   };
 });
 
-import { CATEGORY_LOOKS, HIDDEN_KIND_LOOK } from './map-model';
+import { CATEGORY_LOOKS, HIDDEN_KIND_LOOK, localDayStart } from './map-model';
 import { SecurityMapClient } from './security-map-client';
+import { FEED_VISIBLE, FLAGGED_VISIBLE, MARK_TILE } from './security-map-panels';
 
 /* ───────────────────────────── made-up answers ───────────────────────────── */
 
@@ -249,6 +253,9 @@ const quietAnswer = () => answer({ ...liveAnswer(), timeline: [], feed: [] });
 /* ─────────────────────────────── the browser ─────────────────────────────── */
 
 let reduced = false;
+/** The layout's widths: from 1100 px the flagged list is in the stage; from 640 px the stage carries more than the pill. */
+let wide = false;
+let notPhone = false;
 const motionListeners = new Set<() => void>();
 let visibility: 'visible' | 'hidden' = 'visible';
 
@@ -258,6 +265,8 @@ beforeEach(() => {
   h.globeProps = [];
   h.globeFails = null;
   reduced = false;
+  wide = false;
+  notPhone = false;
   motionListeners.clear();
   visibility = 'visible';
   Object.defineProperty(document, 'visibilityState', {
@@ -266,7 +275,10 @@ beforeEach(() => {
   });
   window.matchMedia = ((query: string) => ({
     get matches() {
-      return query.includes('reduced-motion') ? reduced : false;
+      if (query.includes('reduced-motion')) return reduced;
+      if (query.includes('1100px')) return wide;
+      if (query.includes('640px')) return notPhone;
+      return false;
     },
     media: query,
     addEventListener: (_: string, fn: () => void) => motionListeners.add(fn),
@@ -301,25 +313,32 @@ const chooseFlat = () =>
 /* ────────────────────────────────── tests ────────────────────────────────── */
 
 describe('the reads', () => {
-  it("the server's read is the page's one read of the whole window when it opens; then the last ten minutes every 30 seconds, and the whole window 5 minutes on, with the viewer's day start", async () => {
+  it("right after it opens the island reads the whole window once more, with the viewer's day start (Q22); then the last ten minutes every 30 seconds, and the whole window 5 minutes on", async () => {
     const { spy } = mount(async (input) =>
       (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
     );
     await advance(0);
-    expect(spy).not.toHaveBeenCalled();
+    // At once: the server's read could not carry the viewer's midnight.
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([
+      { scope: 'whole', dayStart: localDayStart(new Date()) },
+    ]);
+    const first = spy.mock.calls[0]![0] as { dayStart: string };
+    expect(new Date(first.dayStart).getHours()).toBe(0);
     await advance(30_000);
-    expect(spy.mock.calls.map((c) => c[0])).toEqual([{ scope: 'recent', dayStart: null }]);
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([
+      { scope: 'whole', dayStart: localDayStart(new Date()) },
+      { scope: 'recent', dayStart: null },
+    ]);
     // Each read is scheduled when the one before it has landed.
     for (let i = 0; i < 9; i += 1) await advance(30_000);
     expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
+      'whole',
       ...Array.from({ length: 9 }, () => 'recent'),
       'whole',
     ]);
-    const whole = spy.mock.calls[9]![0] as { scope: string; dayStart: string };
-    expect(new Date(whole.dayStart).getHours()).toBe(0);
   });
 
-  it("the day's counter: 'Not counted yet' until the island's first read of the whole window lands with the day start, then its number", async () => {
+  it("the day's counter: 'Not counted yet' until the island's first read of the whole window lands with the day start, a moment after the page opens, then its number", async () => {
     let release: (v: unknown) => void = () => {};
     const { spy } = mount((input) =>
       (input as { scope: string }).scope === 'whole'
@@ -329,8 +348,9 @@ describe('the reads', () => {
         : Promise.resolve(recentRead(liveAnswer())),
     );
     expect(today()).toBe('Not counted yet');
-    for (let i = 0; i < 10; i += 1) await advance(30_000);
-    const whole = spy.mock.calls.at(-1)![0] as { scope: string };
+    await advance(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const whole = spy.mock.calls[0]![0] as { scope: string };
     expect(whole.scope).toBe('whole');
     expect(today()).toBe('Not counted yet');
     await act(async () => {
@@ -340,7 +360,7 @@ describe('the reads', () => {
   });
 
   it("the whole window is read again at the viewer's midnight, with the new day, between the 30-second reads", async () => {
-    // Opened at 23:52:50: the island's first read of the whole window is at 23:57:50.
+    // Opened at 23:52:50: the island reads the whole window at once, and again at 23:57:50.
     vi.setSystemTime(new Date(2026, 10, 23, 23, 52, 50));
     const { spy } = mount(async (input) =>
       (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
@@ -352,6 +372,7 @@ describe('the reads', () => {
     await advance(10_000);
     const calls = spy.mock.calls.map((c) => c[0] as { scope: string; dayStart: string | null });
     expect(calls.map((c) => c.scope)).toEqual([
+      'whole',
       ...Array.from({ length: 9 }, () => 'recent'),
       'whole',
       'recent',
@@ -360,25 +381,27 @@ describe('the reads', () => {
       'recent',
       'whole',
     ]);
-    expect(new Date(calls[9]!.dayStart!).getDate()).toBe(23);
-    const next = new Date(calls[14]!.dayStart!);
+    expect(new Date(calls[0]!.dayStart!).getDate()).toBe(23);
+    expect(new Date(calls[10]!.dayStart!).getDate()).toBe(23);
+    const next = new Date(calls[15]!.dayStart!);
     expect([next.getDate(), next.getHours(), next.getMinutes()]).toEqual([24, 0, 0]);
     expect(today()).toBe('9');
   });
 
   it("past midnight, before the new day is read, the day's counter says 'Not counted yet', never the old day's number", async () => {
-    vi.setSystemTime(new Date(2026, 10, 23, 23, 54, 45));
+    vi.setSystemTime(new Date(2026, 10, 23, 23, 59, 30));
     let wholeReads = 0;
     mount(async (input) => {
       if ((input as { scope: string }).scope !== 'whole') return recentRead(liveAnswer());
       wholeReads += 1;
       return wholeReads === 1 ? dayRead()(input) : SECURITY_MAP_POLL_FAILED;
     });
-    // The island's first read of the whole window, at 23:59:45, counts the 23rd.
-    for (let i = 0; i < 10; i += 1) await advance(30_000);
+    // The island's first read of the whole window, at 23:59:30, counts the 23rd.
+    await advance(0);
     expect(wholeReads).toBe(1);
     expect(today()).toBe('9');
-    await advance(15_000);
+    // The read at midnight fails.
+    await advance(30_000);
     expect(wholeReads).toBe(2);
     expect(today()).toBe('Not counted yet');
   });
@@ -395,13 +418,14 @@ describe('the reads', () => {
     await advance(30_000);
     await advance(30_000);
     expect(lastGlobe().timing).toBe('live');
-    // 90 seconds after the server's whole read, the last ten minutes come back empty: the replay begins.
+    // 90 seconds after the island's whole read, the last ten minutes come back empty: the replay begins.
     await advance(30_000);
     await advance(0);
-    expect(scopes()).toEqual(['recent', 'recent', 'recent', 'whole']);
+    expect(scopes()).toEqual(['whole', 'recent', 'recent', 'recent', 'whole']);
     expect(lastGlobe().timing).toBe('replay');
     for (let i = 0; i < 4; i += 1) await advance(30_000);
     expect(scopes()).toEqual([
+      'whole',
       'recent',
       'recent',
       'recent',
@@ -436,6 +460,7 @@ describe('the reads', () => {
     expect(lastGlobe().timing).toBe('replay');
     await advance(30_000);
     expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
+      'whole',
       'recent',
       'recent',
     ]);
@@ -463,7 +488,7 @@ describe('the reads', () => {
 
   it('one read at a time: a read still out holds the next one back, up to the read limit', async () => {
     const { spy } = mount(() => new Promise(() => {}));
-    await advance(30_000);
+    await advance(0);
     expect(spy).toHaveBeenCalledTimes(1);
     for (let i = 0; i < 19; i += 1) await advance(1_000);
     expect(spy).toHaveBeenCalledTimes(1);
@@ -472,15 +497,21 @@ describe('the reads', () => {
 
   it('a read with no answer in 20 seconds is counted out: "Not updating since", the play stops, and its late answer is ignored', async () => {
     let release: (v: unknown) => void = () => {};
-    const { spy } = mount(() =>
-      spy.mock.calls.length === 1
+    // The island's first read (of the whole window) lands; the next, of the last ten minutes, does not.
+    const { spy } = mount((input) =>
+      spy.mock.calls.length === 2
         ? new Promise((resolve) => {
             release = resolve;
           })
-        : Promise.resolve(recentRead(liveAnswer())),
+        : Promise.resolve(
+            (input as { scope: string }).scope === 'whole'
+              ? dayRead()(input)
+              : recentRead(liveAnswer()),
+          ),
     );
+    await advance(0);
     await advance(30_000);
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(2);
     expect(lastGlobe().timing).toBe('replay');
     await advance(SECURITY_MAP_READ_LIMIT_MS - 1);
     expect(screen.queryByTestId('security-map-stop')).toBeNull();
@@ -498,9 +529,9 @@ describe('the reads', () => {
     expect(lastGlobe().timing).toBe('still');
     // The next read goes after the back-off; a good one starts the play again.
     await advance(119_000);
-    expect(spy).toHaveBeenCalledTimes(1);
-    await advance(1_000);
     expect(spy).toHaveBeenCalledTimes(2);
+    await advance(1_000);
+    expect(spy).toHaveBeenCalledTimes(3);
     expect(screen.queryByTestId('security-map-stop')).toBeNull();
     expect(lastGlobe().timing).toBe('live');
   });
@@ -514,7 +545,8 @@ describe('the reads', () => {
       return scope === 'whole' ? SECURITY_MAP_POLL_FAILED : recentRead(liveAnswer());
     });
     for (let i = 0; i < 24; i += 1) await advance(30_000);
-    expect(at.filter(([scope]) => scope === 'whole').map(([, s]) => s)).toEqual([300, 420, 660]);
+    // The island's read at once fails; the next waits 2 minutes from it, then 4.
+    expect(at.filter(([scope]) => scope === 'whole').map(([, s]) => s)).toEqual([0, 120, 360]);
     // Never two reads of the whole window in a row: the last ten minutes in between, every time.
     const scopes = at.map(([scope]) => scope);
     expect(scopes.some((scope, i) => scope === 'whole' && scopes[i + 1] === 'whole')).toBe(false);
@@ -636,8 +668,8 @@ describe('flagged against blocked', () => {
   });
 
   it('on the flat map: a flagged arc is dashed with a hollow mark, a blocked one solid with a filled mark', () => {
-    reduced = true;
     mount(async () => wholeRead());
+    chooseFlat();
     const blocked = document.querySelector('[data-arc="DE:exploit:blocked"]')!;
     const flaggedArc = document.querySelector('[data-arc="BR:password_guessing:flagged"]')!;
     expect(blocked.querySelector('path')!.getAttribute('stroke-dasharray')).toBeNull();
@@ -810,11 +842,22 @@ describe('the flagged list beside the map', () => {
     expect(list().textContent).not.toContain('sign_in_from_the_moon');
   });
 
-  it('it sits beside the map panel, in the same row', () => {
+  it("on a wide screen it is a panel inside the stage, on the stage's dark glass; narrower, a card under the stage", () => {
+    wide = true;
+    notPhone = true;
+    const { unmount } = mount(async () => new Promise(() => {}));
+    expect(screen.getByTestId('security-map-stage').getAttribute('data-layout')).toBe('wide');
+    expect(screen.getByTestId('security-map-stage').contains(list())).toBe(true);
+    expect(list().getAttribute('data-tone')).toBe('stage');
+    unmount();
+    wide = false;
     mount(async () => new Promise(() => {}));
-    const row = list().parentElement!;
-    expect(row.className).toContain('lg:grid-cols-');
-    expect(row.contains(screen.getByTestId('security-map-mode'))).toBe(true);
+    expect(screen.getByTestId('security-map-stage').getAttribute('data-layout')).toBe('medium');
+    expect(screen.getByTestId('security-map-stage').contains(list())).toBe(false);
+    expect(list().getAttribute('data-tone')).toBe('page');
+    // Under the stage and its caption.
+    const caption = screen.getByTestId('security-map-caption');
+    expect(caption.compareDocumentPosition(list()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   const noFlagged = () => {
@@ -892,6 +935,7 @@ describe('the flagged list beside the map', () => {
     await advance(0);
     for (let i = 0; i < 3; i += 1) await advance(30_000);
     expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
+      'whole',
       'recent',
       'recent',
       'recent',
@@ -923,6 +967,9 @@ describe('the flagged list beside the map', () => {
       wholeRead(whole),
     );
     await advance(0);
+    // The first FLAGGED_VISIBLE show; "Show all 20" shows the rest.
+    expect(entries()).toHaveLength(FLAGGED_VISIBLE);
+    fireEvent.click(within(list()).getByRole('button', { name: SECURITY_MAP_WORDS.showAll(20) }));
     expect(entries()).toHaveLength(20);
     expect(screen.queryByTestId('security-map-flagged-words')).toBeNull();
     await advance(30_000);
@@ -943,10 +990,10 @@ describe('the flagged list beside the map', () => {
       // The island's read of the whole window no longer holds either entry of the server's.
       return dayRead({ feed: [], flagged_feed: [] })(input);
     });
-    await advance(0);
+    // The server's read, before the island's own lands.
     expect(entries()).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
-    for (let i = 0; i < 10; i += 1) await advance(30_000);
+    await advance(0);
     expect(wholeReads).toBe(1);
     expect(entries()).toHaveLength(0);
     expect(screen.queryByRole('button', { name: /Request for a settings file/ })).toBeNull();
@@ -1048,10 +1095,12 @@ describe('when the page stops', () => {
     );
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
-    await advance(30_000);
+    expect(screen.getByTestId('security-map-pill').textContent).toBe(SECURITY_MAP_WORDS.pillPaused);
     expect(spy).toHaveBeenCalledTimes(1);
     await advance(30_000);
     expect(spy).toHaveBeenCalledTimes(2);
+    await advance(30_000);
+    expect(spy).toHaveBeenCalledTimes(3);
     expect(screen.getByTestId('security-map-stop').textContent).toBe(
       'Paused. The numbers still update.',
     );
@@ -1085,25 +1134,35 @@ describe('the replay', () => {
 });
 
 describe('reduced motion and the globe', () => {
-  it('reduced motion: the flat map, still, with the reason; the Globe choice is not offered', () => {
+  it('reduced motion: the globe drawn still (no flight, no pulse, no turning of its own), and the pill and the caption say so', () => {
     reduced = true;
     mount(async () => wholeRead());
-    expect(screen.queryByTestId('globe-stub')).toBeNull();
+    expect(screen.getByTestId('globe-stub')).toBeInTheDocument();
+    expect(lastGlobe().still).toBe(true);
+    expect(lastGlobe().timing).toBe('still');
+    expect(lastGlobe().mayTurn).toBe(false);
+    expect(screen.getByTestId('security-map-pill').textContent).toBe(
+      SECURITY_MAP_WORDS.pillReducedMotion,
+    );
+    expect(screen.getByTestId('security-map-stop').textContent).toMatch(/^Not moving: /);
+    // The flat map stays a choice, and is still too.
+    expect(screen.getByRole('button', { name: SECURITY_MAP_WORDS.globe })).toBeEnabled();
+    chooseFlat();
     expect(screen.getByTestId('security-map-flat')).toBeInTheDocument();
     expect(document.querySelectorAll('.sm-head, .sm-pulse')).toHaveLength(0);
-    expect(screen.getByText(SECURITY_MAP_WORDS.globeReducedMotion)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: SECURITY_MAP_WORDS.globe })).toBeDisabled();
   });
 
   it('the setting changing while the page is open is followed', () => {
     mount(async () => wholeRead());
-    expect(screen.getByTestId('globe-stub')).toBeInTheDocument();
+    expect(lastGlobe().still).toBe(false);
+    expect(lastGlobe().timing).toBe('replay');
     reduced = true;
     act(() => {
       for (const fn of motionListeners) fn();
     });
-    expect(screen.queryByTestId('globe-stub')).toBeNull();
-    expect(screen.getByTestId('security-map-flat')).toBeInTheDocument();
+    expect(screen.getByTestId('globe-stub')).toBeInTheDocument();
+    expect(lastGlobe().still).toBe(true);
+    expect(lastGlobe().timing).toBe('still');
   });
 
   it('a globe that cannot be drawn gives way to the flat map with one plain sentence', () => {
@@ -1121,12 +1180,181 @@ describe('reduced motion and the globe', () => {
   });
 
   it('the drawing is hidden from screen readers; the table is the accessible version', () => {
-    reduced = true;
     mount(async () => wholeRead());
+    expect(screen.getByTestId('globe-stub').closest('[aria-hidden="true"]')).not.toBeNull();
+    chooseFlat();
     expect(screen.getByTestId('security-map-flat').closest('[aria-hidden="true"]')).not.toBeNull();
     expect(
       screen.getByRole('region', { name: 'Blocked and flagged events by country' }),
     ).toBeInTheDocument();
+  });
+});
+
+describe('the stage', () => {
+  it('a phone: the pill alone on the stage; the controls, the legend and the flagged list under it; no words on the globe', () => {
+    mount(async () => new Promise(() => {}));
+    const stage = screen.getByTestId('security-map-stage');
+    expect(stage.getAttribute('data-layout')).toBe('phone');
+    expect(within(stage).getByTestId('security-map-pill')).toBeInTheDocument();
+    expect(stage.contains(screen.getByTestId('security-map-controls'))).toBe(false);
+    expect(within(stage).queryByTestId('security-map-stage-legend')).toBeNull();
+    expect(within(stage).queryByTestId('security-map-ticker')).toBeNull();
+    expect(stage.contains(screen.getByTestId('security-map-flagged'))).toBe(false);
+    expect(lastGlobe().showLabels).toBe(false);
+  });
+
+  it('wider: the controls, the legend and the ticker on the stage; the labels on the globe', () => {
+    notPhone = true;
+    mount(async () => new Promise(() => {}));
+    const stage = screen.getByTestId('security-map-stage');
+    expect(stage.contains(screen.getByTestId('security-map-controls'))).toBe(true);
+    const legend = within(stage).getByTestId('security-map-stage-legend');
+    expect(legend.closest('[aria-hidden="true"]')).not.toBeNull();
+    expect(legend.textContent).toContain(SECURITY_MAP_WORDS.legendBlocked);
+    expect(legend.textContent).toContain(SECURITY_MAP_WORDS.legendFlagged);
+    expect(legend.textContent).not.toMatch(/phishing|malware/i);
+    expect(lastGlobe().showLabels).toBe(true);
+  });
+
+  it("the pill: the play's mode in a few words, hidden from screen readers (the caption says it in full)", async () => {
+    mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
+    );
+    const pill = () => screen.getByTestId('security-map-pill');
+    expect(pill().getAttribute('data-kind')).toBe('replay');
+    expect(pill().textContent).toMatch(/^Replay \d\d:\d\d to \d\d:\d\d$/);
+    expect(pill().getAttribute('aria-hidden')).toBe('true');
+    await advance(0);
+    await advance(30_000);
+    expect(pill().getAttribute('data-kind')).toBe('live');
+    expect(pill().textContent).toBe(SECURITY_MAP_WORDS.pillLive);
+  });
+
+  it('the pill says when the page is not updating', async () => {
+    mount(async () => SECURITY_MAP_POLL_FAILED);
+    await advance(0);
+    await advance(60_000);
+    const pill = screen.getByTestId('security-map-pill');
+    expect(pill.getAttribute('data-kind')).toBe('not_updating');
+    expect(pill.textContent).toMatch(/^Not updating since \d\d:\d\d$/);
+  });
+
+  it('the ticker: the newest feed entry the stage draws, never one it does not', async () => {
+    notPhone = true;
+    const live = answer({
+      ...liveAnswer(),
+      feed: [
+        // Newest, but Germany is not drawn in the live play.
+        feedEntry({ minute: '2026-11-23T21:59:00+00:00', country: 'DE', city: 'Example Town' }),
+        feedEntry({ minute: '2026-11-23T21:58:00+00:00', country: 'CN', city: 'Example Harbour' }),
+      ],
+    });
+    mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(live),
+    );
+    await advance(0);
+    await advance(30_000);
+    expect(lastGlobe().timing).toBe('live');
+    const ticker = screen.getByTestId('security-map-ticker');
+    expect(ticker.textContent).toContain('Example Harbour, China');
+    expect(ticker.textContent).toContain('21:58 UTC');
+    expect(ticker.textContent).not.toContain('Example Town');
+    expect(ticker.closest('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it("the globe is handed the top sources' labels, where to face, and the countries' glow", () => {
+    notPhone = true;
+    mount(async () => new Promise(() => {}));
+    const props = lastGlobe();
+    const labels = props.labels as Array<{ code: string; name: string; count: string }>;
+    expect(labels.map((l) => [l.code, l.name, l.count])).toEqual([
+      ['DE', 'Germany', '12'],
+      ['BR', 'Brazil', '3'],
+    ]);
+    expect(typeof props.target).toBe('number');
+    expect([...(props.heat as Map<string, number>).keys()]).toEqual(['DE', 'BR']);
+  });
+
+  it('a count that is a floor: "at least" small, the number large', () => {
+    mount(async () => new Promise(() => {}));
+    const flagged = screen.getByText('Flagged, last 24 hours').parentElement!;
+    expect(flagged.querySelector('[data-part="at-least"]')!.textContent).toBe('at least');
+    expect(flagged.querySelector('[data-part="number"]')!.textContent).toBe('5');
+    expect(flagged.querySelector('[data-part="number"]')!.className).toContain('font-mono');
+  });
+
+  it('the view controls show a focus ring of their own (the base rule turns outlines off)', () => {
+    notPhone = true;
+    mount(async () => new Promise(() => {}));
+    for (const name of [
+      SECURITY_MAP_WORDS.pause,
+      SECURITY_MAP_WORDS.globe,
+      SECURITY_MAP_WORDS.flat,
+    ]) {
+      const button = screen.getByRole('button', { name });
+      expect(button.className).toContain('focus-visible:outline-solid');
+      expect(button.className).toContain('focus-visible:outline-offset-2');
+    }
+    const entry = screen.getAllByRole('button', { name: /Request for a settings file/ })[0]!;
+    expect(entry.className).toContain('focus-visible:outline-solid');
+    expect(entry.className).toContain('focus-visible:-outline-offset-2');
+  });
+});
+
+describe('long lists', () => {
+  const many = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      feedEntry({
+        minute: `2026-11-23T21:${String(10 + i).padStart(2, '0')}:00+00:00`,
+        city: `Example Town ${i}`,
+      }),
+    );
+
+  it(`the feed shows its first ${FEED_VISIBLE}, fading out, and "Show all N" shows the rest and back`, () => {
+    mount(async () => new Promise(() => {}), wholeRead(answer({ feed: many(11) })));
+    const entries = () => screen.getAllByRole('button', { name: /Request for a settings file/ });
+    expect(entries()).toHaveLength(FEED_VISIBLE);
+    const more = screen.getByRole('button', { name: SECURITY_MAP_WORDS.showAll(11) });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    const list = document.getElementById(more.getAttribute('aria-controls')!)!;
+    expect(list.className).toContain('sm-fade-bottom');
+    fireEvent.click(more);
+    expect(entries()).toHaveLength(11);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(more.textContent).toBe(SECURITY_MAP_WORDS.showFewer);
+    expect(list.className).not.toContain('sm-fade-bottom');
+    fireEvent.click(more);
+    expect(entries()).toHaveLength(FEED_VISIBLE);
+  });
+
+  it('a short list: no "Show all", no fade', () => {
+    mount(async () => new Promise(() => {}), wholeRead(answer({ feed: many(3) })));
+    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    expect(document.querySelector('.sm-fade-bottom')).toBeNull();
+  });
+});
+
+describe('the marks on a light page', () => {
+  /** WCAG relative luminance and contrast. */
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const contrast = (a: string, b: string) => {
+    const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p);
+    return (x! + 0.05) / (y! + 0.05);
+  };
+
+  it('every mark, the grey one too, stands on its dark tile at 3:1 or more', () => {
+    for (const look of [...Object.values(CATEGORY_LOOKS), HIDDEN_KIND_LOOK]) {
+      expect(contrast(look.hex, MARK_TILE), look.hex).toBeGreaterThanOrEqual(3);
+    }
+    mount(async () => new Promise(() => {}));
+    const grey = screen.getByTestId('security-map-flagged-split').querySelector('svg')!;
+    expect(grey.getAttribute('style')).toContain('background');
   });
 });
 

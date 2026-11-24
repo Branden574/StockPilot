@@ -3,17 +3,22 @@ import {
   SECURITY_MAP_RECENT_POLL_MS,
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
+  isSecurityMapLateSource,
+  securityMapCountWords,
+  securityMapFeedWords,
+  securityMapIsFloor,
   securityMapNextPollDelay,
   securityMapNextWholeDelay,
   securityMapShownCategories,
   type SecurityEventCategory,
   type SecurityMapArc,
+  type SecurityMapFeedRow,
   type SecurityMapPlan,
   type SecurityMapStopReason,
   type SecurityMapWholeRead,
 } from '@stockpilot/core';
 
-import { facingOf, type ArcTiming, type GlobeFacing } from './globe-math';
+import { facingYaw, heatOf, type ArcTiming } from './globe-math';
 import { STOCKPILOT_LON_LAT, countryPoint, type LonLat } from './world-geometry';
 
 /**
@@ -151,6 +156,8 @@ export interface GlobeArc {
   flagged: boolean;
   /** The category's mark, as the globe's shader numbers it. */
   shape: number;
+  /** The arc's events (its mark's size and its country's glow come from them). */
+  events: number;
 }
 
 /** The drawn arcs as the globe takes them. A flagged arc is never handed over as blocked. */
@@ -164,14 +171,176 @@ export function globeArcsOf(drawn: readonly DrawnArc[]): GlobeArc[] {
       width: arc.width,
       flagged: arc.outcome === 'flagged',
       shape: SHAPE_INDEX[look.shape],
+      events: arc.events,
     };
   });
 }
 
-/** Which way the globe turns to keep the drawn arcs in view: their starts and StockPilot. */
-export function focusOf(drawn: readonly DrawnArc[]): GlobeFacing | null {
-  if (drawn.length === 0) return null;
-  return facingOf([...drawn.map((d) => d.from), STOCKPILOT_LON_LAT]);
+/**
+ * Every arc of the play with a place: the live arcs, or every hour of the
+ * replay (so the globe faces the replay as a whole and does not swing at
+ * each hour), or the one still picture when the play is stopped.
+ */
+export function planDrawnArcs(plan: SecurityMapPlan, stopped: boolean): DrawnArc[] {
+  if (stopped || plan.mode === 'still') return drawnArcs(plan.picture);
+  if (plan.mode === 'live') return drawnArcs(plan.live);
+  return drawnArcs(plan.steps.flatMap((step) => step.arcs));
+}
+
+/** Each source country's events in a set of arcs, by ISO code. */
+function eventsByCountry(
+  drawn: readonly DrawnArc[],
+): Map<string, { from: LonLat; events: number }> {
+  const out = new Map<string, { from: LonLat; events: number }>();
+  for (const { arc, from } of drawn) {
+    const held = out.get(arc.country);
+    if (held) held.events += arc.events;
+    else out.set(arc.country, { from, events: arc.events });
+  }
+  return out;
+}
+
+/**
+ * The yaw the globe faces for these arcs (globe-math facingYaw): the
+ * weighted middle of their sources, keeping StockPilot in view when that
+ * can be had; StockPilot itself when there is nothing to draw.
+ */
+export function focusOf(drawn: readonly DrawnArc[]): number {
+  const places = [...eventsByCountry(drawn).values()].map(({ from, events }) => ({
+    lonLat: from,
+    weight: Math.sqrt(events),
+  }));
+  return facingYaw(places, STOCKPILOT_LON_LAT);
+}
+
+/** How strongly each source country's land glows, by its share of the arcs on the map (log scale). */
+export function heatByCountry(drawn: readonly DrawnArc[]): Map<string, number> {
+  const byCountry = eventsByCountry(drawn);
+  const most = Math.max(0, ...[...byCountry.values()].map((c) => c.events));
+  const out = new Map<string, number>();
+  for (const [code, { events }] of byCountry) out.set(code, heatOf(events, most));
+  return out;
+}
+
+/** A span of time as instants: from inclusive, to exclusive. */
+export interface TimeSpan {
+  fromMs: number;
+  toMs: number;
+}
+
+/**
+ * The span of time the stage draws this moment: the replay's hour; the live
+ * play's last ten minutes (from the newest read's `liveFrom`); for the still
+ * picture of a replay, the whole window. Null when nothing is drawn.
+ */
+export function stageSpan(
+  plan: SecurityMapPlan,
+  stage: Stage,
+  liveFrom: string | null,
+): TimeSpan | null {
+  if (stage.timing === 'replay') {
+    const step = plan.steps[stage.stepIndex];
+    return step ? { fromMs: step.fromMs, toMs: step.toMs } : null;
+  }
+  if (plan.mode === 'live') {
+    const fromMs = liveFrom === null ? Number.NaN : Date.parse(liveFrom);
+    return Number.isFinite(fromMs) ? { fromMs, toMs: Number.POSITIVE_INFINITY } : null;
+  }
+  if (plan.mode === 'replay') {
+    return { fromMs: Number.NEGATIVE_INFINITY, toMs: Number.POSITIVE_INFINITY };
+  }
+  return null;
+}
+
+/**
+ * The stage's ticker entry: the newest feed entry the map draws this moment.
+ * Its country, kind and outcome are an arc on the stage, its minute is inside
+ * the span drawn, and in the live play it is not from a late source (the
+ * live play leaves those out). Null when no entry is: the ticker then shows
+ * nothing rather than an entry the map does not draw.
+ */
+export function tickerRowOf(
+  rows: readonly SecurityMapFeedRow[],
+  drawn: readonly DrawnArc[],
+  span: TimeSpan | null,
+  live: boolean,
+): SecurityMapFeedRow | null {
+  if (span === null || drawn.length === 0) return null;
+  const keys = new Set(drawn.map(({ arc }) => `${arc.country}|${arc.category}|${arc.outcome}`));
+  let best: SecurityMapFeedRow | null = null;
+  let bestMs = Number.NEGATIVE_INFINITY;
+  for (const row of rows) {
+    const w = securityMapFeedWords(row);
+    if (w.outcome === 'allowed' || w.country === null) continue;
+    if (live && isSecurityMapLateSource(w.source)) continue;
+    const ms = Date.parse(row[1]);
+    if (!(ms >= span.fromMs && ms < span.toMs) || ms <= bestMs) continue;
+    if (!keys.has(`${w.country}|${w.category}|${w.outcome}`)) continue;
+    best = row;
+    bestMs = ms;
+  }
+  return best;
+}
+
+/** A source's label on the globe: its country's name and its events in the arcs on the map. */
+export interface SourceLabel {
+  code: string;
+  from: LonLat;
+  name: string;
+  /** The count in words ("at least 4" where the window's number for the kind is a floor). */
+  count: string;
+}
+
+/** How many sources get a label on the globe. */
+export const SOURCE_LABELS = 5;
+
+/**
+ * The top sources of the arcs on the map, by their events, each with its
+ * country's name and count. A count says "at least" when any of its arcs is
+ * of a kind and outcome whose number the newest whole read marks as a floor.
+ */
+export function sourceLabels(
+  drawn: readonly DrawnArc[],
+  whole: SecurityMapWholeRead | null,
+  max = SOURCE_LABELS,
+): SourceLabel[] {
+  const rows = new Map<string, { from: LonLat; events: number; floor: boolean }>();
+  for (const { arc, from } of drawn) {
+    const floor = securityMapIsFloor(whole, `totals.${arc.category}.${arc.outcome}`);
+    const held = rows.get(arc.country);
+    if (held) {
+      held.events += arc.events;
+      held.floor ||= floor;
+    } else rows.set(arc.country, { from, events: arc.events, floor });
+  }
+  return [...rows.entries()]
+    .sort((a, b) => b[1].events - a[1].events || (a[0] < b[0] ? -1 : 1))
+    .slice(0, max)
+    .map(([code, row]) => ({
+      code,
+      from: row.from,
+      name: countryName(code),
+      count: securityMapCountWords(row.events, row.floor),
+    }));
+}
+
+/**
+ * Whether this browser can give the globe a WebGL 2 context, tested on a
+ * canvas of its own before three.js is loaded, so a browser without one
+ * shows the flat map with no error in its console and never fetches three.js.
+ * The test context is given back at once.
+ */
+export function webglAvailable(
+  make: () => HTMLCanvasElement = () => document.createElement('canvas'),
+): boolean {
+  try {
+    const gl = make().getContext('webgl2');
+    if (!gl) return false;
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const num = (n: number): string => n.toLocaleString('en-US');
@@ -218,6 +387,12 @@ export interface PollClock {
   dayEndsAt: number | null;
   /** The replay has just begun on an old read of the whole window: read it again first. */
   wholeWanted: boolean;
+  /**
+   * No read of the whole window has carried the viewer's day start yet (the
+   * server's first read cannot know the viewer's midnight): read it at once,
+   * so the day's counter is right within a moment of the page opening.
+   */
+  dayUnread: boolean;
 }
 
 export interface PollStep {
@@ -229,10 +404,12 @@ export interface PollStep {
 /**
  * The next read. A read of the last ten minutes holds no ten-minute cells
  * and no groups by country (contract version 2), so the whole window is read
- * on its own: 5 minutes after the last good read of it (the server's first
- * read, when the page opens, is that read: review S3), at the viewer's
- * midnight once a day has been counted, and as soon as may be when the
- * replay begins on a read more than a minute old. After a failed read of the
+ * on its own: at once when the page opens, with the viewer's day start (the
+ * server's first read could not carry it, so this is the second read of the
+ * whole window on open, and the day's counter is right within a moment:
+ * QUESTIONS Q22), then 5 minutes after the last good read of it, at the
+ * viewer's midnight once a day has been counted, and as soon as may be when
+ * the replay begins on a read more than a minute old. After a failed read of the
  * whole window the next waits 2, 4, 8, then 10 minutes from that attempt
  * (review S2), and neither the midnight nor the replay hurries it. In
  * between, the last ten minutes every 30 seconds, against the last good
@@ -248,7 +425,7 @@ export function nextPoll(clock: PollClock, now: number): PollStep {
       clock.lastWholeTryAt === null
         ? now
         : clock.lastWholeTryAt + securityMapNextWholeDelay(clock.wholeFailures);
-  } else if (clock.wholeWanted) {
+  } else if (clock.wholeWanted || clock.dayUnread) {
     wholeDue = now;
   } else {
     const every = clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
@@ -313,18 +490,12 @@ export interface ViewShown {
 }
 
 /**
- * The view shown. The flat map whenever the device asks for reduced motion
- * (the globe is never drawn then), when the globe cannot be drawn or stopped
- * drawing, or by the viewer's choice; otherwise the globe.
+ * The view shown: the globe, unless it cannot be drawn here or stopped
+ * drawing, or the viewer chose the flat map. Under reduced motion the globe
+ * is drawn still (no flight, no pulse, no turning on its own); the island
+ * hands it the still picture and the pill says so.
  */
-export function viewShown(
-  choice: MapViewChoice,
-  reducedMotion: boolean,
-  globe: GlobeState,
-): ViewShown {
-  if (reducedMotion) {
-    return { view: 'flat', globeOffered: false, note: SECURITY_MAP_WORDS.globeReducedMotion };
-  }
+export function viewShown(choice: MapViewChoice, globe: GlobeState): ViewShown {
   if (globe === 'unavailable') {
     return { view: 'flat', globeOffered: false, note: SECURITY_MAP_WORDS.globeUnavailable };
   }

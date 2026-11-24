@@ -80,6 +80,33 @@ export function landDots(): Float32Array {
   return landCache;
 }
 
+/** Which country each land dot is in: 1 + its code's place in `codes`, 0 for none. */
+export interface LandOwners {
+  index: Uint8Array;
+  codes: readonly string[];
+}
+
+/**
+ * The country of every land dot, in the order decodeLand() gives them, read
+ * from the generated data; null when it does not read as its header says
+ * (no dot is then said to be in any country: the globe lights none).
+ */
+export function decodeOwners(data: WorldDotsData = WORLD_DOTS): LandOwners | null {
+  const codes = data.ownerCodes.length === 0 ? [] : data.ownerCodes.split(' ');
+  if (codes.length > 255 || codes.some((code) => !/^[A-Z]{2}$/.test(code))) return null;
+  const index = base64Bytes(data.owners);
+  if (!index || index.length !== data.count) return null;
+  for (const owner of index) if (owner > codes.length) return null;
+  return { index, codes };
+}
+
+let ownersCache: LandOwners | null | undefined;
+/** decodeOwners() of the committed data, read once. */
+export function landOwners(): LandOwners | null {
+  if (ownersCache === undefined) ownersCache = decodeOwners();
+  return ownersCache;
+}
+
 /** A country's point, or null for a code with none (one outside ISO 3166-1 the generator does not place). */
 export function countryPoint(code: string): LonLat | null {
   return Object.prototype.hasOwnProperty.call(COUNTRY_POINTS, code)

@@ -5,12 +5,14 @@ import * as React from 'react';
 import { SECURITY_MAP_WORDS } from '@stockpilot/core';
 
 import {
+  FLIGHT_MAX_MS,
+  FLIGHT_MIN_MS,
   LIVE_PERIOD_MS,
-  LIVE_TRAVEL_MS,
-  PULSE_MS,
+  REPLAY_FLIGHT_MS,
   REPLAY_SPREAD_MS,
-  REPLAY_TRAVEL_MS,
+  RING_MS,
   arcOffset,
+  sourceMarkSize,
   type ArcTiming,
 } from './globe-math';
 import { CATEGORY_LOOKS, PANEL, type DrawnArc, type MarkShape } from './map-model';
@@ -24,10 +26,11 @@ import {
 } from './world-geometry';
 
 /**
- * THE FLAT MAP: the fallback view (no WebGL, reduced motion, or the viewer's
- * choice). The land is ONE path; each arc is a curve from its country to
- * StockPilot with, while the play moves, a short bright head that runs along
- * it and a pulse where it starts and lands.
+ * THE FLAT MAP: the fallback view (no WebGL, a lost context, or the viewer's
+ * choice), in the globe's palette on the same dark stage. The land is ONE
+ * path of dots; each arc is a curve from its country to StockPilot with,
+ * while the play moves, a short bright head (and a soft glow under it) that
+ * runs along it and a pulse where it starts and lands.
  *
  * Every movement is CSS animation, so the global reduced-motion rule
  * (app/globals.css) stills it even if a script did not; the island also
@@ -39,18 +42,26 @@ import {
  * hollow mark. Each category's mark has its own shape.
  */
 
+/** The land's dots and StockPilot's outer ring: the globe's own blues. */
+const FLAT_LAND = '#5c99ff';
+const FLAT_RING = '#9cc2ff';
+
+/** A live head's flight on the flat map: the middle of the globe's range. */
+const FLAT_FLIGHT_MS = (FLIGHT_MIN_MS + FLIGHT_MAX_MS) / 2;
+
 /** The keyframes and classes of the flat map, scoped by their sm- names. */
 export const FLAT_MAP_CSS = `
-.sm-head{fill:none;stroke-linecap:round;stroke-dasharray:0.14 1.2;stroke-dashoffset:-1;}
+.sm-head{fill:none;stroke-linecap:round;stroke-dasharray:0.16 1.2;stroke-dashoffset:-1;}
+.sm-head-glow{opacity:0.3;}
 .sm-head-live{animation:sm-travel-live ${LIVE_PERIOD_MS}ms linear infinite;}
-.sm-head-replay{animation:sm-travel-once ${REPLAY_TRAVEL_MS}ms linear 1 both;}
+.sm-head-replay{animation:sm-travel-once ${REPLAY_FLIGHT_MS}ms linear 1 both;}
 .sm-pulse{opacity:0;transform-box:fill-box;transform-origin:center;}
 .sm-pulse-live{animation:sm-pulse ${LIVE_PERIOD_MS}ms ease-out infinite;}
-.sm-pulse-replay{animation:sm-pulse-once ${PULSE_MS}ms ease-out 1 both;}
-@keyframes sm-travel-live{0%{stroke-dashoffset:0.14}${((LIVE_TRAVEL_MS * 1.14) / LIVE_PERIOD_MS) * 100}%{stroke-dashoffset:-1}100%{stroke-dashoffset:-1}}
-@keyframes sm-travel-once{from{stroke-dashoffset:0.14}to{stroke-dashoffset:-1}}
-@keyframes sm-pulse{0%{opacity:0.9;transform:scale(0.25)}${(PULSE_MS / LIVE_PERIOD_MS) * 100}%{opacity:0;transform:scale(1)}100%{opacity:0;transform:scale(1)}}
-@keyframes sm-pulse-once{from{opacity:0.9;transform:scale(0.25)}to{opacity:0;transform:scale(1)}}
+.sm-pulse-replay{animation:sm-pulse-once ${RING_MS}ms ease-out 1 both;}
+@keyframes sm-travel-live{0%{stroke-dashoffset:0.16}${((FLAT_FLIGHT_MS * 1.16) / LIVE_PERIOD_MS) * 100}%{stroke-dashoffset:-1}100%{stroke-dashoffset:-1}}
+@keyframes sm-travel-once{from{stroke-dashoffset:0.16}to{stroke-dashoffset:-1}}
+@keyframes sm-pulse{0%{opacity:0.95;transform:scale(0.3)}${(RING_MS / LIVE_PERIOD_MS) * 100}%{opacity:0;transform:scale(1)}100%{opacity:0;transform:scale(1)}}
+@keyframes sm-pulse-once{from{opacity:0.95;transform:scale(0.3)}to{opacity:0;transform:scale(1)}}
 `;
 
 /** The mark of a category's shape, centred on (x, y), `r` across its half. */
@@ -99,8 +110,8 @@ export function SecurityMapFlat({
       <path
         d={flatDotsPath()}
         fill="none"
-        stroke={PANEL.land}
-        strokeOpacity={0.42}
+        stroke={FLAT_LAND}
+        strokeOpacity={0.55}
         strokeWidth={2.4}
         strokeLinecap="round"
       />
@@ -115,9 +126,9 @@ export function SecurityMapFlat({
           const delay = timing === 'live' ? -offset * LIVE_PERIOD_MS : offset * REPLAY_SPREAD_MS;
           const landDelay =
             timing === 'live'
-              ? LIVE_TRAVEL_MS - offset * LIVE_PERIOD_MS
-              : offset * REPLAY_SPREAD_MS + REPLAY_TRAVEL_MS;
-          const shape = markPath(look.shape, x, y, 4.2);
+              ? FLAT_FLIGHT_MS - offset * LIVE_PERIOD_MS
+              : offset * REPLAY_SPREAD_MS + REPLAY_FLIGHT_MS;
+          const shape = markPath(look.shape, x, y, sourceMarkSize(arc.width) / 2.6);
           return (
             <g key={arc.key} data-arc={arc.key} data-outcome={arc.outcome}>
               <path
@@ -130,14 +141,24 @@ export function SecurityMapFlat({
                 strokeLinecap="round"
               />
               {moving ? (
-                <path
-                  d={d}
-                  pathLength={1}
-                  className={`sm-head ${timing === 'live' ? 'sm-head-live' : 'sm-head-replay'}`}
-                  stroke={look.hex}
-                  strokeWidth={width + 1.6}
-                  style={{ animationDelay: `${Math.round(delay)}ms` }}
-                />
+                <>
+                  <path
+                    d={d}
+                    pathLength={1}
+                    className={`sm-head sm-head-glow ${timing === 'live' ? 'sm-head-live' : 'sm-head-replay'}`}
+                    stroke={look.hex}
+                    strokeWidth={width + 7}
+                    style={{ animationDelay: `${Math.round(delay)}ms` }}
+                  />
+                  <path
+                    d={d}
+                    pathLength={1}
+                    className={`sm-head ${timing === 'live' ? 'sm-head-live' : 'sm-head-replay'}`}
+                    stroke={look.hex}
+                    strokeWidth={width + 1.6}
+                    style={{ animationDelay: `${Math.round(delay)}ms` }}
+                  />
+                </>
               ) : null}
               {moving ? (
                 <>
@@ -175,7 +196,17 @@ export function SecurityMapFlat({
         })}
       </g>
       <g data-testid="security-map-stockpilot">
+        <circle
+          cx={hx}
+          cy={hy}
+          r={13}
+          fill="none"
+          stroke={FLAT_RING}
+          strokeOpacity={0.35}
+          strokeWidth={1}
+        />
         <circle cx={hx} cy={hy} r={7} fill="none" stroke={PANEL.stockpilot} strokeWidth={1.4} />
+        <circle cx={hx} cy={hy} r={5} fill={PANEL.stockpilot} fillOpacity={0.18} />
         <circle cx={hx} cy={hy} r={2.8} fill={PANEL.stockpilot} />
         <text
           x={hx + 10}

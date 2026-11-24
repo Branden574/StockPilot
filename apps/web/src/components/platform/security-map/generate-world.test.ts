@@ -28,7 +28,7 @@ import {
 } from '../../../../../../scripts/security-map/generate-world.mjs';
 
 import { COUNTRY_POINTS, COUNTRY_POINTS_FROM_FALLBACK } from './country-points';
-import { decodeLand } from './world-geometry';
+import { decodeLand, decodeOwners } from './world-geometry';
 import { WORLD_DOTS } from './world-dots';
 
 /**
@@ -211,6 +211,16 @@ describe('the grid of dots', () => {
     expect(set).toEqual([11, 17, 29]);
     expect(dots.count).toBe(3);
   });
+
+  it("each land cell's country: one byte, 1 + its code's place in the sorted codes; 0 outside the list", () => {
+    const dots = landBits(readOutline(fixture()), 30);
+    // The square at index 11 is XK's, which is not in ISO 3166-1; 17 and 29 are ZA's.
+    expect(dots.ownerCodes).toEqual(['ZA']);
+    expect([...dots.owners]).toEqual([0, 1, 1]);
+    const withXk = landBits(readOutline(fixture()), 30, [...ISO_3166_ALPHA2, 'XK']);
+    expect(withXk.ownerCodes).toEqual(['XK', 'ZA']);
+    expect([...withXk.owners]).toEqual([1, 2, 2]);
+  });
 });
 
 describe('the points', () => {
@@ -289,7 +299,9 @@ describe('the two files from the made-up outline', () => {
       handOnly: [],
     });
     const land = made.worldDots.match(/land: '([^']*)'/)![1]!;
-    const dots = decodeLand({
+    const ownerCodes = made.worldDots.match(/ownerCodes: '([^']*)'/)![1]!;
+    const owners = made.worldDots.match(/owners: '([^']*)'/)![1]!;
+    const data = {
       source: 'x',
       sha256: 'x',
       step: 30,
@@ -297,15 +309,39 @@ describe('the two files from the made-up outline', () => {
       cells: 46,
       count: 3,
       land,
-    });
+      ownerCodes,
+      owners,
+    };
+    const dots = decodeLand(data);
     expect([...dots]).toEqual([-165, 15, 15, 15, 15, -15]);
     // A count that does not match the bits is no dots, never dots in the wrong places.
-    expect(
-      decodeLand({ source: 'x', sha256: 'x', step: 30, rows: 6, cells: 46, count: 4, land }),
-    ).toHaveLength(0);
-    expect(
-      decodeLand({ source: 'x', sha256: 'x', step: 30, rows: 6, cells: 45, count: 3, land }),
-    ).toHaveLength(0);
+    expect(decodeLand({ ...data, count: 4 })).toHaveLength(0);
+    expect(decodeLand({ ...data, cells: 45 })).toHaveLength(0);
+    // Each dot's country, in the same order.
+    const read = decodeOwners(data)!;
+    expect(read.codes).toEqual(['ZA']);
+    expect([...read.index]).toEqual([0, 1, 1]);
+  });
+
+  it("the dots' countries read back only when they read as the header says: else none, never wrong ones", () => {
+    const base = {
+      source: 'x',
+      sha256: 'x',
+      step: 30,
+      rows: 6,
+      cells: 46,
+      count: 3,
+      land: '',
+      ownerCodes: 'NO ZA',
+      owners: Buffer.from([0, 1, 2]).toString('base64'),
+    };
+    expect(decodeOwners(base)!.codes).toEqual(['NO', 'ZA']);
+    expect(decodeOwners({ ...base, ownerCodes: '' })).toBeNull();
+    expect(decodeOwners({ ...base, ownerCodes: 'NO za' })).toBeNull();
+    expect(decodeOwners({ ...base, ownerCodes: 'NO <b>' })).toBeNull();
+    expect(decodeOwners({ ...base, count: 4 })).toBeNull();
+    expect(decodeOwners({ ...base, owners: Buffer.from([0, 1, 3]).toString('base64') })).toBeNull();
+    expect(decodeOwners({ ...base, owners: '%%%' })).toBeNull();
   });
 });
 
@@ -353,6 +389,17 @@ describe('the committed files', () => {
     const dots = decodeLand();
     expect(dots.length).toBe(WORLD_DOTS.count * 2);
     expect(WORLD_DOTS.count).toBeGreaterThan(10_000);
+  });
+
+  it("nearly every dot has its country, each a listed code with a point (a source's land can glow)", () => {
+    const owners = decodeOwners()!;
+    expect(owners.index).toHaveLength(WORLD_DOTS.count);
+    expect([...owners.codes]).toEqual([...owners.codes].sort());
+    for (const code of owners.codes) expect(ISO_CODES).toContain(code);
+    for (const code of owners.codes) expect(COUNTRY_POINTS[code]).toBeDefined();
+    const owned = owners.index.reduce((n, owner) => n + (owner === 0 ? 0 : 1), 0);
+    expect(owned / WORLD_DOTS.count).toBeGreaterThan(0.99);
+    expect(owners.codes.length).toBeGreaterThan(150);
   });
 
   it('both files together are under the budget, compressed', () => {

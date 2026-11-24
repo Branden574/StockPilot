@@ -381,29 +381,48 @@ export function dotRows(step) {
 /** The longitude of cell j of a row of `cells` cells. */
 export const cellLongitude = (j, cells) => -180 + ((j + 0.5) * 360) / cells;
 
-/** One bit per cell, 1 for land, row after row from the north, most significant bit first. */
-export function landBits(outline, step) {
-  const polygons = outline.flatMap((f) => f.polygons).map((p) => ({ p, b: boundsOf(p[0]) }));
+/**
+ * One bit per cell, 1 for land, row after row from the north, most
+ * significant bit first; and, for every land cell in that order, the country
+ * it is in: the code of the first country of the outline whose polygon holds
+ * the cell's centre, when that code is in `codes` (so never a code outside
+ * the list, and never Kosovo's outline shape: HAND_ONLY_CODES are not in the
+ * list); none otherwise. `ownerCodes` are the codes that hold a cell, sorted;
+ * `owners` has one byte per land cell: 1 + the code's place in `ownerCodes`,
+ * or 0 for none.
+ */
+export function landBits(outline, step, codes = ISO_3166_ALPHA2) {
+  const listed = new Set(codes);
+  const polygons = outline.flatMap((f) =>
+    f.polygons.map((p) => ({ p, b: boundsOf(p[0]), code: listed.has(f.code) ? f.code : null })),
+  );
   const rows = dotRows(step);
   const cells = rows.reduce((sum, row) => sum + row.cells, 0);
   const bytes = new Uint8Array(Math.ceil(cells / 8));
+  const ownerOf = [];
   let index = 0;
   let count = 0;
   for (const row of rows) {
     const here = polygons.filter(({ b }) => b.south <= row.lat && row.lat <= b.north);
     for (let j = 0; j < row.cells; j += 1) {
       const lon = cellLongitude(j, row.cells);
-      const land = here.some(
+      const holding = here.filter(
         ({ p, b }) => b.west <= lon && lon <= b.east && polygonContains(p, lon, row.lat),
       );
-      if (land) {
+      if (holding.length > 0) {
         bytes[index >> 3] |= 0x80 >> (index & 7);
         count += 1;
+        ownerOf.push(holding.find((h) => h.code !== null)?.code ?? null);
       }
       index += 1;
     }
   }
-  return { rows: rows.length, cells, count, bytes };
+  const ownerCodes = [...new Set(ownerOf.filter((code) => code !== null))].sort();
+  if (ownerCodes.length > 255)
+    throw new Error('more than 255 countries hold land: one byte is too small');
+  const place = new Map(ownerCodes.map((code, i) => [code, i + 1]));
+  const owners = Uint8Array.from(ownerOf, (code) => (code === null ? 0 : place.get(code)));
+  return { rows: rows.length, cells, count, bytes, owners, ownerCodes };
 }
 
 /* ────────────────────────────────── the points ────────────────────────────────── */
@@ -491,7 +510,9 @@ export function renderWorldDots(dots, step) {
  * longitude -180 + (j + 0.5) * 360 / n. \`land\` holds one bit per cell, 1 when the
  * cell's centre is on land, row after row from the north, most significant bit
  * first, in base64. \`cells\` and \`count\` (the land cells) are there to check a
- * reading against.
+ * reading against. \`owners\` holds one byte per land cell, in the same order: 0
+ * when the cell is in no listed country, else 1 + the place of its country's code
+ * in \`ownerCodes\` (sorted, separated by spaces), in base64.
  */
 export interface WorldDotsData {
   readonly source: string;
@@ -501,6 +522,8 @@ export interface WorldDotsData {
   readonly cells: number;
   readonly count: number;
   readonly land: string;
+  readonly ownerCodes: string;
+  readonly owners: string;
 }
 
 export const WORLD_DOTS: WorldDotsData = {
@@ -512,6 +535,8 @@ export const WORLD_DOTS: WorldDotsData = {
   cells: ${dots.cells},
   count: ${dots.count},
   land: '${land}',
+  ownerCodes: '${dots.ownerCodes.join(' ')}',
+  owners: '${Buffer.from(dots.owners).toString('base64')}',
 };
 `;
 }
@@ -552,7 +577,7 @@ export function generateWorld(
   } = {},
 ) {
   const outline = readOutline(text);
-  const dots = landBits(outline, step);
+  const dots = landBits(outline, step, codes);
   const points = countryPoints(outline, codes, fallback, handOnly);
   return {
     worldDots: renderWorldDots(dots, step),
@@ -592,6 +617,10 @@ function main(argv) {
   console.log(`both, gzip: ${total} bytes (budget ${BUDGET_GZIP_BYTES})`);
   console.log(
     `dots: step ${DOT_STEP} degrees, ${made.dots.rows} rows, ${made.dots.cells} cells, ${made.dots.count} on land`,
+  );
+  const owned = made.dots.owners.reduce((n, owner) => n + (owner === 0 ? 0 : 1), 0);
+  console.log(
+    `land dots in a listed country: ${owned} of ${made.dots.count}, in ${made.dots.ownerCodes.length} countries`,
   );
   console.log(`points: ${Object.keys(made.points.points).length} codes`);
   console.log(

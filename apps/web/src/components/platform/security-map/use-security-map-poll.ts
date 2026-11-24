@@ -26,11 +26,13 @@ import { localDayStart, nextLocalMidnight, nextPoll, replayWantsWhole } from './
 /**
  * THE MAP'S POLL: one small hook local to the island (no shared polling
  * hook). It asks the console's Server Action for the map's data. The
- * server's first read is the page's one read of the whole window when it
- * opens (review S3); then the last ten minutes every 30 seconds, and the
- * whole window again 5 minutes after its last good read (with the viewer's
- * day start), at the viewer's midnight, and when the replay begins on a read
- * more than a minute old (map-model.ts nextPoll). After a failed read of the
+ * server's first read seeds the page; right after the island mounts, the
+ * whole window is read once more with the viewer's day start, so the day's
+ * counter is right within a moment (QUESTIONS Q22: two reads of the whole
+ * window on open); then the last ten minutes every 30 seconds, and the whole
+ * window again 5 minutes after its last good read, at the viewer's midnight,
+ * and when the replay begins on a read more than a minute old (map-model.ts
+ * nextPoll). After a failed read of the
  * whole window the next waits 2, 4, 8, then 10 minutes, and the reads of the
  * last ten minutes go on in between (review S2). A read of the last ten
  * minutes only adds the newest live arcs, and merges its feed entries into
@@ -78,10 +80,9 @@ export type SecurityMapPollInput = { scope: 'whole' | 'recent'; dayStart: string
 export type SecurityMapPoll = (input: SecurityMapPollInput) => Promise<unknown>;
 
 /**
- * The state from the server's first read, the page's one read of the whole
- * window when it opens (review S3). It could not carry the viewer's day
- * start, so the day is counted by the next read of the whole window. A good
- * first read is the newest read: the last ten minutes follow 30 seconds on.
+ * The state from the server's first read of the whole window. It could not
+ * carry the viewer's day start, so the island reads the whole window again
+ * at once with it (QUESTIONS Q22), and the day is counted by that read.
  * A failed one is a failed read of the whole window: the last ten minutes
  * are read at once and run alone, and the whole window is tried again after
  * its back-off.
@@ -301,6 +302,7 @@ export function useSecurityMapPoll(
           ? nextLocalMidnight(state.whole?.whole.dayStart ?? null)
           : null,
         wholeWanted: wholeWanted.current,
+        dayUnread: !state.dayStartAsked,
       },
       Date.now(),
     );

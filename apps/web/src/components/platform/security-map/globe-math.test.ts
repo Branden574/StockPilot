@@ -5,16 +5,31 @@ import {
   ARC_MAX_HEIGHT,
   ARC_MIN_HEIGHT,
   ARC_SEGMENTS,
-  FITS_IN_VIEW,
+  DRIFT_TURN_MS,
+  EASE_MS,
+  FLIGHT_MAX_MS,
+  FLIGHT_MIN_MS,
+  GLOBE_HEIGHT_SHARE,
+  GLOBE_TILT,
   LIVE_PERIOD_MS,
-  LIVE_TRAVEL_MS,
-  MAX_PITCH,
-  PULSE_MS,
+  REPLAY_FLIGHT_MS,
   REPLAY_SPREAD_MS,
-  REPLAY_TRAVEL_MS,
-  RESUME_AFTER_MS,
-  TURN_MS,
+  RETURN_AFTER_MS,
+  RING_MS,
+  SOURCE_SEEN,
+  STAGE_HEADROOM,
+  STILL_TRACK,
+  STOCKPILOT_GONE,
+  STOCKPILOT_SEEN,
+  SWAY,
+  SWAY_PERIOD_MS,
+  TARGET_MOVE,
+  TRACK_HOLD_MS,
+  TRACK_IN_MS,
+  TRACK_OUT_MS,
+  TRAIL,
   advanceGlobeMotion,
+  angleFromView,
   arcFrameAt,
   arcHeight,
   arcOffset,
@@ -23,16 +38,29 @@ import {
   createGlobeMotion,
   dotPositions,
   dragGlobe,
-  facingOf,
+  easeInOut,
+  facingYaw,
+  flightMs,
+  heatOf,
+  limbFade,
   lonLatToVector,
+  placeLabels,
   pointAlong,
+  projectToStage,
+  ribbonIndexes,
+  ribbonVertexCount,
+  sourceMarkSize,
   stopCoasting,
-  tubeIndexes,
-  tubeVertexCount,
+  swayAt,
   turnPoint,
   wrapAngle,
   writeArcPoints,
-  writeTube,
+  writeRibbon,
+  writeStars,
+  type LabelAnchor,
+  type PlacedLabel,
+  type RibbonArrays,
+  type StageCamera,
 } from './globe-math';
 import {
   FLAT_HEIGHT,
@@ -52,6 +80,7 @@ const vec = (lon: number, lat: number, r = 1) => {
   lonLatToVector(lon, lat, r, v);
   return v;
 };
+const DEG = Math.PI / 180;
 
 describe('places on the sphere', () => {
   it('longitude 0 faces the viewer (+z), 90 east is +x, the north pole is +y', () => {
@@ -88,25 +117,6 @@ describe('places on the sphere', () => {
 });
 
 describe('turning the globe to face a place', () => {
-  it('yaw = -longitude, then pitch = latitude, brings the place to the front (+z)', () => {
-    for (const [lon, lat] of [
-      [30, 10],
-      [-77.5, 39],
-      [139.7, 35.7],
-      [-58, -34],
-    ] as const) {
-      const facing = facingOf([[lon, lat]])!;
-      near(facing.yaw, (-lon * Math.PI) / 180);
-      near(facing.pitch, (lat * Math.PI) / 180);
-      near(facing.spread, 0);
-      const v = vec(lon, lat);
-      turnPoint(v, facing.yaw, facing.pitch);
-      near(v[0]!, 0);
-      near(v[1]!, 0);
-      near(v[2]!, 1);
-    }
-  });
-
   it('turnPoint is the same turn as three.js applies for rotation (pitch, yaw, 0) in the order XYZ', () => {
     // three.js Matrix4.makeRotationFromEuler, order XYZ, z = 0: the rows below
     // are its elements, read from the installed package's source.
@@ -127,24 +137,67 @@ describe('turning the globe to face a place', () => {
     for (let k = 0; k < 3; k += 1) near(v[k]!, want[k]!);
   });
 
-  it('several places: their middle, and how far the farthest is from it', () => {
-    const facing = facingOf([
-      [-10, 0],
-      [10, 0],
-    ])!;
-    near(facing.yaw, 0);
-    near(facing.pitch, 0);
-    near(facing.spread, (10 * Math.PI) / 180);
-    expect(facingOf([])).toBeNull();
-    // Places all round the equator have no middle.
-    expect(
-      facingOf([
-        [0, 0],
-        [90, 0],
-        [180, 0],
-        [-90, 0],
-      ]),
-    ).toBeNull();
+  it("the angle from the middle of the view: the yaw faces longitude -yaw at the tilt's latitude", () => {
+    near(angleFromView(-40 * DEG, [40, GLOBE_TILT / DEG]), 0);
+    near(angleFromView(0, [0, GLOBE_TILT / DEG + 30]), 30 * DEG);
+    near(GLOBE_TILT, 18 * DEG);
+  });
+
+  it('nothing to play: the globe faces StockPilot', () => {
+    near(facingYaw([], STOCKPILOT_LON_LAT), wrapAngle(-STOCKPILOT_LON_LAT[0] * DEG));
+    // A weight of nothing (or not a number) is no place at all.
+    near(
+      facingYaw(
+        [
+          { lonLat: [100, 30], weight: 0 },
+          { lonLat: [120, 30], weight: Number.NaN },
+        ],
+        STOCKPILOT_LON_LAT,
+      ),
+      wrapAngle(-STOCKPILOT_LON_LAT[0] * DEG),
+    );
+  });
+
+  it("sources on StockPilot's side: StockPilot and every source are in view", () => {
+    const places = [
+      { lonLat: [-100, 40] as const, weight: 3 },
+      { lonLat: [10, 50] as const, weight: 4 },
+      { lonLat: [-50, -15] as const, weight: 2 },
+    ];
+    const yaw = facingYaw(places, STOCKPILOT_LON_LAT);
+    expect(angleFromView(yaw, STOCKPILOT_LON_LAT)).toBeLessThanOrEqual(STOCKPILOT_SEEN);
+    for (const p of places) expect(angleFromView(yaw, p.lonLat)).toBeLessThan(76 * DEG);
+  });
+
+  it('a play from the far side of the world faces its sources, not StockPilot', () => {
+    const places = [
+      { lonLat: [105, 35] as const, weight: 5 },
+      { lonLat: [78, 21] as const, weight: 4 },
+      { lonLat: [135, 36] as const, weight: 3 },
+      { lonLat: [120, 15] as const, weight: 2 },
+    ];
+    const yaw = facingYaw(places, STOCKPILOT_LON_LAT);
+    for (const p of places) expect(angleFromView(yaw, p.lonLat)).toBeLessThanOrEqual(SOURCE_SEEN);
+    expect(angleFromView(yaw, STOCKPILOT_LON_LAT)).toBeGreaterThan(STOCKPILOT_GONE);
+  });
+
+  it('a heavier source pulls the facing toward itself', () => {
+    const light = facingYaw(
+      [
+        { lonLat: [10, 50], weight: 1 },
+        { lonLat: [30, 50], weight: 1 },
+      ],
+      [20, 50],
+    );
+    const heavy = facingYaw(
+      [
+        { lonLat: [10, 50], weight: 1 },
+        { lonLat: [30, 50], weight: 9 },
+      ],
+      [20, 50],
+    );
+    // A yaw of -longitude faces that longitude: heavier on the east, a smaller yaw.
+    expect(heavy).toBeLessThan(light);
   });
 
   it('angles wrap into (-pi, pi]', () => {
@@ -217,160 +270,362 @@ describe('arcs', () => {
     expect([...out.slice(0, 3)]).toEqual([0, 0, 0]);
   });
 
-  it('a tube around the arc: rings of vertices at the radius, thinner at the ends, with how far along each is', () => {
-    const segments = 8;
-    const sides = 5;
+  it('the highest arc stays inside the stage above and below the globe', () => {
+    // The globe's radius is GLOBE_HEIGHT_SHARE of the stage's height: an arc's
+    // top, (1 + its height) radii from the centre, is inside half the stage.
+    expect((1 + ARC_MAX_HEIGHT) * GLOBE_HEIGHT_SHARE).toBeLessThanOrEqual(0.5);
+    expect(ARC_MAX_HEIGHT).toBeLessThanOrEqual(STAGE_HEADROOM);
+    expect(ARC_MIN_HEIGHT).toBeGreaterThan(0);
+  });
+
+  it('a ribbon: two vertices for each point, one either side, with the points before and after it', () => {
+    const segments = 6;
     const points = new Float32Array((segments + 1) * 3);
     writeArcPoints([0, 0], [60, 0], points, segments);
-    const positions = new Float32Array(tubeVertexCount(segments, sides) * 3);
-    const along = new Float32Array(tubeVertexCount(segments, sides));
-    const normals = new Float32Array(tubeVertexCount(segments, sides) * 3);
-    writeTube(points, segments, sides, 0.01, positions, along, normals);
-    // Each normal is a unit vector pointing from the line out to its vertex.
-    for (let v = 0; v < tubeVertexCount(segments, sides); v += 1) {
-      near(Math.hypot(normals[v * 3]!, normals[v * 3 + 1]!, normals[v * 3 + 2]!), 1, 5);
-    }
-    const i0 = segments / 2;
-    const out0 = [0, 1, 2].map(
-      (k) => (positions[i0 * sides * 3 + k]! - points[i0 * 3 + k]!) / 0.01,
-    );
-    // Float32 positions: four places.
-    for (let k = 0; k < 3; k += 1) near(out0[k]!, normals[i0 * sides * 3 + k]!, 4);
-    expect(positions.every(Number.isFinite)).toBe(true);
-    const ringRadius = (i: number) => {
-      const c = [points[i * 3]!, points[i * 3 + 1]!, points[i * 3 + 2]!];
-      const v = i * sides;
-      return Math.hypot(
-        positions[v * 3]! - c[0]!,
-        positions[v * 3 + 1]! - c[1]!,
-        positions[v * 3 + 2]! - c[2]!,
-      );
+    const n = ribbonVertexCount(segments) * 2;
+    const out: RibbonArrays = {
+      position: new Float32Array(n * 3),
+      previous: new Float32Array(n * 3),
+      next: new Float32Array(n * 3),
+      side: new Float32Array(n),
+      along: new Float32Array(n),
+      distance: new Float32Array(n),
     };
-    near(ringRadius(segments / 2), 0.01, 6);
-    expect(ringRadius(0)).toBeLessThan(ringRadius(segments / 2));
-    expect(along[0]).toBe(0);
-    expect(along[along.length - 1]).toBe(1);
-    const indexes = tubeIndexes(segments, sides);
-    expect(indexes).toHaveLength(segments * sides * 6);
-    // Every triangle faces out of the tube: its normal points the way its
-    // vertices' own normals do.
-    const p = (v: number) => [positions[v * 3]!, positions[v * 3 + 1]!, positions[v * 3 + 2]!];
-    for (let t = 0; t < indexes.length; t += 3) {
-      const [a, b, c] = [p(indexes[t]!), p(indexes[t + 1]!), p(indexes[t + 2]!)];
-      const u = [b[0]! - a[0]!, b[1]! - a[1]!, b[2]! - a[2]!];
-      const w = [c[0]! - a[0]!, c[1]! - a[1]!, c[2]! - a[2]!];
-      const face = [
-        u[1]! * w[2]! - u[2]! * w[1]!,
-        u[2]! * w[0]! - u[0]! * w[2]!,
-        u[0]! * w[1]! - u[1]! * w[0]!,
-      ];
-      const v0 = indexes[t]!;
-      const out =
-        face[0]! * normals[v0 * 3]! +
-        face[1]! * normals[v0 * 3 + 1]! +
-        face[2]! * normals[v0 * 3 + 2]!;
-      expect(out, `triangle ${t / 3}`).toBeGreaterThan(0);
+    const first = ribbonVertexCount(segments);
+    const length = writeRibbon(points, segments, out, first);
+    // Nothing before `first` is written.
+    expect(out.side.slice(0, first).every((v) => v === 0)).toBe(true);
+    let sum = 0;
+    for (let i = 0; i <= segments; i += 1) {
+      if (i > 0) {
+        sum += Math.hypot(
+          points[i * 3]! - points[(i - 1) * 3]!,
+          points[i * 3 + 1]! - points[(i - 1) * 3 + 1]!,
+          points[i * 3 + 2]! - points[(i - 1) * 3 + 2]!,
+        );
+      }
+      for (let s = 0; s < 2; s += 1) {
+        const v = first + i * 2 + s;
+        expect(out.side[v]).toBe(s === 0 ? -1 : 1);
+        near(out.along[v]!, i / segments);
+        near(out.distance[v]!, sum, 5);
+        const before = Math.max(0, i - 1);
+        const after = Math.min(segments, i + 1);
+        for (let k = 0; k < 3; k += 1) {
+          expect(out.position[v * 3 + k]).toBe(points[i * 3 + k]);
+          expect(out.previous[v * 3 + k]).toBe(points[before * 3 + k]);
+          expect(out.next[v * 3 + k]).toBe(points[after * 3 + k]);
+        }
+      }
     }
-    expect(Math.max(...indexes)).toBe(tubeVertexCount(segments, sides) - 1);
+    near(length, sum, 5);
+    // A line of 60 degrees that rises: longer than the ground under it.
+    expect(length).toBeGreaterThan(60 * DEG);
+  });
+
+  it("the ribbons' triangles: two for each segment, each ribbon's within its own vertices", () => {
+    const segments = 4;
+    const count = 3;
+    const per = ribbonVertexCount(segments);
+    const indexes = ribbonIndexes(segments, count);
+    expect(indexes).toHaveLength(segments * 6 * count);
+    for (let r = 0; r < count; r += 1) {
+      const own = indexes.slice(r * segments * 6, (r + 1) * segments * 6);
+      expect(Math.min(...own)).toBe(r * per);
+      expect(Math.max(...own)).toBe((r + 1) * per - 1);
+    }
+    // One segment: the quad of points i and i + 1, both sides, cut along one diagonal.
+    expect([...indexes.slice(0, 6)]).toEqual([0, 2, 1, 1, 2, 3]);
+  });
+});
+
+describe('the stage', () => {
+  const camera = (width: number, height: number, radiusPx: number, shift = 0): StageCamera => {
+    // As the renderer lays it out: the distance that makes the globe radiusPx across its half.
+    const tanHalf = Math.tan(15 * DEG);
+    const tanA = (radiusPx / (height / 2)) * tanHalf;
+    return {
+      distance: 1 / Math.sin(Math.atan(tanA)),
+      tanHalf,
+      aspect: width / height,
+      width,
+      height,
+      shift,
+    };
+  };
+
+  it('the point facing the viewer is in the middle of the stage, less the shift', () => {
+    const out = [0, 0, 0];
+    projectToStage([0, 0, 1], 0, 0, camera(1200, 600, 216), out);
+    near(out[0]!, 600);
+    near(out[1]!, 300);
+    near(out[2]!, 1);
+    projectToStage([0, 0, 1], 0, 0, camera(1200, 600, 216, 160), out);
+    near(out[0]!, 440);
+  });
+
+  it('the limb is drawn radiusPx from the middle', () => {
+    const cam = camera(1200, 600, 216);
+    const limbCos = 1 / cam.distance;
+    const out = [0, 0, 0];
+    projectToStage([Math.sqrt(1 - limbCos * limbCos), 0, limbCos], 0, 0, cam, out);
+    near(out[0]! - 600, 216, 4);
+    near(out[2]!, limbCos);
+  });
+
+  it('a place turned by its yaw and the tilt comes to the middle; north is up', () => {
+    const cam = camera(800, 600, 200);
+    const out = [0, 0, 0];
+    projectToStage(vec(40, GLOBE_TILT / DEG), -40 * DEG, GLOBE_TILT, cam, out);
+    near(out[0]!, 400, 4);
+    near(out[1]!, 300, 4);
+    projectToStage(vec(40, GLOBE_TILT / DEG + 10), -40 * DEG, GLOBE_TILT, cam, out);
+    expect(out[1]!).toBeLessThan(300);
+  });
+
+  it('a place fades over the last degrees before the limb and is gone past it', () => {
+    const limbCos = Math.cos(70 * DEG);
+    near(limbFade(Math.cos(20 * DEG), limbCos, 12 * DEG), 1);
+    near(limbFade(Math.cos(64 * DEG), limbCos, 12 * DEG), 0.5);
+    near(limbFade(Math.cos(70 * DEG), limbCos, 12 * DEG), 0);
+    near(limbFade(Math.cos(120 * DEG), limbCos, 12 * DEG), 0);
+  });
+});
+
+describe('labels', () => {
+  const anchor = (x: number, y: number, more: Partial<LabelAnchor> = {}): LabelAnchor => ({
+    x,
+    y,
+    w: 100,
+    h: 20,
+    visible: true,
+    spots: ['right', 'left', 'above', 'below'],
+    ...more,
+  });
+  const bounds = { w: 800, h: 500 };
+
+  it('beside its mark, on the right when it fits', () => {
+    const out: PlacedLabel[] = [];
+    placeLabels([anchor(300, 200)], bounds, [], out);
+    expect(out[0]).toEqual({ x: 310, y: 190, shown: true });
+  });
+
+  it('flips to the left near the right edge, and is never cut by the stage', () => {
+    const out: PlacedLabel[] = [];
+    placeLabels([anchor(740, 200)], bounds, [], out);
+    expect(out[0]).toEqual({ x: 630, y: 190, shown: true });
+    placeLabels([anchor(790, 4, { spots: ['right', 'left'] })], bounds, [], out);
+    expect(out[0]!.shown).toBe(false);
+  });
+
+  it('keeps clear of the panels on the stage and of the labels placed before it', () => {
+    const out: PlacedLabel[] = [];
+    placeLabels([anchor(300, 200)], bounds, [{ x: 305, y: 150, w: 200, h: 100 }], out);
+    expect(out[0]).toEqual({ x: 190, y: 190, shown: true });
+    placeLabels([anchor(300, 200), anchor(305, 200)], bounds, [], out);
+    expect(out[0]).toEqual({ x: 310, y: 190, shown: true });
+    expect(out[1]!.shown).toBe(true);
+    expect(out[1]!.x).not.toBe(315);
+  });
+
+  it('a label whose mark is behind the globe is not shown', () => {
+    const out: PlacedLabel[] = [];
+    placeLabels([anchor(300, 200, { visible: false })], bounds, [], out);
+    expect(out[0]!.shown).toBe(false);
   });
 });
 
 describe("the globe's turn", () => {
-  const still = { dtMs: 16, dragging: false, mayTurn: true, focus: null };
+  const frame = { dtMs: 16, dragging: false, mayTurn: true, still: false, target: null };
+  const run = (m: ReturnType<typeof createGlobeMotion>, ms: number, more = {}) => {
+    for (let t = 0; t < ms; t += 16) advanceGlobeMotion(m, { ...frame, ...more });
+  };
 
-  it('turns slowly on its own when there is nothing to face, one turn per TURN_MS', () => {
-    const m = createGlobeMotion(0, 0.32);
-    advanceGlobeMotion(m, still);
-    near(m.yaw, (2 * Math.PI * 16) / TURN_MS);
+  it('starts at the tilt, which never changes: the globe only turns left and right', () => {
+    const m = createGlobeMotion(0.3);
+    expect(m.pitch).toBe(GLOBE_TILT);
+    dragGlobe(m, 50, 16, 200);
+    run(m, 10_000, { target: 1 });
+    expect(m.pitch).toBe(GLOBE_TILT);
   });
 
-  it('never turns on its own while paused, stopped or hidden (mayTurn false), nor while dragged', () => {
-    const m = createGlobeMotion(0.5, 0.2);
-    for (let i = 0; i < 100; i += 1) advanceGlobeMotion(m, { ...still, mayTurn: false });
-    expect(m.yaw).toBe(0.5);
-    expect(m.pitch).toBe(0.2);
-    advanceGlobeMotion(m, { ...still, dragging: true });
-    expect(m.yaw).toBe(0.5);
-    expect(m.idleMs).toBe(0);
+  it('eases to its target over EASE_MS, slow at both ends', () => {
+    near(easeInOut(0), 0);
+    near(easeInOut(0.5), 0.5);
+    near(easeInOut(1), 1);
+    expect(easeInOut(0.1)).toBeLessThan(0.1);
+    const m = createGlobeMotion(0);
+    run(m, EASE_MS / 2, { target: 1 });
+    expect(Math.abs(m.yaw - 0.5)).toBeLessThan(0.05);
+    run(m, EASE_MS / 2 + 32, { target: 1 });
+    expect(m.easeMs).toBe(-1);
+    expect(Math.abs(m.yaw - 1)).toBeLessThan(0.05);
   });
 
-  it('waits after the viewer lets go, then eases toward the places that are active', () => {
-    const m = createGlobeMotion(0, 0);
-    dragGlobe(m, 0, 0, 16, 300);
-    stopCoasting(m);
-    const focus = { yaw: 1, pitch: 0.3, spread: 0.2 };
-    advanceGlobeMotion(m, { ...still, focus });
-    expect(m.yaw).toBe(0);
-    for (let t = 0; t < RESUME_AFTER_MS; t += 16) advanceGlobeMotion(m, { ...still, focus });
-    for (let t = 0; t < 20_000; t += 16) advanceGlobeMotion(m, { ...still, focus });
-    // Within the sway of the target.
-    expect(Math.abs(wrapAngle(m.yaw - 1))).toBeLessThan(0.2);
-    expect(Math.abs(m.pitch - 0.24)).toBeLessThan(0.05);
+  it('then sways either side of it, never faster than one turn per DRIFT_TURN_MS', () => {
+    near(SWAY_PERIOD_MS, SWAY * DRIFT_TURN_MS);
+    const m = createGlobeMotion(0);
+    run(m, EASE_MS + 100, { target: 0 });
+    let last = m.yaw;
+    let fastest = 0;
+    let reach = 0;
+    for (let t = 0; t < SWAY_PERIOD_MS; t += 16) {
+      advanceGlobeMotion(m, { ...frame, target: 0 });
+      fastest = Math.max(fastest, Math.abs(wrapAngle(m.yaw - last)) / 16);
+      reach = Math.max(reach, Math.abs(m.yaw));
+      last = m.yaw;
+    }
+    expect(fastest).toBeLessThanOrEqual((2 * Math.PI) / DRIFT_TURN_MS + 1e-9);
+    expect(reach).toBeLessThanOrEqual(SWAY + 1e-9);
+    expect(reach).toBeGreaterThan(SWAY * 0.95);
+    near(swayAt(SWAY_PERIOD_MS / 4), SWAY);
   });
 
-  it('places spread too far to fit in view: a steady turn instead of facing them', () => {
-    const m = createGlobeMotion(0, 0.32);
-    advanceGlobeMotion(m, { ...still, focus: { yaw: 2, pitch: 0, spread: FITS_IN_VIEW + 0.1 } });
-    near(m.yaw, (2 * Math.PI * 16) / TURN_MS);
+  it('a target that hardly moves is not a new ease', () => {
+    const m = createGlobeMotion(0);
+    run(m, EASE_MS + 100, { target: 0 });
+    advanceGlobeMotion(m, { ...frame, target: TARGET_MOVE / 2 });
+    expect(m.easeMs).toBe(-1);
+    expect(m.target).toBe(0);
+    advanceGlobeMotion(m, { ...frame, target: TARGET_MOVE * 2 });
+    expect(m.easeMs).toBeGreaterThanOrEqual(0);
+    expect(m.target).toBe(TARGET_MOVE * 2);
   });
 
-  it('a drag turns the globe with the pointer, then coasts and slows to a stop', () => {
-    const m = createGlobeMotion(0, 0);
-    dragGlobe(m, 30, 0, 16, 300);
-    near(m.yaw, 0.1);
-    expect(m.yawSpeed).toBeGreaterThan(0);
-    const before = m.yaw;
-    advanceGlobeMotion(m, { ...still, mayTurn: false });
-    expect(m.yaw).toBeGreaterThan(before);
-    for (let i = 0; i < 2000; i += 1) advanceGlobeMotion(m, { ...still, mayTurn: false });
+  it('never turns on its own while paused, stopped or hidden (mayTurn false); its first target is taken straight', () => {
+    const m = createGlobeMotion(0.5);
+    advanceGlobeMotion(m, { ...frame, mayTurn: false, target: 1.2 });
+    near(m.yaw, 1.2);
+    const first = m.yaw;
+    run(m, 30_000, { mayTurn: false, target: 2 });
+    expect(m.yaw).toBe(first);
+    expect(m.target).toBe(2);
+  });
+
+  it('reduced motion (still): straight on its target, no ease, no sway, and a drag does not coast', () => {
+    const m = createGlobeMotion(0);
+    advanceGlobeMotion(m, { ...frame, still: true, target: 0.8 });
+    near(m.yaw, 0.8);
+    run(m, 20_000, { still: true, target: 0.8 });
+    near(m.yaw, 0.8);
+    dragGlobe(m, 40, 16, 200, true);
     expect(m.yawSpeed).toBe(0);
+    near(m.yaw, 1);
+    run(m, 20_000, { still: true, target: 0.8 });
+    near(m.yaw, 1);
   });
 
-  it('the pitch stays within its bounds; a long gap between frames is not a jump', () => {
-    const m = createGlobeMotion(0, 0);
-    dragGlobe(m, 0, 10_000, 16, 300);
-    expect(m.pitch).toBe(MAX_PITCH);
-    const n = createGlobeMotion(0, 0.32);
-    advanceGlobeMotion(n, { ...still, dtMs: 60_000 });
-    expect(n.yaw).toBeLessThan((2 * Math.PI * 100) / TURN_MS);
+  it('a drag turns the globe with the pointer, coasts, waits RETURN_AFTER_MS, then eases back', () => {
+    const m = createGlobeMotion(0);
+    run(m, EASE_MS + 100, { target: 0 });
+    const before = m.yaw;
+    dragGlobe(m, 60, 16, 200);
+    near(m.yaw, wrapAngle(before + 0.3));
+    expect(m.yawSpeed).toBeGreaterThan(0);
+    advanceGlobeMotion(m, { ...frame, dragging: true, target: 0 });
+    expect(m.idleMs).toBe(0);
+    const held = m.yaw;
+    advanceGlobeMotion(m, { ...frame, target: 0 });
+    expect(m.yaw).toBeGreaterThan(held);
+    run(m, 4000, { target: 0 });
+    expect(m.yawSpeed).toBe(0);
+    const away = m.yaw;
+    run(m, RETURN_AFTER_MS - 4000 - 100, { target: 0 });
+    expect(m.yaw).toBe(away);
+    run(m, 200 + EASE_MS, { target: 0 });
+    expect(Math.abs(m.yaw)).toBeLessThanOrEqual(SWAY + 0.01);
+  });
+
+  it('a pointer held still before letting go does not coast; a long gap between frames is not a jump', () => {
+    const m = createGlobeMotion(0);
+    dragGlobe(m, 60, 16, 200);
+    stopCoasting(m);
+    expect(m.yawSpeed).toBe(0);
+    const n = createGlobeMotion(0);
+    advanceGlobeMotion(n, { ...frame, target: 2 });
+    advanceGlobeMotion(n, { ...frame, dtMs: 60_000, target: 2 });
+    expect(n.easeMs).toBeLessThan(EASE_MS / 4);
   });
 });
 
-describe("the arcs' heads", () => {
-  it('a still arc: the whole path, no head, no pulse', () => {
+describe("the arcs' comets", () => {
+  it('a still arc: its whole track, no head, no ring', () => {
     const f = createArcFrame();
     arcFrameAt(f, 'still', 1234, 0.5);
-    expect(f).toEqual({ head: -1, base: 0.6, startPulse: -1, landPulse: -1 });
+    expect(f).toEqual({ head: -1, track: STILL_TRACK, ring: -1 });
   });
 
-  it('live: the head goes from the start to StockPilot in LIVE_TRAVEL_MS and starts again every LIVE_PERIOD_MS', () => {
+  it('a flight takes 1.6 to 2.4 seconds, the same for the same arc', () => {
+    expect(FLIGHT_MIN_MS).toBe(1600);
+    expect(FLIGHT_MAX_MS).toBe(2400);
+    const seenMs = new Set<number>();
+    for (let k = 0; k < 50; k += 1) {
+      const ms = flightMs(k / 50);
+      expect(ms).toBeGreaterThanOrEqual(FLIGHT_MIN_MS);
+      expect(ms).toBeLessThanOrEqual(FLIGHT_MAX_MS);
+      seenMs.add(Math.round(ms));
+    }
+    expect(seenMs.size).toBeGreaterThan(20);
+    expect(flightMs(0.37)).toBe(flightMs(0.37));
+  });
+
+  it('live: the head flies to StockPilot, its ring runs, its tail drains, once every LIVE_PERIOD_MS', () => {
     const f = createArcFrame();
+    const flight = flightMs(0);
     arcFrameAt(f, 'live', 0, 0);
     expect(f.head).toBe(0);
-    expect(f.startPulse).toBe(0);
-    arcFrameAt(f, 'live', LIVE_TRAVEL_MS, 0);
+    expect(f.track).toBe(0);
+    expect(f.ring).toBe(-1);
+    arcFrameAt(f, 'live', TRACK_IN_MS, 0);
+    expect(f.track).toBe(1);
+    arcFrameAt(f, 'live', flight, 0);
     expect(f.head).toBe(1);
-    expect(f.landPulse).toBe(0);
-    arcFrameAt(f, 'live', LIVE_TRAVEL_MS + PULSE_MS / 2, 0);
-    expect(f.landPulse).toBe(0.5);
+    expect(f.ring).toBe(0);
+    arcFrameAt(f, 'live', flight + RING_MS / 2, 0);
+    near(f.ring, 0.5);
+    arcFrameAt(f, 'live', flight * (1 + TRAIL) + 1, 0);
+    expect(f.head).toBe(-1);
+    arcFrameAt(f, 'live', flight + TRACK_HOLD_MS + TRACK_OUT_MS / 2, 0);
+    near(f.track, 0.5);
     arcFrameAt(f, 'live', LIVE_PERIOD_MS + 100, 0);
-    near(f.head, 100 / LIVE_TRAVEL_MS);
-    // The offset moves an arc along its own loop.
-    arcFrameAt(f, 'live', 0, 0.5);
-    near(f.head, (0.5 * LIVE_PERIOD_MS) / LIVE_TRAVEL_MS);
+    near(f.head, 100 / flight);
   });
 
-  it('replay: an arc starts within the spread of its step and plays once', () => {
+  it("live: every arc's track is gone before it launches again", () => {
+    expect(FLIGHT_MAX_MS + TRACK_HOLD_MS + TRACK_OUT_MS).toBeLessThan(LIVE_PERIOD_MS);
     const f = createArcFrame();
-    arcFrameAt(f, 'replay', 100, 0.5);
+    for (let k = 0; k < 20; k += 1) {
+      const offset = k / 20;
+      // Just before its own next launch.
+      arcFrameAt(f, 'live', LIVE_PERIOD_MS * (2 - offset) - 1, offset);
+      expect(f.track).toBe(0);
+      expect(f.head).toBe(-1);
+    }
+  });
+
+  it('an offset moves an arc along its own loop, so arcs launch at different moments', () => {
+    const f = createArcFrame();
+    const g = createArcFrame();
+    arcFrameAt(f, 'live', 0, 0.1);
+    arcFrameAt(g, 'live', 0, 0.6);
+    expect(f.head).not.toBe(g.head);
+  });
+
+  it('replay: an arc launches within the spread of its step, flies once, and leaves with the step', () => {
+    const f = createArcFrame();
+    arcFrameAt(f, 'replay', 100, 0.5, 2500);
     expect(f.head).toBe(-1);
-    expect(f.base).toBe(0);
-    arcFrameAt(f, 'replay', 0.5 * REPLAY_SPREAD_MS + REPLAY_TRAVEL_MS, 0.5);
+    expect(f.track).toBe(0);
+    arcFrameAt(f, 'replay', 0.5 * REPLAY_SPREAD_MS + REPLAY_FLIGHT_MS, 0.5, 2500);
     expect(f.head).toBe(1);
-    expect(f.landPulse).toBe(0);
+    expect(f.ring).toBe(0);
+    arcFrameAt(f, 'replay', 2500 - 175, 0.5, 2500);
+    near(f.track, 0.5);
+    arcFrameAt(f, 'replay', 2500, 0.5, 2500);
+    expect(f.track).toBe(0);
     arcFrameAt(f, 'replay', 10_000, 0.5);
-    expect(f.head).toBeGreaterThan(2);
-    expect(f.landPulse).toBe(-1);
+    expect(f.head).toBe(-1);
+    expect(f.ring).toBe(-1);
   });
 
   it('an offset is the same for the same key, and between 0 and 1', () => {
@@ -379,6 +634,40 @@ describe("the arcs' heads", () => {
     for (const key of ['', 'a', 'US:bots:blocked', 'x'.repeat(300)]) {
       expect(arcOffset(key)).toBeGreaterThanOrEqual(0);
       expect(arcOffset(key)).toBeLessThan(1);
+    }
+  });
+});
+
+describe('marks, glow and scenery', () => {
+  it("a source's mark is 10 to 18 pixels across, by core's width for its count", () => {
+    expect(sourceMarkSize(1)).toBe(10);
+    expect(sourceMarkSize(4)).toBe(18);
+    expect(sourceMarkSize(2.5)).toBe(14);
+    expect(sourceMarkSize(0)).toBe(10);
+    expect(sourceMarkSize(9)).toBe(18);
+    expect(sourceMarkSize(Number.NaN)).toBe(10);
+  });
+
+  it("a country's glow grows with its share of the play, on a log scale; none without events", () => {
+    expect(heatOf(0, 100)).toBe(0);
+    expect(heatOf(5, 0)).toBe(0);
+    expect(heatOf(100, 100)).toBe(1);
+    near(heatOf(10, 100), 0.35 + (0.65 * Math.log(11)) / Math.log(101));
+    expect(heatOf(1, 1000)).toBeGreaterThan(0.35);
+    expect(heatOf(10, 1000)).toBeGreaterThan(heatOf(1, 1000));
+    expect(heatOf(100, 1000)).toBeGreaterThan(heatOf(10, 1000));
+    expect(heatOf(5000, 1000)).toBe(1);
+  });
+
+  it('the stars are the same on every load, inside the stage, never brighter than 1', () => {
+    const a = writeStars(200, 7);
+    expect(a).toEqual(writeStars(200, 7));
+    expect(a).not.toEqual(writeStars(200, 8));
+    for (let i = 0; i < 200; i += 1) {
+      expect(Math.abs(a[i * 3]!)).toBeLessThanOrEqual(1);
+      expect(Math.abs(a[i * 3 + 1]!)).toBeLessThanOrEqual(1);
+      expect(a[i * 3 + 2]!).toBeGreaterThanOrEqual(0.25);
+      expect(a[i * 3 + 2]!).toBeLessThanOrEqual(1);
     }
   });
 });

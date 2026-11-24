@@ -42,7 +42,9 @@ import {
   securityMapArcWidth,
   securityMapAsOfWords,
   securityMapClock,
+  SECURITY_MAP_AT_LEAST,
   securityMapCountWords,
+  securityMapPillWords,
   securityMapCounters,
   securityMapEmptyWords,
   securityMapEntryKey,
@@ -1970,6 +1972,57 @@ describe('the words', () => {
     expect(securityMapModeWords(planSecurityMapPlayback(null, null), null, 0)).toBe(
       'Nothing to play.',
     );
+  });
+
+  it('the pill: the mode, or why the map is not moving, in a few words', () => {
+    const at = Date.parse('2026-11-23T12:03:20Z');
+    const health = { failures: 0, lastGoodAt: at, refused: false };
+    const w = whole(busy());
+    const live = planSecurityMapPlayback(w, null);
+    expect(securityMapPillWords(live, null, health, 0, 'UTC')).toEqual({
+      kind: 'live',
+      text: 'Live',
+    });
+    // A hidden tab shows the mode it had.
+    expect(securityMapPillWords(live, 'hidden', health, 0, 'UTC').kind).toBe('live');
+    const quiet = busy();
+    quiet.timeline = quiet.timeline?.filter((c) => c.bucket_seconds === 600);
+    const replay = planSecurityMapPlayback(whole(quiet), null);
+    expect(securityMapPillWords(replay, null, health, 0, 'UTC')).toEqual({
+      kind: 'replay',
+      text: 'Replay 03:00 to 04:00',
+    });
+    // A step past the end is the last one, never an invented hour.
+    expect(securityMapPillWords(replay, null, health, 99, 'UTC').text).toMatch(
+      /^Replay 21:00 to 22:00$/,
+    );
+    expect(securityMapPillWords(live, 'not_updating', health, 0, 'UTC')).toEqual({
+      kind: 'not_updating',
+      text: 'Not updating since 12:03',
+    });
+    expect(
+      securityMapPillWords(live, 'not_updating', { ...health, lastGoodAt: null }, 0, 'UTC').text,
+    ).toBe('Not updating');
+    expect(securityMapPillWords(live, 'sign_in_again', health, 0).text).toBe('Sign in again');
+    expect(securityMapPillWords(live, 'paused', health, 0).text).toBe('Paused');
+    expect(securityMapPillWords(live, 'reduced_motion', health, 0).text).toBe(
+      'Still: reduced motion',
+    );
+    const none = planSecurityMapPlayback(null, null);
+    expect(securityMapPillWords(none, 'nothing_to_play', health, 0)).toEqual({
+      kind: 'nothing_to_play',
+      text: 'Nothing to play',
+    });
+    expect(securityMapPillWords(none, null, health, 0).kind).toBe('nothing_to_play');
+  });
+
+  it('the short words on and under the stage', () => {
+    expect(SECURITY_MAP_AT_LEAST).toBe('at least');
+    expect(SECURITY_MAP_WORDS.showAll(10)).toBe('Show all 10');
+    expect(SECURITY_MAP_WORDS.showAll(1234)).toBe('Show all 1,234');
+    expect(SECURITY_MAP_WORDS.showFewer).toBe('Show fewer');
+    expect(SECURITY_MAP_WORDS.legendBlocked).toBe('Blocked');
+    expect(SECURITY_MAP_WORDS.legendFlagged).toBe('Flagged, not blocked');
   });
 
   it('why the map is not moving', () => {

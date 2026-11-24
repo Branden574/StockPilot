@@ -6,10 +6,11 @@ import { SecurityMapIsland } from './security-map/security-map-island';
  * THE ATTACK MAP SECTION (server component): the frame of the map and its
  * first values. One read of the whole window (server/services/platform/
  * security-map.ts, the service client; the read is "could not check" on any
- * failure and never throws), handed to the island as its first values: the
- * only read of the whole window when the page opens (review S3). That read
- * cannot carry the viewer's midnight, so the day's counter says "Not counted
- * yet" until the island's next read of the whole window, 5 minutes later.
+ * failure and never throws), handed to the island as its first values. That
+ * read cannot carry the viewer's midnight, so the island reads the whole
+ * window once more as soon as it mounts, with the viewer's day start: the
+ * day's counter says "Not counted yet" only until that read lands
+ * (QUESTIONS Q22: two reads of the whole window on open).
  *
  * Rendered only by the gated page /platform/security/map, after
  * requirePlatformAdmin() has answered (security-map.callers.test.ts pins

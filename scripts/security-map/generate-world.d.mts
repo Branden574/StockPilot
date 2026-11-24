@@ -11,6 +11,9 @@ export interface LandBits {
   cells: number;
   count: number;
   bytes: Uint8Array;
+  /** One per land cell: 0 for none, else 1 + the place of its country's code in ownerCodes. */
+  owners: Uint8Array;
+  ownerCodes: string[];
 }
 export interface CountryPointsResult {
   points: Record<string, [number, number]>;
@@ -47,7 +50,11 @@ export declare function insidePointOf(
 ): { point: [number, number]; how: 'centre' | 'widest stretch' } | null;
 export declare function dotRows(step: number): Array<{ lat: number; cells: number }>;
 export declare function cellLongitude(j: number, cells: number): number;
-export declare function landBits(outline: OutlineFeature[], step: number): LandBits;
+export declare function landBits(
+  outline: OutlineFeature[],
+  step: number,
+  codes?: readonly string[],
+): LandBits;
 export declare function oneDecimal(n: number): number;
 export declare function countryPoints(
   outline: OutlineFeature[],

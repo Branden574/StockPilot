@@ -3,12 +3,14 @@
 // These declare the few parts components/platform/security-map/
 // globe-renderer.ts uses, written from the installed three@0.187.0 source
 // (src/renderers/WebGLRenderer.js, src/core/*, src/materials/*,
-// src/objects/*, src/cameras/PerspectiveCamera.js, src/constants.js). Add a
+// src/objects/*, src/cameras/PerspectiveCamera.js, src/constants.js,
+// src/geometries/PlaneGeometry.js). Add a
 // part here only after reading it in the installed package.
 declare module 'three' {
   export const REVISION: string;
   export const FrontSide: 0;
   export const BackSide: 1;
+  export const DoubleSide: 2;
   export const NormalBlending: 1;
   export const AdditiveBlending: 2;
   export const DynamicDrawUsage: 35048;
@@ -56,6 +58,15 @@ declare module 'three' {
     fov: number;
     updateProjectionMatrix(): void;
     lookAt(x: number, y: number, z: number): void;
+    setViewOffset(
+      fullWidth: number,
+      fullHeight: number,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+    ): void;
+    clearViewOffset(): void;
   }
 
   export type TypedArray = Float32Array | Uint16Array | Uint32Array;
@@ -87,6 +98,10 @@ declare module 'three' {
       thetaStart?: number,
       thetaLength?: number,
     );
+  }
+
+  export class PlaneGeometry extends BufferGeometry {
+    constructor(width?: number, height?: number, widthSegments?: number, heightSegments?: number);
   }
 
   export interface IUniform<T = unknown> {
@@ -152,6 +167,14 @@ declare module 'three' {
     geometry: BufferGeometry;
     material: Material;
   }
+
+  export class Line extends Object3D {
+    constructor(geometry?: BufferGeometry, material?: Material);
+    geometry: BufferGeometry;
+    material: Material;
+  }
+
+  export class LineSegments extends Line {}
 
   export class Sprite extends Object3D {
     constructor(material?: SpriteMaterial);

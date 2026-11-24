@@ -1614,9 +1614,12 @@ export function securityMapIsFloor(
   return whole?.whole.floors.includes(name) ?? false;
 }
 
+/** The words before a number that is a floor (the page sets them small, before the number). */
+export const SECURITY_MAP_AT_LEAST = 'at least';
+
 /** A count in words: "7", or "at least 7" for a floor that counted something. Zero is zero. */
 export function securityMapCountWords(count: number, floor: boolean): string {
-  return floor && count > 0 ? `at least ${num(count)}` : num(count);
+  return floor && count > 0 ? `${SECURITY_MAP_AT_LEAST} ${num(count)}` : num(count);
 }
 
 /**
@@ -1828,6 +1831,61 @@ export function securityMapStopWords(
     default:
       return null;
   }
+}
+
+/** What the pill on the map says: the play's mode, or why it is not moving. */
+export type SecurityMapPillKind =
+  | 'live'
+  | 'replay'
+  | 'not_updating'
+  | 'sign_in_again'
+  | 'paused'
+  | 'reduced_motion'
+  | 'nothing_to_play';
+
+/**
+ * The short words of the pill on the map, the long sentence's headline (the
+ * sentence itself is under the map): "Live"; "Replay 20:00 to 21:00" with the
+ * hour shown (the viewer's time); "Not updating since 18:10"; "Sign in
+ * again"; "Paused"; "Still: reduced motion"; "Nothing to play". A hidden tab
+ * shows the mode it had.
+ */
+export function securityMapPillWords(
+  plan: SecurityMapPlan,
+  stop: SecurityMapStopReason | null,
+  health: SecurityMapHealth,
+  stepIndex: number,
+  timeZone?: string,
+): { kind: SecurityMapPillKind; text: string } {
+  switch (stop) {
+    case 'sign_in_again':
+      return { kind: 'sign_in_again', text: SECURITY_MAP_WORDS.pillSignInAgain };
+    case 'not_updating':
+      return {
+        kind: 'not_updating',
+        text:
+          health.lastGoodAt === null
+            ? SECURITY_MAP_WORDS.pillNotUpdating
+            : `${SECURITY_MAP_WORDS.pillNotUpdating} since ${securityMapClock(health.lastGoodAt, timeZone)}`,
+      };
+    case 'reduced_motion':
+      return { kind: 'reduced_motion', text: SECURITY_MAP_WORDS.pillReducedMotion };
+    case 'paused':
+      return { kind: 'paused', text: SECURITY_MAP_WORDS.pillPaused };
+    default:
+      break;
+  }
+  if (plan.mode === 'live') return { kind: 'live', text: SECURITY_MAP_WORDS.pillLive };
+  if (plan.mode === 'replay') {
+    const step = plan.steps[Math.max(0, Math.min(stepIndex, plan.steps.length - 1))];
+    return {
+      kind: 'replay',
+      text: step
+        ? `${SECURITY_MAP_WORDS.pillReplay} ${securityMapClock(step.fromMs, timeZone)} to ${securityMapClock(step.toMs, timeZone)}`
+        : SECURITY_MAP_WORDS.pillReplay,
+    };
+  }
+  return { kind: 'nothing_to_play', text: SECURITY_MAP_WORDS.pillNothingToPlay };
 }
 
 /** A window the database would not read, in a sentence. Nothing was read. */
@@ -2199,4 +2257,15 @@ export const SECURITY_MAP_WORDS = {
   globeUnavailable: 'This browser cannot draw the globe, so the flat map is shown.',
   globeLost: 'The globe stopped drawing, so the flat map is shown.',
   globeReducedMotion: 'The flat map is shown: your device asks for reduced motion.',
+  pillLive: 'Live',
+  pillReplay: 'Replay',
+  pillNotUpdating: 'Not updating',
+  pillSignInAgain: 'Sign in again',
+  pillPaused: 'Paused',
+  pillReducedMotion: 'Still: reduced motion',
+  pillNothingToPlay: 'Nothing to play',
+  legendBlocked: 'Blocked',
+  legendFlagged: 'Flagged, not blocked',
+  showAll: (count: number): string => `Show all ${num(count)}`,
+  showFewer: 'Show fewer',
 } as const;
