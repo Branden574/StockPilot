@@ -40,6 +40,13 @@
 --   9. The reminders: what is due in 30 days or today, in the organization's
 --      zone, and the stamp-first claim (true once; the two-session proof is
 --      scripts/db-concurrency/0481_supplier_risk_reminder_race.sh).
+--  10. Holes the red checks found: the text rule counts characters; the
+--      tables' own checks of a version, names, an item per question, an
+--      owner's name, text lengths and a fifth status; the 30-day stamp kept;
+--      the first closing time kept; another organization's draft and items
+--      out of reach; a renamed supplier's name on the final; every today in
+--      the organization's zone at any hour (W behind UTC, Z ahead); each
+--      write's lock before its reads.
 --
 -- Every vendor, person and organization below is made up. Namespace
 -- a0481000. Wrapped in begin/rollback: nothing leaks. Run via `supabase test
@@ -47,7 +54,7 @@
 
 begin;
 
-select plan(101);
+select plan(115);
 
 set local timezone = 'UTC';
 
@@ -1295,6 +1302,167 @@ select is(
       and 'lock_timeout=2s' = any (p.proconfig)),
   1,
   '0481/101: the claim is one guarded update (the stamp must still be empty when the row lock is had), with a 2 s lock wait');
+
+-- ── 10. Holes the red checks found ──────────────────────────────────────────
+-- Each test below fails for a mutant of the migration that the tests above
+-- let through (red-checks/RED-CHECKS.md in the notes names them).
+\set orgW 'a0481000-0000-0000-0000-0000000000a7'
+\set ownerW 'a0481000-0000-0000-0000-0000000000d4'
+\set supH1 'a0481000-0000-0000-0000-000000000201'
+\set supH2 'a0481000-0000-0000-0000-000000000202'
+\set supH3 'a0481000-0000-0000-0000-000000000203'
+\set supH4 'a0481000-0000-0000-0000-000000000204'
+\set supZ2 'a0481000-0000-0000-0000-000000000211'
+\set supZ3 'a0481000-0000-0000-0000-000000000212'
+\set supW1 'a0481000-0000-0000-0000-000000000221'
+\set supW3 'a0481000-0000-0000-0000-000000000223'
+\set revH1 'a0481000-0000-0000-0000-000000000231'
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:'ownerW', 'vr-owner-w@test.local', '{"full_name": "Made-up Owner W"}'::jsonb);
+-- Organization W is twelve hours behind UTC, Z fourteen ahead: at any hour
+-- one of them is on another day than UTC, so a function that reads UTC's
+-- today instead of the organization's fails one of the tests below.
+insert into public.organizations (id, name, slug, mfa_policy, timezone) values
+  (:'orgW', 'Vendor Risk Org W', 'a0481000-org-w', 'optional', 'Etc/GMT+12');
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:'orgW', :'ownerW', 'owner', now(), null);
+insert into public.suppliers (id, organization_id, name, deleted_at) values
+  (:'supH1', :'orgA', 'Holes Table Co',        null),
+  (:'supH2', :'orgA', 'Holes Closing Co',      null),
+  (:'supH3', :'orgA', 'Holes Draft Co',        null),
+  (:'supH4', :'orgA', 'Holes Before Rename Co', null),
+  (:'supZ2', :'orgZ', 'Island Due Co',         null),
+  (:'supZ3', :'orgZ', 'Island Finish Co',      null),
+  (:'supW1', :'orgW', 'Western Soon Co',       null),
+  (:'supW3', :'orgW', 'Western Finish Co',     null);
+-- The next review date a finish answers, or the refusal's word.
+create function pg_temp.next_or_err(p text) returns text language sql as $f$
+  select case when p like 'ERR %' then split_part(p, ' hint=', 1) else p::jsonb ->> 'next_review_on' end
+$f$;
+
+select is(
+  array[public._supplier_risk_text_ok(repeat(chr(233), 20), 1, 20), public._supplier_risk_text_ok(repeat(chr(233), 21), 1, 20),
+        public._supplier_risk_text_ok(repeat(chr(66560), 20), 1, 20)],
+  array[true, false, true],
+  '0481/102: the text rule counts characters, not bytes (a two-byte letter, and a four-byte one outside the basic plane)');
+
+select pg_temp.final_row(:'revH1', :'orgA', :'supH1', 1, true, current_date + 30, now() - interval '1 year');
+select is(
+  array[pg_temp.try(format($$select pg_temp.final_row(gen_random_uuid(), %L, %L, 1, false, current_date + 30, now())$$, :'orgA', :'supH1')),
+        pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version,
+          data_level, answers, reviewer_name) values (%L, %L, repeat('n', 301), 2, 'staff', '{}', 'X')$$, :'orgA', :'supH1')),
+        pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version,
+          data_level, answers, reviewer_name) values (%L, %L, repeat('n', 300), 2, 'staff', '{}', repeat('r', 201))$$, :'orgA', :'supH1')),
+        pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version,
+          data_level, answers, reviewer_name) values (%L, %L, repeat('n', 300), 2, 'staff', '{}', repeat('r', 200))$$, :'orgA', :'supH1'))],
+  array['23505:supplier_risk_reviews_version_key', '23514:supplier_risk_reviews_supplier_name',
+        '23514:supplier_risk_reviews_reviewer_name', 'ok'],
+  '0481/103: the reviews table refuses a version twice for one supplier, a supplier name over 300 characters and a reviewer name over 200');
+select is(
+  array[pg_temp.try(format($$insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding, action)
+          values (%L, %L, 'hosting_known', 'no', 'low', 'F', 'A'), (%L, %L, 'hosting_known', 'not_shown', 'low', 'F', 'A')$$,
+          :'orgA', :'revH1', :'orgA', :'revH1')),
+        pg_temp.try(format($$insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding, action,
+          owner_user_id) values (%L, %L, 'hosting_known', 'no', 'low', 'F', 'A', %L)$$, :'orgA', :'revH1', :'adminA')),
+        pg_temp.try(format($$insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding, action)
+          values (%L, %L, 'hosting_known', 'no', 'low', repeat('f', 501), 'A')$$, :'orgA', :'revH1')),
+        pg_temp.try(format($$insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding, action)
+          values (%L, %L, 'hosting_known', 'no', 'low', 'F', repeat('a', 1001))$$, :'orgA', :'revH1')),
+        pg_temp.try(format($$insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding, action,
+          status) values (%L, %L, 'hosting_known', 'no', 'low', 'F', 'A', 'closed')$$, :'orgA', :'revH1')),
+        pg_temp.try(format($$insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding, action,
+          owner_user_id, owner_name) values (%L, %L, 'hosting_known', 'no', 'low', repeat('f', 500), repeat('a', 1000), %L, 'Made-up Admin A')$$,
+          :'orgA', :'revH1', :'adminA'))],
+  array['23505:supplier_risk_items_one_per_question', '23514:supplier_risk_items_owner_named', '23514:supplier_risk_items_finding',
+        '23514:supplier_risk_items_action', '23514:supplier_risk_items_status', 'ok'],
+  '0481/104: the items table refuses a second item for one question, an owner with no name, a finding over 500 characters, an action over 1000 and a fifth status');
+update public.supplier_risk_reviews set reminded_30_at = now() where id = :'revH1';
+select is(
+  array[pg_temp.try(format($$update public.supplier_risk_reviews set reminded_30_at = now() + interval '1 hour' where id = %L$$, :'revH1')),
+        pg_temp.try(format($$update public.supplier_risk_reviews set reminded_30_at = null where id = %L$$, :'revH1'))],
+  array['55000:supplier_risk_final_is_kept', '55000:supplier_risk_final_is_kept'],
+  '0481/105: the 30-day stamp too is set once and never moved or cleared');
+
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+  :'orgA', :'supH2', pg_temp.answers('staff', '{"insurance": "no"}'), pg_temp.items('staff', '{"insurance": "no"}'))) as fin_h2 \gset
+select i.id as item_h2 from public.supplier_risk_items i join public.supplier_risk_reviews r on r.id = i.review_id
+ where r.supplier_id = :'supH2' and r.is_current \gset
+update public.supplier_risk_items set status = 'done', closed_at = now() - interval '1 day' where id = :'item_h2';
+select is(
+  (select (x.j ->> 'status') || ':' || ((x.j ->> 'closed_at')::timestamptz = now() - interval '1 day')::text
+     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', null, null, null)::text$$,
+                                                    :'orgA', :'item_h2'))::jsonb as j) x),
+  'accepted:true',
+  '0481/106: an item closed and closed again (done, then accepted) keeps the time it was first closed');
+
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supH3')) as draft_h3 \gset
+select is(
+  pg_temp.as_user(:'adminB', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgB', :'supH3')),
+  'false',
+  '0481/107: an admin of B, in B, cannot discard the draft of A''s supplier (there is none in B)');
+select is(
+  (select count(*)::int from public.supplier_risk_reviews where supplier_id = :'supH3' and status = 'draft'),
+  1,
+  '0481/108: and A''s draft is still there');
+select is(
+  pg_temp.as_user(:'adminB', format($$select count(*)::text from public.supplier_risk_items_for_organization(%L, false) i where i.supplier_id = any (%L::uuid[])$$,
+    :'orgB', (select array_agg(s.id) from public.suppliers s where s.organization_id = :'orgA'))),
+  '0',
+  '0481/109: the items list of B has none of A''s items (A has items on its current reviews)');
+
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supH4')) as draft_h4 \gset
+update public.suppliers set name = 'Holes Renamed Co' where id = :'supH4';
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supH4', pg_temp.answers('staff'))) as fin_h4 \gset
+select is(
+  (select string_agg(r.version || ':' || r.status || ':' || r.supplier_name, ',') from public.supplier_risk_reviews r where r.supplier_id = :'supH4'),
+  '1:final:Holes Renamed Co',
+  '0481/110: a draft finished after its supplier was renamed becomes the final under the new name');
+
+select is(
+  array[pg_temp.next_or_err(pg_temp.as_user(:'ownerZ', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, %L::date)::text$$,
+          :'orgZ', :'supZ3', pg_temp.answers('staff'), pg_temp.today(:'orgZ')))),
+        pg_temp.next_or_err(pg_temp.as_user(:'ownerZ', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, %L::date)::text$$,
+          :'orgZ', :'supZ3', pg_temp.answers('staff'), pg_temp.today(:'orgZ') + 1))),
+        pg_temp.next_or_err(pg_temp.as_user(:'ownerW', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, %L::date)::text$$,
+          :'orgW', :'supW3', pg_temp.answers('staff'), pg_temp.today(:'orgW')))),
+        pg_temp.next_or_err(pg_temp.as_user(:'ownerW', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, %L::date)::text$$,
+          :'orgW', :'supW3', pg_temp.answers('staff'), pg_temp.today(:'orgW') + 1)))],
+  array['ERR 22023 bad_next_review_on', (pg_temp.today(:'orgZ') + 1)::text, 'ERR 22023 bad_next_review_on', (pg_temp.today(:'orgW') + 1)::text],
+  '0481/111: the next review must be after the organization''s own today (Z fourteen hours ahead of UTC, W twelve behind)');
+
+select pg_temp.final_row('a0481000-0000-0000-0000-000000000241', :'orgZ', :'supZ2', 1, true, pg_temp.today(:'orgZ'), now() - interval '1 year');
+select pg_temp.final_row('a0481000-0000-0000-0000-000000000242', :'orgW', :'supW1', 1, true, pg_temp.today(:'orgW') + 1, now() - interval '1 year');
+select is(
+  pg_temp.run_as('service_role', null, format($$select string_agg(d.supplier_name || ':' || d.kind || ':'
+      || (d.org_today = case d.organization_id when %L::uuid then %L::date else %L::date end)::text, ',' order by d.supplier_name)
+     from public.supplier_risk_reminders_due(500) d where d.supplier_id in (%L, %L)$$,
+    :'orgZ', pg_temp.today(:'orgZ'), pg_temp.today(:'orgW'), :'supZ2', :'supW1')),
+  'Island Due Co:due:true,Western Soon Co:due_soon:true',
+  '0481/112: the reminder read takes each organization''s own today: due on Z''s today, due soon on the day after W''s');
+select is(
+  array[pg_temp.as_user(:'ownerZ', format($$select g.review_due from public.supplier_risk_register(%L) g where g.supplier_id = %L$$, :'orgZ', :'supZ2')),
+        pg_temp.as_user(:'ownerW', format($$select g.review_due from public.supplier_risk_register(%L) g where g.supplier_id = %L$$, :'orgW', :'supW1'))],
+  array['due_today', 'due_soon'],
+  '0481/113: the register takes the organization''s own today too');
+select is(
+  array[pg_temp.run_as('service_role', null, $$select public.supplier_risk_reminder_claim('a0481000-0000-0000-0000-000000000242', 'due')::text$$),
+        pg_temp.run_as('service_role', null, $$select public.supplier_risk_reminder_claim('a0481000-0000-0000-0000-000000000241', 'due')::text$$),
+        pg_temp.run_as('service_role', null, $$select public.supplier_risk_reminder_claim('a0481000-0000-0000-0000-000000000242', 'due_soon')::text$$)],
+  array['false', 'true', 'true'],
+  '0481/114: and so does the claim: not yet due the day before W''s date, due on Z''s');
+select is(
+  (select string_agg(p.proname || ':' || (strpos(p.prosrc, 'pg_advisory_xact_lock(4810001, pg_catalog.hashtext(') > 0
+            and strpos(p.prosrc, 'pg_advisory_xact_lock(4810001')
+                < coalesce(nullif(strpos(p.prosrc, 'for update'), 0), nullif(strpos(p.prosrc, 'from public.suppliers s'), 0),
+                           nullif(strpos(p.prosrc, 'delete from'), 0)))::text, ',' order by p.proname)
+     from pg_proc p
+    where p.oid in ('public.supplier_risk_draft_save(uuid, uuid, text, jsonb)'::regprocedure,
+                    'public.supplier_risk_finalise(uuid, uuid, text, jsonb, date, text, text, jsonb)'::regprocedure,
+                    'public.supplier_risk_draft_discard(uuid, uuid)'::regprocedure,
+                    'public.supplier_risk_item_update(uuid, uuid, text, uuid, date, text)'::regprocedure)),
+  'supplier_risk_draft_discard:true,supplier_risk_draft_save:true,supplier_risk_finalise:true,supplier_risk_item_update:true',
+  '0481/115: each of the four writes takes the supplier''s lock before it reads the supplier or the item for writing (the two-session proof is the race script)');
 
 select * from finish();
 rollback;
