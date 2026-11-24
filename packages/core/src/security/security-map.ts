@@ -29,7 +29,7 @@ import {
   SECURITY_EVENT_SOURCES,
   isSecurityEventCategory,
   isSecurityEventSource,
-  securityEventCategoryLabel,
+  securityConsoleCategoryLabel,
   securityEventReasonLabel,
   SECURITY_EVENT_UNKNOWN_REASON_LABEL,
   type SecurityEventCategory,
@@ -1967,7 +1967,7 @@ export function securityMapLegend(
     const row = whole?.whole.legend.find(([index]) => index === categoryIndex(category)) ?? null;
     return {
       category,
-      label: securityEventCategoryLabel(category),
+      label: securityConsoleCategoryLabel(category, 'kind'),
       blocked: row
         ? `${securityMapCountWords(row[1], securityMapIsFloor(whole, `totals.${category}.blocked`))} blocked`
         : SECURITY_MAP_COULD_NOT_CHECK,
@@ -2396,7 +2396,7 @@ export function securityMapFeedWords(
     time: securityMapZonedClock(minute, zone),
     at: Date.parse(minute),
     category,
-    categoryLabel: securityEventCategoryLabel(category),
+    categoryLabel: securityConsoleCategoryLabel(category),
     outcome,
     outcomeLabel: securityMapOutcomeWords(outcome),
     reason,
@@ -2507,7 +2507,7 @@ export function securityMapTableRows(whole: SecurityMapWholeRead): SecurityMapTa
         key,
         country: row.country,
         category,
-        categoryLabel: securityEventCategoryLabel(category),
+        categoryLabel: securityConsoleCategoryLabel(category),
         blocked: securityMapCountWords(
           row.blocked,
           securityMapIsFloor(whole, `totals.${category}.blocked`),

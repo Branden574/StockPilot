@@ -2060,7 +2060,7 @@ describe("new events past the totals (the coordinator's change, 2026-11-24)", ()
     expect(scopesOf(spy)).toEqual(['whole', 'recent', 'recent', 'whole']);
   });
 
-  it('beside a feed newer than the totals, the page never says "nothing": it says they are being counted again, in the status region, and the counters keep their numbers', async () => {
+  it('beside a feed newer than the totals, the page never says "nothing": it says they are being counted again, under the stage too (not a live region), and the counters keep their numbers', async () => {
     const nothing = (scope: 'whole' | 'recent') =>
       clockAnswer(scope, {
         totals: zeros(),
@@ -2107,7 +2107,10 @@ describe("new events past the totals (the coordinator's change, 2026-11-24)", ()
     expect(document.body.textContent).not.toContain('Nothing was blocked or flagged');
     const recount = screen.getByTestId('security-map-recounting');
     expect(recount.textContent).toBe(SECURITY_MAP_WORDS.recounting);
-    expect(screen.getByRole('status').contains(recount)).toBe(true);
+    // Not announced from here: the line beside the counters is the live one (lab walk 3, F2).
+    expect(
+      recount.closest('[aria-live], [role="status"], [role="alert"], [role="log"]'),
+    ).toBeNull();
     expect(screen.getByTestId('security-map-table-empty').textContent).toBe(
       SECURITY_MAP_WORDS.tableRecounting,
     );
@@ -2138,6 +2141,13 @@ describe("new events past the totals (the coordinator's change, 2026-11-24)", ()
     expect(line.textContent).toBe(SECURITY_MAP_WORDS.countersRecounting);
     expect(screen.getByTestId('security-map-recounting').textContent).toBe(
       SECURITY_MAP_WORDS.recounting,
+    );
+    // Exactly one live region carries the news, so a screen reader hears it once: this line.
+    const regions = [
+      ...document.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]'),
+    ];
+    expect(regions.filter((r) => /counted again|Counting again/.test(r.textContent ?? ''))).toEqual(
+      [line],
     );
     // The early whole read lands and counts it: empty again, and still there.
     await advance(15_000);

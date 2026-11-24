@@ -262,8 +262,8 @@ describe('one organization: each rule at its boundary', () => {
     // A flagged event did happen: worth a look, never StockPilot's.
     expect(flagged.severity).toBe('low');
     expect(flagged.fixedBy).toBe('you');
-    // The category's words, never its code's (lab walk 3, F1).
-    expect(flagged.headline).toBe('Sign-in alert: 500 flagged this week');
+    // The console's words for the kind, never "Phishing" (lab walk 3, F1).
+    expect(flagged.headline).toBe('Sign-in alerts: 500 flagged this week');
     // The good-shape line is about blocked activity only.
     expect(b.goodShape).toContain('Blocked activity is steady or down.');
     expect(b.status).toBe('worth_a_look');
@@ -539,7 +539,7 @@ describe('one organization: the category table', () => {
       },
       {
         category: 'phishing',
-        label: 'Sign-in alert',
+        label: 'Sign-in alerts',
         blockedThisWeek: 0,
         blockedLastWeek: 0,
         blockedChange: 'same',

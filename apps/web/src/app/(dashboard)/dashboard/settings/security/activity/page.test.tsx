@@ -45,14 +45,13 @@ vi.mock('next/link', async () => {
 });
 vi.mock('@/components/admin/audit-time', async () => {
   const React = await import('react');
-  return {
-    AuditTime: ({ iso }: { iso: string }) => React.createElement('time', { dateTime: iso }, iso),
-  };
+  return { AuditTime: ({ iso }: { iso: string }) => React.createElement('time', { dateTime: iso }, iso) };
 });
 vi.mock('@/server/services/context', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/server/services/context')>();
-  const { OrganizationRowUnavailableError: Unavailable } =
-    await import('@/lib/auth/organization-row-unavailable');
+  const { OrganizationRowUnavailableError: Unavailable } = await import(
+    '@/lib/auth/organization-row-unavailable'
+  );
   return {
     ServiceError: real.ServiceError,
     // The real gate error, and its real refusal for a policy that was not read.
@@ -164,15 +163,12 @@ beforeEach(() => {
 });
 
 describe('who may see it', () => {
-  it.each(['manager', 'staff', 'viewer'])(
-    'a %s is sent to Settings before anything is read',
-    async (role) => {
-      h.role = role;
-      await expect(BlockedActivityPage()).rejects.toThrow('REDIRECT /dashboard/settings');
-      expect(h.constructed).not.toHaveBeenCalled();
-      expect(h.activity).not.toHaveBeenCalled();
-    },
-  );
+  it.each(['manager', 'staff', 'viewer'])('a %s is sent to Settings before anything is read', async (role) => {
+    h.role = role;
+    await expect(BlockedActivityPage()).rejects.toThrow('REDIRECT /dashboard/settings');
+    expect(h.constructed).not.toHaveBeenCalled();
+    expect(h.activity).not.toHaveBeenCalled();
+  });
 
   describe('the authenticator gate is asked before the role, as the service asks it', () => {
     it.each(['manager', 'staff', 'admin', 'owner'])(
@@ -181,9 +177,7 @@ describe('who may see it', () => {
         h.role = role;
         h.mfaRequired = true;
         h.mfaSatisfied = false;
-        await expect(BlockedActivityPage()).rejects.toThrow(
-          /^REDIRECT \/dashboard\/settings\/security\?enroll=1$/,
-        );
+        await expect(BlockedActivityPage()).rejects.toThrow(/^REDIRECT \/dashboard\/settings\/security\?enroll=1$/);
         expect(h.constructed).not.toHaveBeenCalled();
         expect(h.activity).not.toHaveBeenCalled();
       },
@@ -269,44 +263,15 @@ describe('what an owner or admin sees', () => {
     expect(within(totals).getByText('1,234')).toBeTruthy();
     expect(within(totals).getByText('Exploit attempts')).toBeTruthy();
     expect(within(totals).queryByText('Automated traffic')).toBeNull();
-    expect(within(totals).queryByText('Sign-in alert')).toBeNull();
     expect(within(totals).queryByText('Phishing')).toBeNull();
 
     const rows = screen.getAllByRole('row').slice(1);
-    const cells = rows.map((r) =>
-      within(r)
-        .getAllByRole('cell')
-        .map((c) => c.textContent),
-    );
+    const cells = rows.map((r) => within(r).getAllByRole('cell').map((c) => c.textContent));
     expect(cells).toEqual([
-      [
-        '2026-11-20T10:15:42Z',
-        'Wrong password at sign-inPassword guessing · Blocked',
-        'Utrecht, NL',
-        'Website',
-        '3',
-      ],
-      [
-        '2026-11-20T10:14:10Z',
-        'Wrong authenticator codePassword guessing · Blocked',
-        'Unknown place',
-        'Mobile app',
-        '1',
-      ],
-      [
-        '2026-11-20T10:13:59Z',
-        'More events than could be listedPassword guessing · Blocked',
-        '—',
-        'Website',
-        '4,100',
-      ],
-      [
-        '2026-11-20T10:12:01Z',
-        'Other blocked activityPassword guessing · Blocked',
-        'CA',
-        'API',
-        '2',
-      ],
+      ['2026-11-20T10:15:42Z', 'Wrong password at sign-inPassword guessing · Blocked', 'Utrecht, NL', 'Website', '3'],
+      ['2026-11-20T10:14:10Z', 'Wrong authenticator codePassword guessing · Blocked', 'Unknown place', 'Mobile app', '1'],
+      ['2026-11-20T10:13:59Z', 'More events than could be listedPassword guessing · Blocked', '—', 'Website', '4,100'],
+      ['2026-11-20T10:12:01Z', 'Other blocked activityPassword guessing · Blocked', 'CA', 'API', '2'],
     ]);
   });
 
@@ -329,5 +294,29 @@ describe('what an owner or admin sees', () => {
     expect(screen.getByText('Nothing was blocked in the last 7 days.')).toBeTruthy();
     expect(screen.getByText('No blocked activity yet.')).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+
+  // The platform console says "Sign-in alert" for this category (lab walk 3, F1); an
+  // organization's own page keeps the shared words, a separate decision: pinned, so
+  // the two cannot drift by accident.
+  it('the category whose code is phishing is still "Phishing" here, in the totals and the table', async () => {
+    h.role = 'admin';
+    h.activity.mockResolvedValueOnce({
+      totals: [{ category: 'phishing', events: 3 }],
+      rows: [
+        {
+          ...ACTIVITY.rows[0]!,
+          id: 'r9',
+          category: 'phishing',
+          outcome: 'flagged',
+          reason: 'sign_in_new_country',
+        },
+      ],
+    });
+    await renderPage();
+    const totals = screen.getByRole('region', { name: 'Last 7 days' });
+    expect(within(totals).getByText('Phishing')).toBeTruthy();
+    expect(screen.getByText('Phishing · Flagged')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('Sign-in alert');
   });
 });

@@ -31,7 +31,7 @@ import {
 } from '@/server/services/platform/security-events';
 
 import {
-  securityEventCategoryLabel,
+  securityConsoleCategoryLabel,
   securityEventOutcomeLabel,
   securityEventPlaceLabel,
   securityEventReasonLabel,
@@ -228,7 +228,7 @@ async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | nul
                   <TableCell>
                     <span className="text-foreground">{securityEventReasonLabel(r.reason)}</span>
                     <span className="text-muted-foreground block text-[12px]">
-                      {securityEventCategoryLabel(r.category)} ·{' '}
+                      {securityConsoleCategoryLabel(r.category)} ·{' '}
                       {securityEventOutcomeLabel(r.outcome)}
                     </span>
                   </TableCell>
@@ -270,7 +270,7 @@ async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | nul
                           what: securityEventReasonLabel(r.reason),
                           // What this row shows already, and nothing else.
                           context: {
-                            kind: securityEventCategoryLabel(r.category),
+                            kind: securityConsoleCategoryLabel(r.category),
                             place,
                             time: Number.isFinite(Date.parse(r.lastSeenAt))
                               ? formatMomentInZone(

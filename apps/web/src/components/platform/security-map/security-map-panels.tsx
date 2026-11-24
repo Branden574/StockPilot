@@ -12,7 +12,7 @@ import {
   SECURITY_MAP_WORDS,
   SECURITY_RESPONSE_GENERAL_CARD,
   SECURITY_RESPONSE_SIGN_IN_ALERT_CARD,
-  securityEventCategoryLabel,
+  securityConsoleCategoryLabel,
   securityEventReasonLabel,
   securityEventSourceLabel,
   securityResponseCardIdFor,
@@ -947,7 +947,7 @@ export function SecurityMapFlaggedList({
                           // The kind only when the map shows it: a hidden kind is never named.
                           context: {
                             kind:
-                              w.category === null ? null : securityEventCategoryLabel(w.category),
+                              w.category === null ? null : securityConsoleCategoryLabel(w.category),
                             place: placeOf(w),
                             time: w.time,
                             timeUtc: exactUtcOf(w.at),

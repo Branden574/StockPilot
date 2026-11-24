@@ -344,7 +344,8 @@ export function SecurityMapClient({
           {/* Beside the counters too, when they are behind the feed (lab walk 3, F2):
               the same condition as the line under the stage, which stays. Always
               there and its height kept (two lines on a phone), so nothing moves
-              when it fills; polite. */}
+              when it fills. The one live region for this news (polite); the line
+              under the stage is not one. */}
           <p
             aria-live="polite"
             data-testid="security-map-counters-recounting"
@@ -439,12 +440,17 @@ export function SecurityMapClient({
                     />
                   </p>
                 ) : null}
-                {behind ? (
-                  <p data-testid="security-map-recounting" className="text-foreground mb-1">
-                    {SECURITY_MAP_WORDS.recounting}
-                  </p>
-                ) : null}
               </div>
+              {/* Not a live region (lab walk 3, F2): the line beside the counters is
+                  the one that announces this, so a screen reader hears it once. */}
+              {behind ? (
+                <p
+                  data-testid="security-map-recounting"
+                  className="text-foreground mb-1 lg:col-span-2"
+                >
+                  {SECURITY_MAP_WORDS.recounting}
+                </p>
+              ) : null}
               <div className="flex min-w-0 flex-col gap-1">
                 <p data-testid="security-map-mode">
                   <ZonedWords at={stepAt} text={modeWords} />
