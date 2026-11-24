@@ -68,11 +68,14 @@ vi.mock('@/server/services/lib/exception-sync-schedule', () => ({
 vi.mock('@/server/security/events', () => ({
   recordSecurityEvent: vi.fn(async () => undefined),
   flushSecurityEvents: vi.fn(async () => undefined),
+  // Read by the samples recorder (its delay and the events' due time).
+  SECURITY_EVENT_FLUSH_DELAY_MS: 2_000,
+  securityEventFlushDueAt: vi.fn(() => null),
 }));
 
 // The same for the samples of what scanners asked for (part 5, stage 3):
-// server/security/event-samples.ts buffers them and flushes ten seconds
-// later. server/security/event-samples.test.ts tests the real one through
+// server/security/event-samples.ts buffers them and flushes two seconds
+// later, never after the security events' flush. server/security/event-samples.test.ts tests the real one through
 // vi.importActual.
 vi.mock('@/server/security/event-samples', () => ({
   recordSecurityEventSample: vi.fn(() => undefined),

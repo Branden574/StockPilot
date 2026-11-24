@@ -11,7 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * timer and counters (review S1); never throws and is never waited on; at
  * most 50 different samples wait, merged by hour, reason, method, target,
  * query string and country with their counts added (at most 999,999); a full
- * buffer drops; one call about ten seconds after the first sample; 55P03 and
+ * buffer drops; one call two seconds after the first sample (the security
+ * events' delay), never after the events' flush armed when a sample arrives
+ * (review 3B S5); 55P03 and
  * a missing writer drop the batch; after every call one count line of
  * numbers (review S7), at warning level when the writer skipped anything.
  * Never an address, a city, a header value or any text of a sample in a log
@@ -27,11 +29,22 @@ const h = vi.hoisted(() => ({
   keepAlive: vi.fn(),
   signals: [] as AbortSignal[],
   env: { CRON_SECRET: 'test-cron-secret' } as { CRON_SECRET?: string },
+  /** When the security events' flush is due, as securityEventFlushDueAt answers it. */
+  eventsDue: null as number | null,
 }));
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: h.createAdminClient }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: h.reportError }));
 vi.mock('@/server/services/lib/defer', () => ({ keepAlive: h.keepAlive, defer: vi.fn() }));
+// The events recorder's real delay; when its flush is due is set by each test.
+vi.mock('./events', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./events')>();
+  return {
+    SECURITY_EVENT_FLUSH_DELAY_MS: real.SECURITY_EVENT_FLUSH_DELAY_MS,
+    FLUSH_CALL_TIMEOUT_MS: real.FLUSH_CALL_TIMEOUT_MS,
+    securityEventFlushDueAt: () => h.eventsDue,
+  };
+});
 vi.mock('@/lib/env', () => ({
   get env() {
     return h.env;
@@ -99,6 +112,7 @@ beforeEach(async () => {
   h.signals = [];
   h.reportError.mockClear();
   h.keepAlive.mockReset();
+  h.eventsDue = null;
   info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
   warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   samples = await vi.importActual<Samples>('./event-samples');
@@ -267,10 +281,16 @@ describe('the buffer', () => {
     ]);
   });
 
-  it('its state is its own: its own registered symbol, nothing of the security events recorder', () => {
+  it('its state is its own: its own registered symbol; of the security events recorder only its delay and when its flush is due', () => {
     const src = readFileSync(path.join(__dirname, 'event-samples.ts'), 'utf8');
     expect(src).toMatch(/Symbol\.for\('stockpilot\.security-event-samples\.recorder-state\.v1'\)/);
-    expect(src).not.toMatch(/from '\.\/events'|from '@\/server\/security\/events'/);
+    const fromEvents = [...src.matchAll(/import\s*\{([^}]*)\}\s*from\s*'(?:\.\/events|@\/server\/security\/events)'/g)];
+    expect(fromEvents).toHaveLength(1);
+    expect(fromEvents[0]![1]!.split(',').map((n) => n.trim()).filter(Boolean).sort()).toEqual([
+      'SECURITY_EVENT_FLUSH_DELAY_MS',
+      'securityEventFlushDueAt',
+    ]);
+    expect(src).not.toMatch(/import\s*\*\s*as\s+\w+\s+from\s*'(?:\.\/events|@\/server\/security\/events)'/);
     expect(src).not.toMatch(/stockpilot\.security-events\.recorder-state/);
     expect(src.trimStart().startsWith("import 'server-only';")).toBe(true);
   });
@@ -496,5 +516,65 @@ describe('two copies of the recorder in one server instance (a build can bundle 
     expect(h.rpc).toHaveBeenCalledTimes(1);
     expect(sent()).toHaveLength(2);
     expect(first.__pendingSecurityEventSamplesForTests()).toEqual([]);
+  });
+});
+
+describe('never held longer than the security event (review 3B S5)', () => {
+  it("the delay and the call's time limit are the security events' own: 2 s and 3 s", async () => {
+    const events = await import('./events');
+    expect(samples.SAMPLE_FLUSH_DELAY_MS).toBe(events.SECURITY_EVENT_FLUSH_DELAY_MS);
+    expect(samples.SAMPLE_FLUSH_DELAY_MS).toBe(2_000);
+    expect(samples.SAMPLE_FLUSH_CALL_TIMEOUT_MS).toBe(events.FLUSH_CALL_TIMEOUT_MS);
+  });
+
+  it("a sample arriving when the events' flush is due sooner flushes with it", async () => {
+    h.eventsDue = Date.now() + 700;
+    samples.recordSecurityEventSample(probe(), from());
+    await vi.advanceTimersByTimeAsync(699);
+    expect(h.rpc).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("an armed timer is brought forward when the events' flush becomes due sooner (a full slice), never back", async () => {
+    samples.recordSecurityEventSample(probe({ target: '/first/.env' }), from());
+    await vi.advanceTimersByTimeAsync(100);
+    h.eventsDue = Date.now() + 50;
+    samples.recordSecurityEventSample(probe({ target: '/second/.env' }), from());
+    await vi.advanceTimersByTimeAsync(49);
+    expect(h.rpc).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(sent().map((e) => e.target)).toEqual(['/first/.env', '/second/.env']);
+    // The one kept-alive promise of both samples is settled with that flush.
+    await expect(h.keepAlive.mock.calls[0]![0]).resolves.toBeUndefined();
+
+    // An events flush due later never holds an armed sample timer back.
+    samples.recordSecurityEventSample(probe({ target: '/third/.env' }), from());
+    h.eventsDue = Date.now() + 60_000;
+    samples.recordSecurityEventSample(probe({ target: '/fourth/.env' }), from());
+    await vi.advanceTimersByTimeAsync(samples.SAMPLE_FLUSH_DELAY_MS);
+    expect(h.rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it("never later than its own delay, and at once when the events' flush is already due", async () => {
+    h.eventsDue = Date.now() + 60_000;
+    samples.recordSecurityEventSample(probe(), from());
+    await vi.advanceTimersByTimeAsync(samples.SAMPLE_FLUSH_DELAY_MS);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+
+    h.eventsDue = Date.now() - 5;
+    samples.recordSecurityEventSample(probe({ target: '/again/.env' }), from());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.rpc).toHaveBeenCalledTimes(2);
+  });
+
+  it('a full buffer still brings the flush forward: a dropped sample is held no longer either', async () => {
+    for (let i = 0; i < 50; i++) samples.recordSecurityEventSample(probe({ target: `/b${i}/.env` }), from());
+    h.eventsDue = Date.now() + 10;
+    samples.recordSecurityEventSample(probe({ target: '/one-too-many/.env' }), from());
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(sent()).toHaveLength(50);
   });
 });

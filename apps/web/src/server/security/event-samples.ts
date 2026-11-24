@@ -17,15 +17,28 @@ import {
   type SecurityProbeKind,
 } from '@stockpilot/core';
 
+import { SECURITY_EVENT_FLUSH_DELAY_MS, securityEventFlushDueAt } from './events';
+
 /**
  * THE RECORDER of what scanners asked for (public.security_event_samples,
  * migration 0479; security tools part 5, stage 3): the scrubbed path, method
  * and query string of a request on a scanner path, with its country, by UTC
  * hour, with a count.
  *
- * ITS OWN MODULE, BUFFER, TIMER AND COUNTERS (review S1). Nothing here is
+ * ITS OWN MODULE, BUFFER, TIMER AND COUNTERS (review S1). No state is
  * shared with server/security/events.ts: a flood of samples never delays or
  * drops a security event, and the writer takes its own lock.
+ *
+ * NEVER HELD LONGER THAN THE SECURITY EVENT (review 3B S5). The probe route
+ * records the event first, then the sample. The flush delay is the events
+ * recorder's own (SECURITY_EVENT_FLUSH_DELAY_MS, 2 s), and a sample flush
+ * never starts later than the events flush armed when the sample arrives
+ * (securityEventFlushDueAt, read only): an armed sample timer is brought
+ * forward to it. So the two flushes start together, each call has the same
+ * 3 s limit, and a probe request is held at most the delay plus one call,
+ * the same bound its security event alone holds it to. The timer is not the
+ * events' own: that one is re-armed by the events' buffer (a full slice, a
+ * call still out), and a sample that came without an event still needs one.
  *
  * NEVER ON THE CALLER'S PATH. recordSecurityEventSample returns nothing (the
  * route cannot wait on it), never throws, and only adds to this instance's
@@ -69,8 +82,8 @@ import {
  * samples.
  */
 
-/** Delay between the first sample into an empty buffer and its flush (review S1: about one call per instance per 10 s). */
-export const SAMPLE_FLUSH_DELAY_MS = 10_000;
+/** Delay between the first sample into an empty buffer and its flush: the security events' own (review 3B S5). */
+export const SAMPLE_FLUSH_DELAY_MS = SECURITY_EVENT_FLUSH_DELAY_MS;
 /** A flush call still out after this long is aborted and counted as failed. */
 export const SAMPLE_FLUSH_CALL_TIMEOUT_MS = 3_000;
 /** A failed flush is reported at most this often per instance. */
@@ -110,6 +123,8 @@ interface WriterAnswer {
 interface SampleRecorderState {
   waiting: Map<string, PendingSample>;
   flushTimer: ReturnType<typeof setTimeout> | null;
+  /** When the armed timer fires, in ms since 1970; null with no timer. */
+  flushDueAt: number | null;
   settleScheduledFlush: (() => void) | null;
   flushCallOut: boolean;
   flushDelayMs: number;
@@ -135,6 +150,7 @@ const state: SampleRecorderState = ((
 )[SAMPLE_RECORDER_STATE] ??= {
   waiting: new Map(),
   flushTimer: null,
+  flushDueAt: null,
   settleScheduledFlush: null,
   flushCallOut: false,
   flushDelayMs: SAMPLE_FLUSH_DELAY_MS,
@@ -212,24 +228,50 @@ function add(s: PendingSample): void {
     state.waiting.set(key, s);
   } else {
     state.dropped++;
-    return;
   }
   scheduleFlush();
 }
 
-/** The first sample into an empty buffer starts the one timer; its promise is kept alive. */
+/**
+ * The delay of a flush armed now: the recorder's own, or less when the
+ * security events' flush is due sooner (review 3B S5).
+ */
+function alignedDelay(now: number): number {
+  const eventsDue = securityEventFlushDueAt();
+  if (eventsDue === null) return state.flushDelayMs;
+  return Math.min(state.flushDelayMs, Math.max(0, eventsDue - now));
+}
+
+/**
+ * The first sample into an empty buffer starts the one timer; its promise is
+ * kept alive. Every later one brings an armed timer forward to the security
+ * events' flush when that is due sooner, never later.
+ */
 function scheduleFlush(): void {
-  if (state.flushTimer !== null) return;
+  const now = Date.now();
+  const delay = alignedDelay(now);
+  if (state.flushTimer !== null) {
+    if (state.flushDueAt !== null && now + delay < state.flushDueAt) armFlushTimer(delay);
+    return;
+  }
   if (state.settleScheduledFlush === null) {
     const flushed = new Promise<void>((resolve) => {
       state.settleScheduledFlush = resolve;
     });
     keepAlive(flushed);
   }
+  armFlushTimer(delay);
+}
+
+/** Arms the one flush timer, in place of any already armed. */
+function armFlushTimer(delayMs: number): void {
+  if (state.flushTimer !== null) clearTimeout(state.flushTimer);
+  state.flushDueAt = Date.now() + delayMs;
   state.flushTimer = setTimeout(() => {
     state.flushTimer = null;
+    state.flushDueAt = null;
     keepAlive(flushSecurityEventSamples());
-  }, state.flushDelayMs);
+  }, delayMs);
   (state.flushTimer as { unref?: () => void }).unref?.();
 }
 
@@ -249,6 +291,7 @@ export async function flushSecurityEventSamples(): Promise<void> {
   if (state.flushTimer !== null) {
     clearTimeout(state.flushTimer);
     state.flushTimer = null;
+    state.flushDueAt = null;
   }
   if (state.flushCallOut) {
     if (state.waiting.size > 0) scheduleFlush();
@@ -426,6 +469,7 @@ function reportFailure(code: string | null, rows: number): void {
 export function __resetSecurityEventSamplesForTests(): void {
   if (state.flushTimer !== null) clearTimeout(state.flushTimer);
   state.flushTimer = null;
+  state.flushDueAt = null;
   settleScheduled();
   state.flushCallOut = false;
   state.waiting = new Map();

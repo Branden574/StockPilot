@@ -427,6 +427,16 @@ function armFlushTimer(delayMs: number): void {
 }
 
 /**
+ * When this instance's armed flush fires, in ms since 1970; null when none is
+ * armed. Read only, by the samples recorder (server/security/event-samples.ts,
+ * review 3B S5): its flush never starts later than this one, so a probe
+ * request is held no longer than its security event holds it.
+ */
+export function securityEventFlushDueAt(): number | null {
+  return state.flushTimer === null ? null : state.flushDueAt;
+}
+
+/**
  * A slice or budget is full: bring the flush forward. Not while a call is out
  * (the flush that owns it brings the next one forward when it ends), and no
  * sooner than EARLY_FLUSH_MIN_GAP_MS after the last flush began. Never later
