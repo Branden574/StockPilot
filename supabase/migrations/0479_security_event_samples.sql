@@ -22,7 +22,10 @@
 --      header, a body or a source hash. Its text columns refuse, as a second
 --      lock behind the app's scrubber, anything that is not printable ASCII
 --      (so every control, invisible, bidirectional and non-ASCII character),
---      an '@', a run of six digits and an id.
+--      an '@' (or one percent-encoded, once or more), a run of six digits, an
+--      IPv4 address, a run of 24 or more characters of the base64 and hex
+--      alphabet (the scrubber's own long-value rule) and an id (with its
+--      dashes, or 32 hex characters without them).
 --      Its category, reason and source are a documented subset of 0472's:
 --      category exploit, source web, and a reason that is one of the six
 --      probe kinds. The probe route is the one place that samples, and a
@@ -63,11 +66,12 @@
 --   - RLS is on with NO policy, and anon and authenticated have no privilege
 --     on the table or on any of the three functions: no member and no
 --     signed-out caller reads or writes a row, directly or through them.
---   - service_role may SELECT the table (the platform console's admin
---     client) and EXECUTE the three functions. INSERT, UPDATE and DELETE are
---     revoked from it: no API role writes a row except through
---     record_security_event_samples, or removes one except through
---     purge_security_event_samples.
+--   - service_role may EXECUTE the three functions and nothing else: no
+--     API role reads a row except through platform_security_event_samples
+--     (bounded), writes one except through record_security_event_samples, or
+--     removes one except through purge_security_event_samples. Nothing needs
+--     the table directly: no view, rule, trigger, foreign key or publication
+--     names it, and the app calls the three functions.
 --   - The grant is the gate (0477, 0478): no body here names auth.uid,
 --     has_org_role, has_permission or is_org_member, so if EXECUTE ever
 --     reached authenticated, security_invariants INV-25 would name the
@@ -177,16 +181,26 @@ create table public.security_event_samples (
     check (method is null or method in ('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS')),
   -- The scrubber's promises, checked again: 1 to 200 characters, every one
   -- printable ASCII (a space to a tilde: no control, invisible,
-  -- bidirectional or other non-ASCII character), no '@' (so no email
-  -- address), no run of six digits, no id; and the shape of a path or one
-  -- of the two fixed words. record_security_event_samples applies the same
-  -- rule before it writes.
+  -- bidirectional or other non-ASCII character); no '@', and none
+  -- percent-encoded once or more ('%40', '%2540', ...), so no email address;
+  -- no run of six digits; no IPv4 address (four dot-separated groups of one
+  -- to three digits); no run of 24 or more characters of the base64 and hex
+  -- alphabet (letters, digits, + / _ = -: the scrubber's long-value rule,
+  -- so no token, key or long id); no id, with its dashes or as 32 hex
+  -- characters without them; and the shape of a path or one of the two
+  -- fixed words. Every scrubber marker (<email>, <id>, <number>,
+  -- <long value>, <token>, <removed>, <address>) and both fixed words pass.
+  -- record_security_event_samples applies the same rule before it writes.
   constraint security_event_samples_target
     check (char_length(target) between 1 and 200
            and target !~ '[^ -~]'
            and target !~ '@'
+           and target !~ '%(25)*40'
            and target !~ '[0-9]{6}'
+           and target !~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
+           and target !~ '[A-Za-z0-9+/_=-]{24}'
            and target !~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+           and target !~* '[0-9a-f]{32}'
            and (target ~ '^/' or target in ('(unreadable)', '(more than could be listed)'))),
   -- The same promises for the query string, at most 300 characters.
   constraint security_event_samples_sample
@@ -194,8 +208,12 @@ create table public.security_event_samples (
            char_length(sample) between 1 and 300
            and sample !~ '[^ -~]'
            and sample !~ '@'
+           and sample !~ '%(25)*40'
            and sample !~ '[0-9]{6}'
-           and sample !~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')),
+           and sample !~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
+           and sample !~ '[A-Za-z0-9+/_=-]{24}'
+           and sample !~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+           and sample !~* '[0-9a-f]{32}')),
   -- An overflow row only counts: no method, no country, no sample. Every
   -- other row has a method.
   constraint security_event_samples_overflow_row
@@ -214,24 +232,24 @@ create table public.security_event_samples (
 );
 
 comment on table public.security_event_samples is
-  'What scanners asked for: for requests refused as a probe (category exploit, source web, reason one of the six probe kinds), the scrubbed path (target), the method and the scrubbed query string (sample), with a country and a count, by UTC hour. No column for an organization, an account, an address, a header, a body or a source hash. Attacker-chosen text: shown as text only, never as a link or markup. No API role writes a row except through record_security_event_samples(jsonb) (at most 50 new rows a kind and 300 in all an hour, then one overflow row a kind); rows whose hour began more than 90 days ago are removed by purge_security_event_samples(). The platform console reads it through platform_security_event_samples.';
+  'What scanners asked for: for requests refused as a probe (category exploit, source web, reason one of the six probe kinds), the scrubbed path (target), the method and the scrubbed query string (sample), with a country and a count, by UTC hour. No column for an organization, an account, an address, a header, a body or a source hash. Attacker-chosen text: shown as text only, never as a link or markup. No API role reads a row except through platform_security_event_samples (bounded), or writes one except through record_security_event_samples(jsonb) (at most 50 new rows a kind and 300 in all an hour, then one overflow row a kind); rows whose hour began more than 90 days ago are removed by purge_security_event_samples(). The platform console reads it through platform_security_event_samples.';
 comment on column public.security_event_samples.target is
-  'The path asked for, scrubbed by the app (printable ASCII, no @, no run of six digits, no id), 1 to 200 characters: starts with /, or is (unreadable), or (more than could be listed) on an overflow row. Written by whoever sent the request: text only.';
+  'The path asked for, scrubbed by the app (printable ASCII; no @, plain or percent-encoded; no run of six digits; no IPv4 address; no run of 24 base64 or hex characters; no id), 1 to 200 characters: starts with /, or is (unreadable), or (more than could be listed) on an overflow row. Written by whoever sent the request: text only.';
 comment on column public.security_event_samples.sample is
   'The query string asked for, scrubbed by the app under the same rules as target, at most 300 characters; null when there was none. Written by whoever sent the request: text only.';
 
--- RLS on and no policy: no API role but service_role (which bypasses row
--- security) reads a row directly.
+-- RLS on and no policy, and no table privilege for any API role: no API
+-- role reads a row directly (service_role bypasses row security, so the
+-- missing grant is what keeps it out).
 alter table public.security_event_samples enable row level security;
 
 -- Supabase's default privileges have given anon, authenticated and
 -- service_role every privilege on a new public table; the change Supabase
 -- set for 2026-10-30 (0402's note) takes SELECT, INSERT, UPDATE and DELETE
--- out of them. Everything is revoked from all of them here, then SELECT is
--- granted back to service_role by name, so the table ends the same under
--- either set of defaults.
+-- out of them. Everything is revoked from all of them here and nothing is
+-- granted back, so the table ends the same under either set of defaults:
+-- the three functions below are the only way in.
 revoke all on table public.security_event_samples from public, anon, authenticated, service_role;
-grant select on table public.security_event_samples to service_role;
 
 -- ── The writer ───────────────────────────────────────────────────────────────
 create function public.record_security_event_samples(p_samples jsonb)
@@ -334,8 +352,12 @@ begin
     end if;
     if v_target ~ '[^ -~]'
        or v_target ~ '@'
+       or v_target ~ '%(25)*40'
        or v_target ~ '[0-9]{6}'
+       or v_target ~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
+       or v_target ~ '[A-Za-z0-9+/_=-]{24}'
        or v_target ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+       or v_target ~* '[0-9a-f]{32}'
        or not (v_target ~ '^/' or v_target = '(unreadable)') then
       v_skipped := v_skipped + 1;
       continue;
@@ -351,8 +373,12 @@ begin
       end if;
       if v_sample ~ '[^ -~]'
          or v_sample ~ '@'
+         or v_sample ~ '%(25)*40'
          or v_sample ~ '[0-9]{6}'
-         or v_sample ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' then
+         or v_sample ~ '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
+         or v_sample ~ '[A-Za-z0-9+/_=-]{24}'
+         or v_sample ~* '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+         or v_sample ~* '[0-9a-f]{32}' then
         v_skipped := v_skipped + 1;
         continue;
       end if;
@@ -530,6 +556,10 @@ declare
   c_samples       constant integer  := 5;
   -- The target of an overflow row (the writer's word).
   c_overflow      constant text     := '(more than could be listed)';
+  -- No window starts or ends before this: a time before it is not a time
+  -- the record holds, and stepping back from it can never leave the range
+  -- of a timestamp.
+  c_earliest      constant timestamptz := '2000-01-01 00:00:00+00';
   v_now          timestamptz := pg_catalog.now();
   v_this_hour    timestamptz := pg_catalog.date_trunc('hour', pg_catalog.now(), 'UTC');
   v_to           timestamptz;
@@ -552,9 +582,15 @@ begin
   -- of the hour that is running now), from p_from (default: 24 hours before
   -- the end). A window or a filter that cannot be read is answered, not
   -- raised, and the answer holds a fixed word, never the argument.
+  -- A time that is not finite, or before 2000, is not_a_time; the end is
+  -- tested before the default start is counted back from it, so no
+  -- argument takes a time out of range.
   v_to         := coalesce(p_to, v_this_hour + interval '1 hour');
+  if not pg_catalog.isfinite(v_to) or v_to < c_earliest then
+    return pg_catalog.jsonb_build_object('window', null, 'refused', 'not_a_time', 'generated_at', v_now);
+  end if;
   v_asked_from := coalesce(p_from, v_to - c_default_span);
-  if not pg_catalog.isfinite(v_to) or not pg_catalog.isfinite(v_asked_from) then
+  if not pg_catalog.isfinite(v_asked_from) or v_asked_from < c_earliest then
     return pg_catalog.jsonb_build_object('window', null, 'refused', 'not_a_time', 'generated_at', v_now);
   end if;
   if v_to <> pg_catalog.date_trunc('hour', v_to, 'UTC')
@@ -707,7 +743,7 @@ revoke all on function public.platform_security_event_samples(timestamptz, times
 grant execute on function public.platform_security_event_samples(timestamptz, timestamptz, text, text, text, integer) to service_role;
 
 comment on function public.platform_security_event_samples(timestamptz, timestamptz, text, text, text, integer) is
-  'For the platform console: what scanners asked for in a window of whole UTC hours, from p_from (default: 24 hours before the end) up to, not including, p_to (default: the end of the hour running now), at most 7 days; optionally one reason (probe kind), one category and one country. Keys: window (from, to, asked_from), window_shortened, refused (null), generated_at, oldest_hour (the earliest hour on record); targets, at most p_limit (default 10, at most 50): reason, target, events (summed over the window), first_seen_at, last_seen_at, samples (at most 5 pairs of method, sample, events, last_seen_at) and samples_truncated, listed most first and, for equal counts, the newest first; targets_truncated, listed_targets, listed_events; more_than_listed (reason, events, hours: what the overflow rows counted, for every country). A window that holds more than 60,000 rows is read from a later whole hour (window_shortened). A window that is not a time, not on whole hours, ends after the hour running now, is out of order or longer than 7 days, a reason that is not a reason code, a category or a country that is not one, and one hour alone over the ceiling, answer window null and refused with a fixed word (not_a_time, not_whole_hours, to_in_the_future, from_not_before_to, longer_than_7_days, not_a_reason, not_a_category, not_a_country, too_many_rows_in_one_hour); no argument makes it raise. Returns no row id or key. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
+  'For the platform console: what scanners asked for in a window of whole UTC hours, from p_from (default: 24 hours before the end) up to, not including, p_to (default: the end of the hour running now), at most 7 days; optionally one reason (probe kind), one category and one country. Keys: window (from, to, asked_from), window_shortened, refused (null), generated_at, oldest_hour (the earliest hour on record); targets, at most p_limit (default 10, at most 50): reason, target, events (summed over the window), first_seen_at, last_seen_at, samples (at most 5 pairs of method, sample, events, last_seen_at) and samples_truncated, listed most first and, for equal counts, the newest first; targets_truncated, listed_targets, listed_events; more_than_listed (reason, events, hours: what the overflow rows counted, for every country). A window that holds more than 60,000 rows is read from a later whole hour (window_shortened). A window that is not a time (not finite, or before 2000), not on whole hours, ends after the hour running now, is out of order or longer than 7 days, a reason that is not a reason code, a category or a country that is not one, and one hour alone over the ceiling, answer window null and refused with a fixed word (not_a_time, not_whole_hours, to_in_the_future, from_not_before_to, longer_than_7_days, not_a_reason, not_a_category, not_a_country, too_many_rows_in_one_hour); no argument makes it raise. Returns no row id or key. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
 -- ── ROLLBACK ─────────────────────────────────────────────────────────────────
 -- Nothing depends on these objects but the app code that follows this
