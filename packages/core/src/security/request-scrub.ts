@@ -6,8 +6,8 @@
  * The text is chosen by whoever sent the request. Before it is kept it is
  * scrubbed here: anything that looks like an email address, an id, a long
  * number, a network address, a long value or a token is replaced by a fixed
- * marker, the value of any query key that names a secret is removed whole, and
- * the text is cut to length. The database refuses what isStorableTarget and
+ * marker, any other `@` reads `(at)`, the value of any query key that names a
+ * secret is removed whole, and the text is cut to length. The database refuses what isStorableTarget and
  * isStorableSample refuse (the text rules below are the migration's own,
  * copied word for word), and the last step of each scrub function checks its
  * own output against them, so the writer never has to skip what this sends.
@@ -96,6 +96,8 @@ export const SAMPLE_MARKERS = {
   token: '<token>',
   removed: '<removed>',
   address: '<address>',
+  /** An `@` that is not part of an email address, in its place (`/@vite/env` reads `/(at)vite/env`). */
+  at: '(at)',
 } as const;
 
 /** What a cut text ends in: three ASCII dots (the character for an ellipsis is not ASCII). */
@@ -366,6 +368,8 @@ export interface ScrubRule {
   readonly marker: string;
   /** The parts of `view` this rule replaces; in order, not overlapping. */
   readonly find: (view: string) => Found[];
+  /** Run over a query string only (a path's `/` is a separator, not data). */
+  readonly only?: 'query';
 }
 
 function all(re: RegExp, view: string, keep?: (text: string) => boolean): Found[] {
@@ -385,7 +389,14 @@ function all(re: RegExp, view: string, keep?: (text: string) => boolean): Found[
 const EMAIL_WORD = /[A-Za-z0-9!$%'*+^_`{|}~.-]/;
 const AT_SIGN = /@|%(?:25)*40/gi;
 
-/** A word that holds an `@` (or an `@` still encoded after three decodes), and the word around it. */
+/** What follows the `@` of an email address: a domain with a dot and a top-level name of letters. */
+const EMAIL_DOMAIN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![A-Za-z0-9-])/;
+
+/**
+ * An email address (something@something.tld, its `@` sent as itself or
+ * encoded, still encoded after three decodes too), with the word around it.
+ * An `@` that is not part of one is left to the at_sign rule.
+ */
 function findEmail(view: string): Found[] {
   const found: Found[] = [];
   AT_SIGN.lastIndex = 0;
@@ -394,8 +405,14 @@ function findEmail(view: string): Found[] {
     let to = m.index + m[0].length;
     const last = found[found.length - 1];
     if (last && from < last.to) continue;
+    const at = to;
     while (from > (last?.to ?? 0) && EMAIL_WORD.test(view[from - 1]!)) from--;
     while (to < view.length && EMAIL_WORD.test(view[to]!)) to++;
+    const local = view.slice(from, m.index);
+    if (!/[A-Za-z0-9]/.test(local) || !EMAIL_DOMAIN.test(view.slice(at))) {
+      AT_SIGN.lastIndex = at;
+      continue;
+    }
     found.push({ from, to });
     AT_SIGN.lastIndex = to;
   }
@@ -430,91 +447,95 @@ const TOKEN_RUN = new RegExp(
   'g',
 );
 
-/** The pieces of one part of a run: a capital acronym, a word, or a digit group. */
-const RUN_PIECE = /[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/g;
+/** Vowels of a text, `y` counted with them. */
+function vowelCount(text: string): number {
+  let n = 0;
+  for (const c of text) if ('aeiouyAEIOUY'.includes(c)) n++;
+  return n;
+}
+
+/** The longest run of letters that are not vowels (`y` is a vowel here). */
+function longestConsonantRun(text: string): number {
+  let best = 0;
+  let run = 0;
+  for (const c of text) {
+    if (/[A-Za-z]/.test(c) && !'aeiouyAEIOUY'.includes(c)) {
+      run++;
+      if (run > best) best = run;
+    } else run = 0;
+  }
+  return best;
+}
+
+/** The most capitals an all-capital part, or the acronym at either end of a part, may have. */
+const ACRONYM_MAX = 5;
 
 /**
- * Whether a run reads as a name made of words: split at `-` and `_`, each
- * part is only words (three letters or more, with a vowel: a, e, i, o, u or
- * y), capital acronyms of at most five letters (at most three of them), digit
- * groups, and a `v` or `x` just before digits (`v2`, `x64`); at least one word.
+ * Whether one part of a run (the run split at `-` and `_`) reads as a name:
+ *   - all digits (`2021`), or `v` or `x` and digits (`v2`, `x64`); or
+ *   - letters, then digits or none (`ExchangeServer2019`), where the letters
+ *     are all capitals of at most ACRONYM_MAX (`SEO`, `MSSQL`), or else read
+ *     as words: capitals at most a third of the letters (an acronym of 2 to
+ *     ACRONYM_MAX at the start or the end not counted: `PHPUnit`,
+ *     `TinyMCE`), vowels (`y` counted) at least a fifth of them, and never
+ *     more than four letters without a vowel in a row.
  */
-function readsAsWords(run: string): boolean {
-  let acronyms = 0;
-  let words = 0;
-  for (const part of run.split(/[-_]+/)) {
-    const pieces = part.match(RUN_PIECE) ?? [];
-    for (let i = 0; i < pieces.length; i++) {
-      const piece = pieces[i]!;
-      if (/^[0-9]+$/.test(piece)) continue;
-      if (/^[A-Z]+$/.test(piece)) {
-        if (piece.length > 5) return false;
-        acronyms++;
-        continue;
-      }
-      if (/^[vx]$/.test(piece) && /^[0-9]/.test(pieces[i + 1] ?? '')) continue;
-      if (piece.length < 3 || !/[aeiouy]/i.test(piece)) return false;
-      words++;
-    }
+function isNameLikePart(part: string): boolean {
+  if (/^[0-9]+$/.test(part) || /^[vVxX][0-9]+$/.test(part)) return true;
+  const letters = /^([A-Za-z]+)[0-9]*$/.exec(part)?.[1];
+  if (letters === undefined) return false;
+  const capitals = letters.replace(/[^A-Z]/g, '').length;
+  if (capitals === letters.length) {
+    if (letters.length <= ACRONYM_MAX) return true;
+    return vowelCount(letters) * 4 >= letters.length && longestConsonantRun(letters) <= 4;
   }
-  return acronyms <= 3 && words >= 1;
-}
-
-/** How often a letter and a digit stand next to each other in `run`. */
-function letterDigitChanges(run: string): number {
-  let changes = 0;
-  for (let i = 1; i < run.length; i++) {
-    const a = run[i - 1]!;
-    const b = run[i]!;
-    const aDigit = a >= '0' && a <= '9';
-    const bDigit = b >= '0' && b <= '9';
-    const aLetter = /[A-Za-z]/.test(a);
-    const bLetter = /[A-Za-z]/.test(b);
-    if ((aDigit && bLetter) || (aLetter && bDigit)) changes++;
-  }
-  return changes;
+  const lead = /^[A-Z]{2,3}(?=[A-Z][a-z]{3})/.exec(letters)?.[0].length ?? 0;
+  const trail = /(?<=[a-z]{3})[A-Z]{2,3}$/.exec(letters)?.[0].length ?? 0;
+  const acronym = Math.max(lead, trail);
+  const counted = capitals - (acronym >= 2 && acronym <= ACRONYM_MAX ? acronym : 0);
+  // Capitals together inside a part (not an acronym at its start or end) are a sign of a random value.
+  const inner = letters.slice(lead, letters.length - trail);
+  return (
+    counted * 3 <= letters.length &&
+    vowelCount(letters) * 5 >= letters.length &&
+    longestConsonantRun(letters) <= 4 &&
+    !/[A-Z]{2}/.test(inner.slice(1, -1))
+  );
 }
 
 /**
- * Whether a run of letters, digits, `-` and `_` (one whole run, at least
- * SAMPLE_TOKEN_RUN_MIN long) is shaped like a token, such as this app's
- * 22-character base64url invite token, which the table's long-value rule
- * lets through (it is under 24 characters, and a `-` or `_` breaks a run).
- * With both an upper-case and a lower-case letter, it is when either
- *   - it shows a sign of a random value: a digit, or vowels under a quarter
- *     of its letters, or three or more capitals right after a lower-case
- *     letter; or
- *   - it does not read as a name made of words (readsAsWords).
- * With one letter case only, it is when a letter and a digit stand next to
- * each other four times or more (`x86_64-linux-gnu`, `backup-2026-01-31-db`
- * and `XDEBUG_SESSION_START` are kept).
- * Measured on random base64url values (see PROGRESS.md for the counts); the
- * mixed-case names it also replaces and the names it keeps are pinned in
- * request-scrub.test.ts.
+ * Whether a run of letters, digits, `-` and `_` (one whole run, as TOKEN_RUN
+ * finds it) is shaped like a token, such as this app's 22-character base64url
+ * invite token, which the table's long-value rule lets through (it is under
+ * 24 characters, and a `-` or `_` breaks a run). It is when the run is at
+ * least SAMPLE_TOKEN_RUN_MIN long and, split at `-` and `_`, some part of four
+ * characters or more does not read as a name (isNameLikePart). A `.` ends a
+ * run, so each part of a dotted name is judged on its own. Measured on random
+ * base64url values (see PROGRESS.md); the names it replaces and the names it
+ * keeps are pinned in request-scrub.test.ts.
  */
 export function looksLikeToken(run: string): boolean {
-  let upper = 0;
-  let lower = 0;
-  let digits = 0;
-  let vowels = 0;
-  let humps = 0;
-  for (let i = 0; i < run.length; i++) {
-    const c = run[i]!;
-    if (c >= 'A' && c <= 'Z') {
-      upper++;
-      const before = run[i - 1];
-      if (before !== undefined && before >= 'a' && before <= 'z') humps++;
-    } else if (c >= 'a' && c <= 'z') lower++;
-    else if (c >= '0' && c <= '9') digits++;
-    if ('aeiouAEIOU'.includes(c)) vowels++;
-  }
-  // One letter case only (or none): a token only when letters and digits
-  // are mixed through it, which a name with a version or a date is not.
-  if (upper === 0 || lower === 0) return letterDigitChanges(run) >= 4;
-  const randomSign = digits > 0 || vowels * 4 < upper + lower || humps >= 3;
-  return randomSign || !readsAsWords(run);
+  if (run.length < SAMPLE_TOKEN_RUN_MIN) return false;
+  return run.split(/[-_]+/).some((part) => part.length >= 4 && !isNameLikePart(part));
 }
 
+/** A standard base64 run: its alphabet, 32 characters or more, then up to two `=`. */
+const BASE64_RUN = /(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{32,}={0,2}(?![A-Za-z0-9+/=])/g;
+
+/**
+ * Whether a BASE64_RUN with a `+` or a `/` in it is a value: split at them, some
+ * part of four characters or more does not read as a name (isNameLikePart),
+ * so a path in a query string (`/usr/local/share/applications`) is kept.
+ */
+function looksLikeBase64Value(run: string): boolean {
+  if (!/[+/]/.test(run)) return false;
+  return run
+    .replace(/=+$/, '')
+    .split(/[+/]+/)
+    .some((part) => part.length >= 4 && !isNameLikePart(part));
+}
+
+/** The digits of a text. */
 function countDigits(text: string): number {
   let n = 0;
   for (const ch of text) if (ch >= '0' && ch <= '9') n++;
@@ -543,6 +564,12 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
   },
   { name: 'email', marker: SAMPLE_MARKERS.email, find: findEmail },
   {
+    // Any other `@` (the table refuses every one): `(at)` in its place, the words around it kept.
+    name: 'at_sign',
+    marker: SAMPLE_MARKERS.at,
+    find: (view) => all(/@|%(?:25)*40/gi, view),
+  },
+  {
     name: 'id',
     marker: SAMPLE_MARKERS.id,
     find: (view) => all(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, view),
@@ -561,6 +588,16 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
     name: 'id_without_dashes',
     marker: SAMPLE_MARKERS.id,
     find: (view) => all(/(?<![0-9A-Fa-f])[0-9A-Fa-f]{32}(?![0-9A-Fa-f])/g, view),
+  },
+  {
+    // In a query string only: a standard base64 value of 32 characters or
+    // more with a `+` or `/` in it (which break every other run), judged part
+    // by part between them as the token rule judges a run, and taken whole.
+    // In a path a `/` separates segments, each judged on its own.
+    name: 'base64_value',
+    marker: SAMPLE_MARKERS.longValue,
+    only: 'query',
+    find: (view) => all(BASE64_RUN, view, looksLikeBase64Value),
   },
   {
     // A run shaped like a token (looksLikeToken), long or short, with `-` and `_` or without.
@@ -594,7 +631,7 @@ export const SCRUB_RULES: readonly ScrubRule[] = [
  * finds is replaced too, with the marker of its kind.
  */
 const KEPT_TEXT_RULES: readonly ScrubRule[] = [
-  { name: 'kept_at', marker: SAMPLE_MARKERS.email, find: (t) => all(/@|%(?:25)*40/g, t) },
+  { name: 'kept_at', marker: SAMPLE_MARKERS.at, find: (t) => all(/@|%(?:25)*40/g, t) },
   { name: 'kept_digits', marker: SAMPLE_MARKERS.number, find: (t) => all(/[0-9]{6,}/g, t) },
   {
     name: 'kept_ipv4',
@@ -651,10 +688,13 @@ function applyRule(pieces: Piece[], rule: ScrubRule, side: 'view' | 'out'): bool
 }
 
 /** Runs every rule, over the decoded text and over the kept text, until nothing changes. */
-function applyTextRules(pieces: Piece[]): void {
+function applyTextRules(pieces: Piece[], where: 'target' | 'query'): void {
   for (let round = 0; round < 4; round++) {
     let changed = false;
-    for (const rule of SCRUB_RULES) changed = applyRule(pieces, rule, 'view') || changed;
+    for (const rule of SCRUB_RULES) {
+      if (rule.only === undefined || rule.only === where)
+        changed = applyRule(pieces, rule, 'view') || changed;
+    }
     for (const rule of KEPT_TEXT_RULES) changed = applyRule(pieces, rule, 'out') || changed;
     if (!changed) return;
   }
@@ -778,7 +818,7 @@ export function scrubRequestTarget(pathname: string): string {
     const input = readable(pathname);
     if (input === null) return SAMPLE_UNREADABLE_TARGET;
     let pieces = unitsOf(input.text);
-    applyTextRules(pieces);
+    applyTextRules(pieces, 'target');
     // `;key=value` parts of each segment: the key rule, as for a query. It
     // runs after the text rules, so a key reads the same here as it will in
     // the kept text (a marker in a key is part of its name).
@@ -818,7 +858,7 @@ export function scrubRequestSample(queryString: string | null | undefined): stri
     const input = readable(queryString);
     if (input === null) return null;
     let pieces = unitsOf(input.text);
-    applyTextRules(pieces);
+    applyTextRules(pieces, 'query');
     // After the text rules, as for a path's `;key=value` parts. Split as a
     // server splits it (where the bare rule applies), then again at decoded
     // `&`, `;` and `=` too, so a value that is itself a query string

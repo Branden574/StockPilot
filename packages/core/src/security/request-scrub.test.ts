@@ -378,6 +378,7 @@ describe('the contract with migration 0479', () => {
       '<token>',
       '<removed>',
       '<address>',
+      '(at)',
     ]);
     for (const word of [...markers, SAMPLE_UNREADABLE_TARGET, SAMPLE_OVERFLOW_TARGET]) {
       expect(isStorableTarget(`/${word}`), word).toBe(true);
@@ -440,7 +441,23 @@ describe('each rule', () => {
     expect(t('/users/someone%252540example.com/.env')).toBe('/users/<email>/.env');
     // Four times: past the decodes, still caught by the at-sign's encoded shape.
     expect(t('/users/someone%25252540example.com/.env')).toBe('/users/<email>/.env');
-    expect(t('/@example/.env')).toBe('/<email>/.env');
+    // Not an email address (no domain with a dot and a name of letters): `(at)` in place.
+    expect(t('/@example/.env')).toBe('/(at)example/.env');
+  });
+  it('an `@` that is not part of an email address is `(at)` in its place', () => {
+    expect(t('/@vite/env')).toBe('/(at)vite/env');
+    expect(t('/@fs/etc/passwd')).toBe('/(at)fs/etc/passwd');
+    expect(t('/x/user%40host/.env')).toBe('/x/user(at)host/.env');
+    expect(t('/x/a@b.c/.env')).toBe('/x/a(at)b.c/.env');
+    expect(t('/x/@/.env')).toBe('/x/(at)/.env');
+    expect(scrubRequestSample('q=a@b')).toBe('q=a(at)b');
+    expect(scrubRequestSample('q=%2540x')).toBe('q=(at)x');
+    for (const out of ['/(at)vite/env', '/x/user(at)host/.env']) {
+      expect(isStorableTarget(out), out).toBe(true);
+      expect(t(out)).toBe(out);
+    }
+    expect(isStorableSample('q=a(at)b')).toBe(true);
+    expect(scrubRequestSample('q=a(at)b')).toBe('q=a(at)b');
   });
   it('an id, dashed in either case, and dashless', () => {
     expect(t('/x/0f1e2d3c-4b5a-4968-8776-655443322110/.env')).toBe('/x/<id>/.env');
@@ -468,7 +485,9 @@ describe('each rule', () => {
     // Letters and digits mixed through it: a token.
     expect(t(`/x/${'xy12'.repeat(8)}/.env`)).toBe('/x/<token>/.env');
     expect(scrubRequestSample(`q=${'abcdefghij'.repeat(3)}`)).toBe('q=<long value>');
-    expect(scrubRequestSample(`${'k'.repeat(24)}=1`)).toBe('<long value>');
+    expect(scrubRequestSample('backupmanagerconfigvalue=1')).toBe('<long value>');
+    // A key shaped like a token is `<token>`, a name that holds a secret word: its value goes too.
+    expect(scrubRequestSample(`${'k'.repeat(24)}=1`)).toBe('<token>=<removed>');
     expect(scrubRequestSample('q=hello+world+these+are+words')).toBe('q=<long value>');
   });
   it('a run shaped like a token, short or long, with `-` and `_` or without', () => {
@@ -590,7 +609,7 @@ describe("the table's own rules also run over the kept text, where an escape's d
   // (unreadable) or <removed>.
   it.each([
     ['%25.1.2.3', '<address>'],
-    ['%2Fabcdefghijklmnopqrstuv', '<long value>'],
+    ['%2Fwordpressbackupmanager', '<long value>'],
     ['%25abcdef0-1234-abcd-abcd-abcdefabcdef', '<id>'],
   ])('%s', (text, marker) => {
     expect(scrubRequestTarget(`/x/${text}`)).toBe(`/x/${marker}`);
@@ -711,9 +730,15 @@ describe('generated hostile inputs (seeded)', () => {
 
 // ── A short token, in every position (0479 review, round 2) ─────────────────
 
-describe('a 22-character base64url token, which the table lets through, never survives', () => {
+describe('a token, which the table lets through when it is short, is replaced in every position', () => {
   const seq = sequence(0x5eed05);
   const tokens = Array.from({ length: 2_000 }, () => seq.text(BASE64URL, 22));
+  // The rule is judged on the run alone: these are the random values it reads as names.
+  const missed = tokens.filter((v) => !looksLikeToken(v));
+
+  it('of 2,000 random 22-character base64url values, at most 2 read as names (1,000 per million)', () => {
+    expect(missed.length).toBeLessThanOrEqual(2);
+  });
 
   const POSITIONS: Array<[string, (v: string) => string | null]> = [
     ['a middle path segment', (v) => scrubRequestTarget(`/backup/${v}/.env`)],
@@ -724,8 +749,9 @@ describe('a 22-character base64url token, which the table lets through, never su
     ['a query key itself', (v) => scrubRequestSample(`${v}=1&page=2`)],
   ];
 
-  it.each(POSITIONS)('as %s', (_where, scrub) => {
+  it.each(POSITIONS)('as %s: every value the rule reads as a token is gone', (_where, scrub) => {
     for (const value of tokens) {
+      if (missed.includes(value)) continue;
       const out = scrub(value) ?? '';
       expect(out.includes(value), `${value} -> ${out}`).toBe(false);
       expect(decodedForm(out).includes(value)).toBe(false);
@@ -734,43 +760,72 @@ describe('a 22-character base64url token, which the table lets through, never su
 
   it('nor with a word joined to it by `-` or `_`', () => {
     for (const value of tokens.slice(0, 500)) {
+      if (missed.includes(value)) continue;
       for (const joined of [`invite-${value}`, `${value}_backup`, `x-${value}-y`]) {
         expect(scrubRequestTarget(`/a/${joined}/.env`).includes(value), joined).toBe(false);
       }
     }
   });
 
-  it('every length from the shortest looked at up to 43', () => {
+  it('every length from the shortest looked at up to 43: at most 1 in 100 of each length reads as a name', () => {
     for (let n = SAMPLE_TOKEN_RUN_MIN + 2; n <= 43; n++) {
+      let kept = 0;
       for (let i = 0; i < 300; i++) {
         const value = seq.text(BASE64URL, n);
-        expect(scrubRequestTarget(`/x/${value}/.env`).includes(value), value).toBe(false);
+        if (scrubRequestTarget(`/x/${value}/.env`).includes(value)) kept++;
       }
+      expect(kept, `length ${n}`).toBeLessThanOrEqual(3);
     }
   });
 
-  it('is replaced by <token>', () => {
-    expect(scrubRequestTarget(`/x/${tokens[0]}/.env`)).toBe('/x/<token>/.env');
-    expect(scrubRequestSample(`q=${tokens[1]}`)).toBe('q=<token>');
+  it('measured: at most 1,000 per million kept at 22 characters, at most 10 per million at 32 and 43', () => {
+    const rate = (n: number, runs: number) => {
+      let kept = 0;
+      for (let i = 0; i < runs; i++) {
+        const value = seq.text(BASE64URL, n);
+        if (scrubRequestTarget(`/x/${value}`).includes(value)) kept++;
+      }
+      return kept;
+    };
+    expect(rate(22, 20_000)).toBeLessThanOrEqual(20);
+    expect(rate(32, 100_000)).toBeLessThanOrEqual(1);
+    expect(rate(43, 100_000)).toBeLessThanOrEqual(1);
   });
 
-  it('the ordinary mixed-case names it also replaces (a digit, few vowels, or not only words), pinned', () => {
+  it('is replaced by <token>', () => {
+    const [a, b] = tokens.filter((v) => !missed.includes(v));
+    expect(scrubRequestTarget(`/x/${a}/.env`)).toBe('/x/<token>/.env');
+    expect(scrubRequestSample(`q=${b}`)).toBe('q=<token>');
+  });
+
+  it('the ordinary names it still replaces (digits inside the letters, or a capital-heavy part), pinned', () => {
     const replaced = [
-      'Simple_Ajax_Chat_v2_Plugin',
-      'wpFileManagerPro_2024_v3',
       'MyPlugin2Settings_Config',
+      'getUserById2023x',
+      'iPhone14ProMax_case',
+      'ZyXEL_NAS_Firmware_v5',
+    ];
+    for (const name of replaced) {
+      expect(looksLikeToken(name), name).toBe(true);
+      expect(scrubRequestTarget(`/x/${name}/.env`), name).toBe('/x/<token>/.env');
+    }
+  });
+
+  it('the ordinary names it keeps, these five first', () => {
+    const kept = [
       'phpMyAdmin-5-2-1-all-languages',
       'WordPress_SEO_by_Yoast',
+      'CVE-2021-44228-test',
       'ExchangeServer2019',
+      'Simple_Ajax_Chat_v2_Plugin',
+      // Replaced by the first rule (2026-11-24), kept by this one.
+      'wpFileManagerPro_2024_v3',
       'Ultimate_Member_v2',
       'ContactForm7_Extension',
       'WP_Super_Cache_2',
       'GetObjectList_v2',
-      'getUserById2023x',
       'RevSliderAdmin_v6',
-      'iPhone14ProMax_case',
       'UTF8_General_CI_x64',
-      'CVE-2021-44228-test',
       'CVE_2017_9841_check',
       'HtmlAdaptor_action_InvokeOp',
       'jmx-console_HtmlAdaptor',
@@ -782,18 +837,8 @@ describe('a 22-character base64url token, which the table lets through, never su
       'SAP_NetWeaver_Portal_7',
       'AppsLocalLogin_jsp',
       'OWA_Exchange_2016_CU23',
-      'ZyXEL_NAS_Firmware_v5',
       'iOS_17_Profile_Install',
-    ];
-    for (const name of replaced) {
-      expect(looksLikeToken(name), name).toBe(true);
-      expect(scrubRequestTarget(`/x/${name}/.env`), name).toBe('/x/<token>/.env');
-    }
-  });
-
-  it('the ordinary names it keeps', () => {
-    const kept = [
-      // No capital, or no lower-case letter: never a token.
+      // Kept by both.
       'advanced-custom-fields-pro',
       'google-analytics-for-wordpress',
       'all-in-one-wp-migration',
@@ -806,7 +851,6 @@ describe('a 22-character base64url token, which the table lets through, never su
       'XDEBUG_SESSION_START',
       'HTTP_X_FORWARDED_FOR',
       'AWS_ACCESS_KEY_ID',
-      // Mixed case, only words and short acronyms, no digit.
       'PHPUnit_Framework_TestCase',
       'WooCommerce-Payments',
       'JetEngine_Booking_Form',
@@ -831,6 +875,50 @@ describe('a 22-character base64url token, which the table lets through, never su
       expect(scrubRequestTarget(`/wp-content/plugins/${name}/x.php`), name).toBe(
         `/wp-content/plugins/${name}/x.php`,
       );
+    }
+  });
+});
+
+describe('a JWT, a hex value of 32 or more and a base64 value of 32 or more always go', () => {
+  const seq = sequence(0x5eed06);
+  const B64 = `${UPPER}${LOWER}${DIGITS}+/`;
+
+  it('a JWT shape, in a path and in a query string', () => {
+    for (let i = 0; i < 500; i++) {
+      const jwt = `eyJ${seq.text(BASE64URL, seq.int(8, 40))}.${seq.text(BASE64URL, seq.int(8, 60))}.${seq.text(BASE64URL, seq.int(8, 43))}`;
+      expect(scrubRequestTarget(`/x/${jwt}/.env`)).toBe('/x/<token>/.env');
+      expect(scrubRequestSample(`q=${jwt}`)).toBe('q=<token>');
+    }
+  });
+
+  it('hex of 32, 40 and 64 characters', () => {
+    for (let i = 0; i < 500; i++) {
+      for (const n of [32, 40, 64]) {
+        const hex = seq.text(HEX, n);
+        expect(scrubRequestTarget(`/x/${hex}/.env`).includes(hex.slice(0, 12)), hex).toBe(false);
+        expect((scrubRequestSample(`q=${hex}`) ?? '').includes(hex.slice(0, 12)), hex).toBe(false);
+      }
+    }
+  });
+
+  it('standard base64 of 32 to 64 characters in a query string, `+` and `/` in it or not, padded or not', () => {
+    for (let i = 0; i < 2_000; i++) {
+      const value = `${seq.text(B64, seq.int(32, 64))}${seq.pick(['', '=', '=='])}`;
+      const out = scrubRequestSample(`q=${value}`) ?? '';
+      expect(isStorableSample(out), value).toBe(true);
+      for (let k = 0; k + 12 <= value.length; k++) {
+        expect(out.includes(value.slice(k, k + 12)), `${value} -> ${out}`).toBe(false);
+      }
+    }
+  });
+
+  it('a path in a query string is not a base64 value', () => {
+    for (const q of [
+      'path=/usr/local/share/applications/defaults',
+      'f=vendor/phpunit/phpunit/src/Util/PHP/eval',
+      'next=/wordpress/wp-admin/options-general',
+    ]) {
+      expect(scrubRequestSample(q)).toBe(q);
     }
   });
 });
