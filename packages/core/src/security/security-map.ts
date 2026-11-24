@@ -1194,41 +1194,108 @@ export function planSecurityMapPlayback(
 }
 
 /**
- * One list of two reads' entries. Inside the minutes the newer read covers,
- * only its entries count (an entry there can change between reads: a
- * sign-in recorded in one organization and then in two more stops naming the
- * first, and a folded count can grow). Before that, the whole window's
- * entries. Newest first, at most `max`. Entries are never added together.
+ * An entry's identity, as the contract defines an entry: its minute,
+ * category, outcome, reason, source, country, city and organization.
  */
-function feedOfTwoReads(
-  whole: SecurityMapWholeRead | null,
-  recent: SecurityMapView | null,
-  pick: (view: SecurityMapView) => readonly SecurityMapFeedRow[],
+export function securityMapFeedRowKey(row: SecurityMapFeedRow): string {
+  const [minute, c, o, reason, source, country, city, , , id] = row;
+  return [Date.parse(minute), c, o, reason, source, country ?? '', city ?? '', id ?? ''].join('|');
+}
+
+const MINUTE_MS = 60_000;
+
+/** Newest first: the latest minute, inside a minute the largest count, then by identity. */
+function feedOrder(a: SecurityMapFeedRow, b: SecurityMapFeedRow): number {
+  const byTime = Date.parse(b[0]) - Date.parse(a[0]);
+  if (byTime !== 0) return byTime;
+  if (b[7] !== a[7]) return b[7] - a[7];
+  const ka = securityMapFeedRowKey(a);
+  const kb = securityMapFeedRowKey(b);
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+}
+
+/** A list of entries kept across reads, and whether entries fell past its cap. */
+export interface SecurityMapKeptFeed {
+  rows: SecurityMapFeedRow[];
+  /** Entries fell off the end, behind newer ones: the list leaves some out. */
+  cut: boolean;
+}
+
+/**
+ * A poll's entries merged into the list kept since the last read of the
+ * whole window. A poll's feeds cover only its own ten minutes, so the kept
+ * list is never replaced by a poll's (contract, corrections after review
+ * round 2). One entry by identity: the same entry in both keeps the larger
+ * count, since an entry only grows as rows come in and a poll's first minute
+ * holds only part of it; the two are never added. An entry leaves only when
+ * its minute has left the window (`fromMs`, the window's start now), when it
+ * falls past `max` behind newer ones (`cut` then says so), or when the whole
+ * window is read again (the caller starts a new list from that read).
+ */
+export function securityMapMergeFeed(
+  kept: readonly SecurityMapFeedRow[],
+  incoming: readonly SecurityMapFeedRow[],
+  fromMs: number,
   max: number,
-): SecurityMapFeedRow[] {
-  if (!whole) return recent ? [...pick(recent)] : [];
-  if (!recent || Date.parse(recent.generatedAt) < Date.parse(whole.generatedAt)) {
-    return [...pick(whole)];
+): SecurityMapKeptFeed {
+  const byKey = new Map<string, SecurityMapFeedRow>();
+  for (const row of kept) byKey.set(securityMapFeedRowKey(row), row);
+  for (const row of incoming) {
+    const key = securityMapFeedRowKey(row);
+    const was = byKey.get(key);
+    if (!was || row[7] >= was[7]) byKey.set(key, row);
   }
-  const from = Date.parse(recent.from);
-  const older = pick(whole).filter((row) => Date.parse(row[0]) < from);
-  return [...pick(recent), ...older].slice(0, max);
+  const inWindow = [...byKey.values()].filter((row) => Date.parse(row[0]) + MINUTE_MS > fromMs);
+  inWindow.sort(feedOrder);
+  return { rows: inWindow.slice(0, max), cut: inWindow.length > max };
 }
 
-/** The feed of the two reads: newest first, at most 60. */
-export function securityMapFeedOf(
+/**
+ * Where the window starts now: the start the whole window was read from,
+ * moved on by as much time as the newest poll reaches past that read.
+ */
+export function securityMapWindowStartNow(
   whole: SecurityMapWholeRead | null,
-  recent: SecurityMapView | null,
-): SecurityMapFeedRow[] {
-  return feedOfTwoReads(whole, recent, (view) => view.feed, SECURITY_MAP_MAX_FEED);
+  poll: SecurityMapView,
+): number {
+  if (!whole) return Date.parse(poll.from);
+  return Date.parse(whole.from) + Math.max(0, Date.parse(poll.to) - Date.parse(whole.to));
 }
 
-/** The flagged feed of the two reads: the newest flagged entries, at most 20. */
-export function securityMapFlaggedFeedOf(
+/**
+ * Whether the whole read's flagged list leaves flagged events out: its
+ * entries (of the kinds shown) add up to less than its flagged events of
+ * those kinds. The flagged feed is only the newest 20 inside the window read.
+ */
+export function securityMapFlaggedFeedLeavesOut(whole: SecurityMapWholeRead | null): boolean {
+  if (!whole) return false;
+  let listed = 0;
+  for (const row of whole.flaggedFeed) listed += row[7];
+  let flagged = 0;
+  for (const [, , count] of whole.whole.legend) flagged += count;
+  return listed < flagged;
+}
+
+/**
+ * The words beside the flagged list, or null when the list says it all.
+ * `shown` is how many entries are listed; `cut` that the kept list lost
+ * entries past its cap.
+ */
+export function securityMapFlaggedListWords(
   whole: SecurityMapWholeRead | null,
-  recent: SecurityMapView | null,
-): SecurityMapFeedRow[] {
-  return feedOfTwoReads(whole, recent, (view) => view.flaggedFeed, SECURITY_MAP_MAX_FLAGGED_FEED);
+  shown: number,
+  cut: boolean,
+): string | null {
+  if (!whole) {
+    return shown === 0 ? `${SECURITY_MAP_COULD_NOT_CHECK}.` : SECURITY_MAP_WORDS.flaggedFeedUnread;
+  }
+  const leavesOut = cut || securityMapFlaggedFeedLeavesOut(whole);
+  if (shown === 0) {
+    return leavesOut
+      ? SECURITY_MAP_WORDS.flaggedFeedNoneShown
+      : SECURITY_MAP_WORDS.flaggedFeedEmpty;
+  }
+  return leavesOut ? SECURITY_MAP_WORDS.flaggedFeedMore : null;
 }
 
 /* ───────────────────── polling, and when the play stops ───────────────────── */
@@ -1717,7 +1784,7 @@ export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWo
   const outcome = OUTCOMES[o] as SecurityEventOutcome;
   const flood = isSecurityMapFloodReason(reason);
   return {
-    key: [minute, c, o, reason, source, country ?? '', city ?? '', id ?? ''].join('|'),
+    key: securityMapFeedRowKey(row),
     time: `${securityMapClock(minute, 'UTC')} UTC`,
     category,
     categoryLabel: securityEventCategoryLabel(category),
@@ -1804,8 +1871,13 @@ export const SECURITY_MAP_WORDS = {
   feedEmpty: 'No entries to list.',
   flaggedFeedTitle: 'Flagged, not blocked: the newest',
   flaggedFeedNote:
-    'The newest 20 flagged entries of the kinds this map shows, so a flood of blocked ones never hides them. Times in UTC.',
+    'The newest 20 flagged entries of the window read, of the kinds this map shows, so a flood of blocked ones never hides them. Times in UTC.',
   flaggedFeedEmpty: 'Nothing was flagged.',
+  flaggedFeedMore: 'Only the newest are listed: this window holds more flagged events than these.',
+  flaggedFeedNoneShown:
+    'None to list: the newest flagged entries are of kinds this map does not show. Flagged events of the kinds it shows are older; they are in the totals and the table.',
+  flaggedFeedUnread:
+    'The whole window could not be read: only entries of the last ten minutes are listed.',
   tableTitle: 'By country',
   tableNote:
     'The same numbers as the map, in full. A country is where a request came from, which can be a relay.',

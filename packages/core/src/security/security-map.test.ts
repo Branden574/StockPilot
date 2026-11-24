@@ -22,6 +22,7 @@ import {
   SECURITY_MAP_ROWS_PER_SIGN_IN,
   SECURITY_MAP_STEP_MS,
   SECURITY_MAP_TALLY_REASONS,
+  SECURITY_MAP_WORDS,
   isSecurityMapFloorName,
   isSecurityMapFloodReason,
   isSecurityMapFoldedReason,
@@ -38,13 +39,15 @@ import {
   securityMapCountWords,
   securityMapCounters,
   securityMapEmptyWords,
-  securityMapFeedOf,
+  securityMapFeedRowKey,
   securityMapFeedWords,
-  securityMapFlaggedFeedOf,
+  securityMapFlaggedFeedLeavesOut,
+  securityMapFlaggedListWords,
   securityMapHealthAfter,
   securityMapIsFloor,
   securityMapLegend,
   securityMapLegendHelp,
+  securityMapMergeFeed,
   securityMapModeWords,
   securityMapNextPollDelay,
   securityMapNotes,
@@ -56,6 +59,7 @@ import {
   securityMapStopWords,
   securityMapTableRows,
   securityMapViewOf,
+  securityMapWindowStartNow,
   securityMapWindowWords,
   type SecurityCategoryDetectors,
   type SecurityMapAnswer,
@@ -1242,51 +1246,125 @@ describe('the playback plan', () => {
   });
 });
 
-describe('the feed of two reads', () => {
+describe('the kept feeds: a poll merged in by identity', () => {
+  const rows = (...entries: SecurityMapFeedEntry[]) => whole({ feed: entries }).feed;
+  const fromMs = Date.parse(FROM);
   const old = entry({ minute: '2026-11-23T20:00:00+00:00', reason: 'wrong_code' });
-  const stale = entry({ minute: '2026-11-23T21:55:00+00:00', events: 1 });
-  const fresh = entry({ minute: '2026-11-23T21:55:00+00:00', events: 3 });
-  const w = whole({ feed: [stale, old] });
+  const kept = entry({ minute: '2026-11-23T21:55:00+00:00', events: 1 });
+  const grown = entry({ minute: '2026-11-23T21:55:00+00:00', events: 3 });
+  const newest = entry({
+    minute: '2026-11-23T21:59:00+00:00',
+    reason: 'env_file',
+    category: 'exploit',
+  });
+  const brief = (feed: { rows: readonly SecurityMapFeedRow[] }) =>
+    feed.rows.map((row) => [row[0], row[3], row[7]]);
 
-  it("inside the newer read's ten minutes only its entries count; before them, the whole window's", () => {
-    const r = recent({ generated_at: '2026-11-23T22:00:30+00:00', feed: [fresh] });
-    const feed = securityMapFeedOf(w, r);
-    expect(feed.map((row) => [row[0], row[3], row[7]])).toEqual([
-      ['2026-11-23T21:55:00+00:00', 'wrong_password', 3],
+  it("a poll's entries join the kept list; an entry the poll does not carry stays", () => {
+    const merged = securityMapMergeFeed(rows(kept, old), rows(newest), fromMs, 60);
+    expect(brief(merged)).toEqual([
+      ['2026-11-23T21:59:00+00:00', 'env_file', 11],
+      ['2026-11-23T21:55:00+00:00', 'wrong_password', 1],
       ['2026-11-23T20:00:00+00:00', 'wrong_code', 11],
     ]);
+    expect(merged.cut).toBe(false);
+    // A poll with nothing in it takes nothing away.
+    expect(brief(securityMapMergeFeed(rows(kept, old), [], fromMs, 60))).toEqual(
+      brief({ rows: rows(kept, old) }),
+    );
   });
 
-  it('an older recent read changes nothing; one read alone is its own feed; at most 60', () => {
-    const r = recent({ generated_at: '2026-11-23T21:00:00+00:00', feed: [fresh] });
-    expect(securityMapFeedOf(w, r)).toEqual(w.feed);
-    expect(securityMapFeedOf(null, r)).toEqual(r.feed);
-    expect(securityMapFeedOf(null, null)).toEqual([]);
-    const full = whole({ feed: Array.from({ length: 60 }, () => old) });
-    const newer = recent({ generated_at: '2026-11-23T22:00:30+00:00', feed: [fresh, fresh] });
-    expect(securityMapFeedOf(full, newer)).toHaveLength(60);
-  });
-
-  it('the flagged feed is merged the same way, at most 20, and never from the plain feed', () => {
-    const oldFlag = entry({ ...FLAGGED, minute: '2026-11-23T20:00:00+00:00', events: 1 });
-    const staleFlag = entry({ ...FLAGGED, events: 1 });
-    const freshFlag = entry({ ...FLAGGED, events: 5, at_least: true });
-    const wf = whole({ feed: [stale, old], flagged_feed: [staleFlag, oldFlag] });
-    const rf = recent({
-      generated_at: '2026-11-23T22:00:30+00:00',
-      feed: [fresh],
-      flagged_feed: [freshFlag],
-    });
-    expect(securityMapFlaggedFeedOf(wf, rf).map((row) => [row[0], row[7], row[8]])).toEqual([
-      ['2026-11-23T21:57:00+00:00', 5, true],
-      ['2026-11-23T20:00:00+00:00', 1, false],
+  it('the same entry in both: the larger count, never the two added; at a tie the newer read', () => {
+    expect(brief(securityMapMergeFeed(rows(kept), rows(grown), fromMs, 60))).toEqual([
+      ['2026-11-23T21:55:00+00:00', 'wrong_password', 3],
     ]);
-    // A blocked entry of the plain feed is never in it.
-    expect(securityMapFlaggedFeedOf(wf, rf).every((row) => row[2] === 1)).toBe(true);
-    const many = whole({ flagged_feed: Array.from({ length: 20 }, () => oldFlag) });
-    const newer = recent({ generated_at: '2026-11-23T22:00:30+00:00', flagged_feed: [freshFlag] });
-    expect(securityMapFlaggedFeedOf(many, newer)).toHaveLength(20);
-    expect(securityMapFlaggedFeedOf(null, null)).toEqual([]);
+    // A poll's first minute holds only part of an entry: the kept, larger count stays.
+    expect(brief(securityMapMergeFeed(rows(grown), rows(kept), fromMs, 60))).toEqual([
+      ['2026-11-23T21:55:00+00:00', 'wrong_password', 3],
+    ]);
+    const floor = entry({ minute: '2026-11-23T21:55:00+00:00', events: 3, at_least: true });
+    expect(securityMapMergeFeed(rows(grown), rows(floor), fromMs, 60).rows[0]?.[8]).toBe(true);
+    // Another organization is another entry.
+    const elsewhere = entry({ ...kept, organization_id: '5eed0000-0001-4000-8000-0000000000c9' });
+    expect(securityMapMergeFeed(rows(kept), rows(elsewhere), fromMs, 60).rows).toHaveLength(2);
+  });
+
+  it('an entry leaves when its minute leaves the window; newest first; at most the cap, and the cut is said', () => {
+    // The window now starts at 20:00:30: the 20:00 minute still has thirty seconds in it.
+    expect(
+      brief(securityMapMergeFeed(rows(old), [], Date.parse('2026-11-23T20:00:30Z'), 60)),
+    ).toHaveLength(1);
+    expect(
+      securityMapMergeFeed(rows(old), [], Date.parse('2026-11-23T20:01:00Z'), 60).rows,
+    ).toEqual([]);
+    const many = Array.from({ length: 20 }, (_, i) =>
+      entry({ ...FLAGGED, minute: `2026-11-23T20:${String(10 + i).padStart(2, '0')}:00+00:00` }),
+    );
+    const flagged = (list: SecurityMapFeedEntry[]) => whole({ flagged_feed: list }).flaggedFeed;
+    const merged = securityMapMergeFeed(flagged(many), flagged([FLAGGED]), fromMs, 20);
+    expect(merged.rows).toHaveLength(20);
+    expect(merged.rows[0]?.[0]).toBe(FLAGGED.minute);
+    expect(merged.rows.at(-1)?.[0]).toBe('2026-11-23T20:11:00+00:00');
+    expect(merged.cut).toBe(true);
+    expect(securityMapMergeFeed(flagged(many), [], fromMs, 20).cut).toBe(false);
+  });
+
+  it("the window's start now: the start read, moved on by as far as the newest poll reaches past it", () => {
+    const w = whole();
+    const later = recent({
+      window: {
+        from: '2026-11-23T21:52:00+00:00',
+        to: '2026-11-23T22:02:00+00:00',
+        live_from: '2026-11-23T21:52:00+00:00',
+        asked_from: '2026-11-23T21:52:00+00:00',
+      },
+    });
+    expect(securityMapWindowStartNow(w, later)).toBe(Date.parse('2026-11-22T22:02:00Z'));
+    expect(securityMapWindowStartNow(w, recent())).toBe(Date.parse(FROM));
+    expect(securityMapWindowStartNow(null, later)).toBe(Date.parse('2026-11-23T21:52:00Z'));
+  });
+
+  it('the flagged list says when it leaves flagged events out, and never "nothing" for what was not read', () => {
+    // FLAGGED is 2 events of password guessing; the legend holds the window's flagged events by kind.
+    const read = whole({ flagged_feed: [FLAGGED] });
+    const withFlagged = (count: number, list = read.flaggedFeed) => ({
+      ...read,
+      flaggedFeed: list,
+      whole: { ...read.whole, legend: [[0, 0, count] as const] },
+    });
+    // Listed 2 of 2: all there.
+    expect(securityMapFlaggedFeedLeavesOut(withFlagged(2))).toBe(false);
+    expect(securityMapFlaggedListWords(withFlagged(2), 1, false)).toBeNull();
+    // Entries fell past the cap of the kept list.
+    expect(securityMapFlaggedListWords(withFlagged(2), 1, true)).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedMore,
+    );
+    // Listed 2 of 3: the newest only.
+    expect(securityMapFlaggedFeedLeavesOut(withFlagged(3))).toBe(true);
+    expect(securityMapFlaggedListWords(withFlagged(3), 1, false)).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedMore,
+    );
+    // None listed, yet flagged events of the shown kinds: never "Nothing was flagged".
+    expect(securityMapFlaggedListWords(withFlagged(3, []), 0, false)).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedNoneShown,
+    );
+    expect(securityMapFlaggedListWords(withFlagged(0, []), 0, false)).toBe(
+      SECURITY_MAP_WORDS.flaggedFeedEmpty,
+    );
+    // The whole window not read: could not check, or only the polls' entries.
+    expect(securityMapFlaggedListWords(null, 0, false)).toBe('Could not check.');
+    expect(securityMapFlaggedListWords(null, 2, false)).toBe(SECURITY_MAP_WORDS.flaggedFeedUnread);
+    expect(securityMapFlaggedFeedLeavesOut(null)).toBe(false);
+  });
+
+  it("an entry's identity is its minute, kind, outcome, reason, source, place and organization", () => {
+    const [a] = whole({ feed: [entry()] }).feed;
+    const [b] = whole({
+      feed: [entry({ events: 99, at_least: true, organization_name: 'Other' })],
+    }).feed;
+    const [c] = whole({ feed: [entry({ city: 'Example Harbour' })] }).feed;
+    expect(securityMapFeedRowKey(a!)).toBe(securityMapFeedRowKey(b!));
+    expect(securityMapFeedRowKey(a!)).not.toBe(securityMapFeedRowKey(c!));
   });
 });
 
