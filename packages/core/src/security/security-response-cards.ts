@@ -486,7 +486,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
       'A member signed in from a country they had not signed in from before. It is often a trip or a phone on a mobile network, and it can also be someone else using their password.',
     alreadyDid: [
       'Flagged, not blocked: the sign-in itself went ahead.',
-      'The member is normally emailed about it, with a This was not me button that ends every session of the account.',
+      'The member is normally emailed about it, with a "This was not me" button that ends every session of the account.',
       "The organization's owners and admins can see it on its Sign-in alerts page.",
     ],
     doNow: [
@@ -499,7 +499,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
     ],
     ifGotThrough: [
       {
-        text: 'Ask the member to press This was not me, in the alert email or on their Active sessions page. It ends every session of the account at once.',
+        text: 'Ask the member to press "This was not me", in the alert email or on their Active sessions page. It ends every session of the account at once.',
       },
       { step: 'stop-access', lead: 'If you cannot reach them:' },
       { step: 'send-reset' },
@@ -514,7 +514,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
     title: 'A member said a sign-in was not them',
     reasons: ['sign_in_not_me'],
     whatThisIs:
-      'A member pressed This was not me on a sign-in alert. Someone else may have used their password.',
+      'A member pressed "This was not me" on a sign-in alert. Someone else may have used their password.',
     alreadyDid: [
       'Done: every session of that account was ended.',
       "The alert's new device or new country is forgotten, so the next sign-in from it raises a new alert.",
@@ -762,7 +762,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
     title: 'Too many requests to a sign-in alert link',
     reasons: ['sign_in_alert_paused'],
     whatThisIs:
-      "A source sent too many requests to the page a sign-in alert's This was not me button opens. The page held the extra requests back.",
+      'A source sent too many requests to the page a sign-in alert\'s "This was not me" button opens. The page held the extra requests back.',
     alreadyDid: [
       'Blocked: the extra requests were refused.',
       "The button works once for each alert, so pressing it again cannot end the account's sessions again and again.",
