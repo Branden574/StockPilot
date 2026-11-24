@@ -306,6 +306,9 @@ vi.mock('@/server/services/context', async () => {
 import { revalidatePath, revalidateTag } from 'next/cache';
 
 import { audit } from '@/server/services/audit';
+import { recordSecurityEvent } from '@/server/security/events';
+import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
+import { expectOneRefusal, HTML_PAGE, PNG_WITH_ARCHIVE, TINY_PNG } from '@/test/upload-fixtures';
 import {
   ACCOUNT_DELETE_LAST_OWNER_COPY,
   ACCOUNT_DELETE_RETRY_COPY,
@@ -413,6 +416,8 @@ describe('setAvatarUrlAction', () => {
       },
       'user_profiles.update': { data: null, error: null },
     });
+    // Part 6: the avatar's finalize check reads the object the URL names.
+    fetchObjectPrefixMock.mockImplementation(async () => ({ prefix: pngBytes(), totalSize: 26 }));
   });
 
   it('persists null to clear the avatar', async () => {
@@ -2269,5 +2274,108 @@ describe('deleteOwnAccountAction', () => {
       if (!result.ok) expect(result.error.message).toBe(ACCOUNT_DELETE_SIGNED_OUT_COPY);
       expect(revokeAllSessionsForUserMock).toHaveBeenCalledWith('user-1');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security invariant (part 6, stage 6a): the avatar and the organization
+// logo are finalized through the one upload check. Both buckets are PUBLIC,
+// so a refused object is removed and its URL is never saved; the person reads
+// a plain sentence; exactly one malware / blocked event is recorded in the
+// organization, with no path. The avatar had no byte check at all before.
+// Tiny made-up files only (test/upload-fixtures.ts).
+// ---------------------------------------------------------------------------
+describe('avatar and logo finalize: the upload check (part 6)', () => {
+  const record = vi.mocked(recordSecurityEvent);
+  const objects: Record<string, Uint8Array | null> = {};
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionState.role = 'admin';
+    for (const k of Object.keys(objects)) delete objects[k];
+    record.mockImplementation(async () => undefined);
+    fetchObjectPrefixMock.mockImplementation(async (_bucket: unknown, path: string) => {
+      const body = objects[path];
+      return body ? { prefix: body, totalSize: body.byteLength } : null;
+    });
+    logoStorage.remove.mockImplementation(async () => ({ data: null, error: null }));
+    stubHolder.stub = makeSupabaseStub({
+      'user_profiles.select': { data: [{ avatar_url: null }], error: null },
+      'user_profiles.update': { data: null, error: null },
+      'organizations.select': { data: [{ logo_url: null }], error: null },
+      'organizations.update': { data: { id: 'org-1' }, error: null },
+    });
+  });
+
+  const saved = (table: 'user_profiles' | 'organizations') =>
+    stubHolder.stub!.chainArgs.has(`${table}.update`);
+
+  it('a clean avatar is saved as before, nothing removed, nothing recorded', async () => {
+    objects['user-1/a1.png'] = TINY_PNG;
+    const result = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}a1.png` });
+    expect(result.ok).toBe(true);
+    expect(saved('user_profiles')).toBe(true);
+    expect(avatarStorage.remove).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a web page called a picture', HTML_PAGE, 'upload_wrong_type', 'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.'],
+    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file', THREAT_MESSAGES.appended_payload],
+  ])('an avatar that is %s: removed, never saved, a plain sentence, one event', async (_what, body, reason, sentence) => {
+    objects['user-1/a2.png'] = body;
+    const result = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}a2.png` });
+    expect(result).toEqual(err('validation_error', sentence));
+    expect(avatarStorage.remove).toHaveBeenCalledWith(['user-1/a2.png']);
+    expect(saved('user_profiles')).toBe(false);
+    expectOneRefusal(record, { reason, organizationId: 'org-1' }, ['a2.png', 'user-avatars']);
+  });
+
+  it('an avatar never uploaded: refused, nothing removed, nothing recorded', async () => {
+    const result = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}gone.png` });
+    expect(result).toEqual(err('validation_error', 'That picture could not be read. Try uploading it again.'));
+    expect(avatarStorage.remove).not.toHaveBeenCalled();
+    expect(saved('user_profiles')).toBe(false);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it.each(['a.png/../../item-images/victim/x.jpg', 'sub/folder/a.png', '%2e%2e/x.png'])(
+    'an avatar key %s is shape-refused before any storage call',
+    async (tail) => {
+      const result = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}${tail}` });
+      expect(result.ok).toBe(false);
+      expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+      expect(saved('user_profiles')).toBe(false);
+    },
+  );
+
+  it.each([
+    ['a web page called a picture', HTML_PAGE, 'upload_wrong_type'],
+    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file'],
+  ])('a logo that is %s: removed, never saved, one event', async (_what, body, reason) => {
+    objects['org-1/l1.png'] = body;
+    const result = await setOrgLogoUrlAction({
+      url: 'https://supa.example.com/storage/v1/object/public/org-logos/org-1/l1.png',
+    });
+    expect(result.ok).toBe(false);
+    expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/l1.png']);
+    expect(saved('organizations')).toBe(false);
+    expectOneRefusal(record, { reason, organizationId: 'org-1' }, ['l1.png', 'org-logos']);
+  });
+
+  it('a recorder that fails: the avatar and the logo are still refused and removed', async () => {
+    record.mockRejectedValue(new Error('recorder down'));
+    objects['user-1/a3.png'] = HTML_PAGE;
+    objects['org-1/l2.png'] = HTML_PAGE;
+    expect((await setAvatarUrlAction({ url: `${AVATAR_PREFIX}a3.png` })).ok).toBe(false);
+    expect(
+      (await setOrgLogoUrlAction({
+        url: 'https://supa.example.com/storage/v1/object/public/org-logos/org-1/l2.png',
+      })).ok,
+    ).toBe(false);
+    expect(avatarStorage.remove).toHaveBeenCalledWith(['user-1/a3.png']);
+    expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/l2.png']);
+    expect(saved('user_profiles')).toBe(false);
+    expect(saved('organizations')).toBe(false);
   });
 });

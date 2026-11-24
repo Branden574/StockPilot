@@ -10,12 +10,13 @@ import { rethrowControlFlow } from '@/lib/control-flow';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { DECODE_MAX_INPUT_PIXELS, readImageHeader } from '@/lib/image-decode';
-import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
-import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
-import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
+import { SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS } from '@/lib/image-signature';
+import { isValidStoragePath, orgLogoPathShape, userAvatarPathShape } from '@/lib/storage-path';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { uploadKindsForMimes } from '@/lib/upload-inspect';
+import { checkStoredUpload } from '@/server/security/upload-checks';
 import {
   ACCOUNT_DELETE_BLOCKED_COPY,
   ACCOUNT_DELETE_LAST_OWNER_COPY,
@@ -258,6 +259,26 @@ export async function setAvatarUrlAction(input: {
       if (!candidate.startsWith(prefix)) {
         return err('validation_error', 'Avatar URL must point at your own avatar in the StockPilot storage bucket.');
       }
+      // Part 6: the avatar's finalize check. user-avatars is a PUBLIC bucket
+      // whose allowed_mime_types (0046) only read the Content-Type the browser
+      // sent, so until now nothing had looked at the bytes this URL names.
+      // The key is shape-checked first (the prefix check above is only a
+      // prefix: the HI-8 rule), then the one upload check reads the object;
+      // a refusal removes it, records a security event in this organization
+      // and answers a plain sentence, and the URL is never saved.
+      const objectPath = avatarStorageKey(candidate);
+      if (!objectPath || !isValidStoragePath(objectPath, userAvatarPathShape(ctx.userId))) {
+        return err('validation_error', 'Avatar URL must point at your own avatar in the StockPilot storage bucket.');
+      }
+      const checked = await checkStoredUpload(createAdminClient().storage.from('user-avatars'), objectPath, {
+        surface: 'avatar',
+        accept: uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['user-avatars']),
+        organizationId: ctx.organizationId,
+        removeOnRefusal: [objectPath],
+        unreadableMessage: 'That picture could not be read. Try uploading it again.',
+        wrongTypeMessage: 'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
+      });
+      if (!checked.ok) return err('validation_error', checked.message);
     }
 
     // S2.6: drop the ?t= cache-buster before persisting. revalidatePath
@@ -388,19 +409,21 @@ export async function setOrgLogoUrlAction(input: {
           'Logo URL must point at your organization’s logo in the StockPilot storage bucket.',
         );
       }
+      //
+      // Part 6: the sniff is the one upload check's, which also reads the
+      // whole logo (only when the first look was not already all of it) for
+      // a file hidden after the picture, removes a refused object, and
+      // records the refusal as a security event in this organization.
       const logos = createAdminClient().storage.from('org-logos');
-      const head = await fetchObjectPrefix(logos, objectPath);
-      if (!head) {
-        return err('validation_error', 'That logo upload could not be read. Try uploading again.');
-      }
-      const sniffed = sniffImage(head.prefix);
-      if (!sniffed || !isSniffedKindAllowedInBucket(sniffed.kind, 'org-logos')) {
-        await logos.remove([objectPath]);
-        return err(
-          'validation_error',
-          'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
-        );
-      }
+      const checked = await checkStoredUpload(logos, objectPath, {
+        surface: 'org_logo',
+        accept: uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['org-logos']),
+        organizationId: ctx.organizationId,
+        removeOnRefusal: [objectPath],
+        unreadableMessage: 'That logo upload could not be read. Try uploading again.',
+        wrongTypeMessage: 'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
+      });
+      if (!checked.ok) return err('validation_error', checked.message);
       // S45: the branded PDFs draw a logo through the capped image decoder
       // (lib/image-decode.ts), which refuses a PNG, JPEG or WebP of more
       // pixels than DECODE_MAX_INPUT_PIXELS (50 million), so such a logo
@@ -409,13 +432,13 @@ export async function setOrgLogoUrlAction(input: {
       // An AVIF states its size in a box tree that is not read here; the PDF
       // side holds it to its own cap. This is advice to the uploader, not the
       // defence: the PDF side refuses the same files whenever they are read.
-      if (sniffed.kind === 'png' || sniffed.kind === 'jpeg' || sniffed.kind === 'webp') {
-        const size = sniffed.kind === 'webp' ? readImageHeader(head.prefix) : sniffed;
+      if (checked.kind === 'png' || checked.kind === 'jpeg' || checked.kind === 'webp') {
+        const size = checked.kind === 'webp' ? readImageHeader(checked.bytes) : checked;
         if (
           size &&
           size.width !== null &&
           size.height !== null &&
-          size.width * size.height > DECODE_MAX_INPUT_PIXELS[sniffed.kind]
+          size.width * size.height > DECODE_MAX_INPUT_PIXELS[checked.kind]
         ) {
           await logos.remove([objectPath]);
           return err(
