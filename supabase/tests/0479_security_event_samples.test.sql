@@ -1465,14 +1465,14 @@ create temporary table edge_rec as
     pg_temp.el('wordpress', '/example.edge/new-2/xmlrpc.php', 'POST', null, 'US', pg_temp.h(-5) + interval '50 minutes', 3))) as a;
 select is(
   (select a from edge_rec)
-  || jsonb_build_object('count', (select event_count from public.security_event_samples
+  || jsonb_build_object('count', (select jsonb_agg(event_count) from public.security_event_samples
                                    where hour = pg_temp.h(-5) and target = '(more than could be listed)')),
-  '{"stored": 0, "overflowed": 2, "skipped": 0, "not_read": 0, "not_a_list": false, "count": 2000000000}'::jsonb,
+  '{"stored": 0, "overflowed": 2, "skipped": 0, "not_read": 0, "not_a_list": false, "count": [2000000000]}'::jsonb,
   '0479/123: an overflow row''s count stops at two billion too, and the call that reaches it does not raise');
 select is(
-  (select array[pg_temp.mins(to_jsonb(first_seen_at) #>> '{}'), pg_temp.mins(to_jsonb(last_seen_at) #>> '{}')]
+  (select array_agg(pg_temp.mins(to_jsonb(first_seen_at) #>> '{}') || '/' || pg_temp.mins(to_jsonb(last_seen_at) #>> '{}'))
      from public.security_event_samples where hour = pg_temp.h(-5) and target = '(more than could be listed)'),
-  array['-290', '-250'],
+  array['-290/-250'],
   '0479/124: and its first time moves back to the earlier request and its last time on to the later one');
 -- at_ms at the edges it is taken at: 25 hours 59 minutes back, 50 seconds ahead.
 create temporary table edge_at as
