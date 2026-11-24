@@ -45,8 +45,11 @@ import {
  * finds a call still out leaves the samples for the next one. A failed call
  * drops its batch, never retried:
  *   - 55P03 (the writer waited 2 s for its lock): dropped and counted;
- *   - the function missing (42883, PGRST202: the code shipped before the
- *     migration): dropped, said once per instance in the log, not per call;
+ *   - the function missing (42883, PGRST202): dropped, and said once per
+ *     instance, not per call: a log line and a report (tag
+ *     security.event_samples_missing, warning, the code and the row count
+ *     only). This code ships after migration 0479 is live, so a missing
+ *     writer means the migration was rolled back or something is wrong;
  *   - anything else: dropped, reported at most once per
  *     FAILURE_REPORT_INTERVAL_MS (tag security.event_samples_flush_failed,
  *     warning, the code and the row count only).
@@ -72,7 +75,7 @@ export const SAMPLE_FLUSH_CALL_TIMEOUT_MS = 3_000;
 export const SAMPLE_FAILURE_REPORT_INTERVAL_MS = 10 * 60_000;
 /** The tag of the count line. */
 export const SAMPLE_COUNT_LINE_TAG = 'security.event_samples';
-/** The tag of the one line an instance writes when the writer is missing. */
+/** The tag of the one line and the one report an instance makes when the writer is missing. */
 export const SAMPLE_MISSING_LINE_TAG = 'security.event_samples_missing';
 
 /** A reader of request headers: a Request's headers or `next/headers`' answer. */
@@ -331,10 +334,18 @@ async function sendBatch(batch: PendingSample[]): Promise<void> {
     }
     const code = codeOf(failure);
     if (code !== null && MISSING_FUNCTION_CODES.has(code)) {
-      // Before the migration: drop, and say so once per instance.
+      // The writer is not in the database: drop, and say so once per instance.
       if (!state.saidMissing) {
         state.saidMissing = true;
-        console.warn(JSON.stringify({ tag: SAMPLE_MISSING_LINE_TAG, rows: batch.length }));
+        console.warn(JSON.stringify({ tag: SAMPLE_MISSING_LINE_TAG, code, rows: batch.length }));
+        void reportError(
+          new Error('Security event samples could not be stored: the writer is missing'),
+          {
+            tag: SAMPLE_MISSING_LINE_TAG,
+            level: 'warning',
+            extra: { code, rows: batch.length },
+          },
+        );
       }
       return;
     }

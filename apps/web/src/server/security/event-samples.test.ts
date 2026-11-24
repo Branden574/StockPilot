@@ -320,7 +320,7 @@ describe('the flush', () => {
   });
 
   it.each(['42883', 'PGRST202'])(
-    'the writer missing (%s): dropped, said once per instance, not per call',
+    'the writer missing (%s): dropped, said once per instance (a line and a warning report), not per call',
     async (code) => {
       h.rpc.mockResolvedValue({ data: null, error: { code, message: 'function not found' } });
       for (let call = 0; call < 3; call++) {
@@ -331,11 +331,36 @@ describe('the flush', () => {
       const missing = warn.mock.calls
         .map((c) => String(c[0]))
         .filter((l) => l.includes('security.event_samples_missing'));
-      expect(missing).toEqual([JSON.stringify({ tag: 'security.event_samples_missing', rows: 1 })]);
+      expect(missing).toEqual([
+        JSON.stringify({ tag: 'security.event_samples_missing', code, rows: 1 }),
+      ]);
       expect(countLines()).toEqual([]);
-      expect(h.reportError).not.toHaveBeenCalled();
+      expect(h.reportError).toHaveBeenCalledTimes(1);
+      expect(h.reportError).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'security.event_samples_missing',
+        level: 'warning',
+        extra: { code, rows: 1 },
+      });
+      // Nothing of a sample in the report.
+      expect(JSON.stringify(h.reportError.mock.calls)).not.toMatch(/\.env|NL|GET|env_file/);
     },
   );
+
+  it('the writer missing is said again by another instance, never twice by one', async () => {
+    h.rpc.mockResolvedValue({
+      data: null,
+      error: { code: '42883', message: 'function not found' },
+    });
+    samples.recordSecurityEventSample(probe(), from());
+    await samples.flushSecurityEventSamples();
+    // A new instance starts with no state (here: the reset a new process has).
+    samples.__resetSecurityEventSamplesForTests();
+    samples.recordSecurityEventSample(probe(), from());
+    await samples.flushSecurityEventSamples();
+    samples.recordSecurityEventSample(probe(), from());
+    await samples.flushSecurityEventSamples();
+    expect(h.reportError).toHaveBeenCalledTimes(2);
+  });
 
   it('any other failure: dropped, counted, reported once per ten minutes with the code and the row count only', async () => {
     h.rpc.mockResolvedValue({ data: null, error: { code: '57014', message: 'statement timeout' } });
@@ -425,5 +450,23 @@ describe('the count line', () => {
     });
     samples.recordSecurityEventSample(probe(), from());
     await expect(samples.flushSecurityEventSamples()).resolves.toBeUndefined();
+  });
+});
+
+describe('two copies of the recorder in one server instance (a build can bundle it twice)', () => {
+  it('share one buffer, one flush and one call', async () => {
+    vi.resetModules();
+    const first = await vi.importActual<Samples>('./event-samples');
+    vi.resetModules();
+    const second = await vi.importActual<Samples>('./event-samples');
+    expect(first.recordSecurityEventSample).not.toBe(second.recordSecurityEventSample);
+    first.recordSecurityEventSample(probe({ target: '/a/.env' }), from());
+    second.recordSecurityEventSample(probe({ target: '/b/.env' }), from());
+    expect(first.__pendingSecurityEventSamplesForTests()).toHaveLength(2);
+    expect(h.keepAlive).toHaveBeenCalledTimes(1);
+    await second.flushSecurityEventSamples();
+    expect(h.rpc).toHaveBeenCalledTimes(1);
+    expect(sent()).toHaveLength(2);
+    expect(first.__pendingSecurityEventSamplesForTests()).toEqual([]);
   });
 });
