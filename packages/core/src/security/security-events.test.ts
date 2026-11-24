@@ -12,6 +12,7 @@ import {
   securityBotReason,
   securityConsoleCategoryLabel,
   securityEventCategoryLabel,
+  securityMemberCategoryLabel,
   securityEventOutcomeLabel,
   securityEventPlaceLabel,
   securityEventReasonLabel,
@@ -232,6 +233,27 @@ describe('security events: a value this build does not know still renders', () =
     for (const c of [...SECURITY_EVENT_CATEGORIES.filter((c) => c !== 'phishing'), 'ransomware']) {
       expect(securityConsoleCategoryLabel(c), c).toBe(securityEventCategoryLabel(c));
       expect(securityConsoleCategoryLabel(c, 'kind'), c).toBe(securityEventCategoryLabel(c));
+    }
+  });
+});
+
+describe("security events: an organization's own pages name the malware kind \"Refused file\" (part 6)", () => {
+  it('a member reads "Refused file" and "Refused files"; the console and the shared label keep "Malware"', () => {
+    expect(securityMemberCategoryLabel('malware')).toBe('Refused file');
+    expect(securityMemberCategoryLabel('malware', 'kind')).toBe('Refused files');
+    expect(securityConsoleCategoryLabel('malware')).toBe('Malware');
+    expect(securityConsoleCategoryLabel('malware', 'kind')).toBe('Malware');
+    expect(securityEventCategoryLabel('malware')).toBe('Malware');
+    for (const form of ['one', 'kind'] as const) {
+      const member = SECURITY_EVENT_CATEGORIES.map((c) => securityMemberCategoryLabel(c, form));
+      expect(member, form).not.toContain('Malware');
+      const console = SECURITY_EVENT_CATEGORIES.map((c) => securityConsoleCategoryLabel(c, form));
+      expect(console.join(' '), form).not.toMatch(/Refused file/);
+    }
+    // Every other category, and an unknown one, as the shared label says it (Phishing stays).
+    for (const c of [...SECURITY_EVENT_CATEGORIES.filter((c) => c !== 'malware'), 'ransomware']) {
+      expect(securityMemberCategoryLabel(c), c).toBe(securityEventCategoryLabel(c));
+      expect(securityMemberCategoryLabel(c, 'kind'), c).toBe(securityEventCategoryLabel(c));
     }
   });
 });

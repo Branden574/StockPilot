@@ -249,6 +249,24 @@ export function securityConsoleCategoryLabel(
   return securityEventCategoryLabel(category);
 }
 
+/**
+ * AN ORGANIZATION'S OWN PAGES' name for a category (part 6; the coordinator,
+ * 2026-11-24), the console's rule the other way round. The category whose code
+ * is malware holds files the app's own upload checks refused or could not
+ * check. Those checks are not an antivirus and a renamed file is not malware,
+ * so a member reads "Refused file" for one entry's kind and "Refused files"
+ * for the kind as a whole; every other category is securityEventCategoryLabel's.
+ * The platform console keeps "Malware" (securityConsoleCategoryLabel).
+ * console-category-label.guard.test.ts in the web pins who may call which.
+ */
+export function securityMemberCategoryLabel(
+  category: unknown,
+  form: 'one' | 'kind' = 'one',
+): string {
+  if (category === 'malware') return form === 'kind' ? 'Refused files' : 'Refused file';
+  return securityEventCategoryLabel(category);
+}
+
 export function securityEventOutcomeLabel(outcome: unknown): string {
   return own(OUTCOME_LABELS, outcome) ?? 'Other';
 }
