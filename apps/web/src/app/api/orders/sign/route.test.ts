@@ -8,6 +8,7 @@ import {
   type MockCall,
   type QueryResult,
 } from '@/test/supabase-mock';
+import { expectOneRefusal, HTML_PAGE, PNG_WITH_ARCHIVE, TINY_PNG } from '@/test/upload-fixtures';
 
 /**
  * SP-020 — the QR/digital signature path must reach INTERNAL requesters.
@@ -95,7 +96,8 @@ import { POST } from './route';
 
 const TOKEN = 'a'.repeat(64);
 const SIGNATURE =
-  'data:image/png;base64,' + 'A'.repeat(80);
+  // A real (tiny, made-up) PNG: the upload check (part 6) reads the picture.
+  'data:image/png;base64,' + Buffer.from(TINY_PNG).toString('base64');
 
 /** Internal self-submitted order: user id set, email/name columns NULL. */
 const INTERNAL_ORDER = {
@@ -1050,5 +1052,67 @@ describe('POST /api/orders/sign — a server without the service-role key (S31)'
       tag: 'orders.sign.admin_client',
       level: 'warning',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security invariant (part 6, stage 6a): the signature picture is decoded and
+// read by the one upload check before it is recorded. The schema pins only
+// the data URL's shape; the base64 must hold a PNG or a JPEG with nothing
+// hidden after it. A refusal is a 400 with a plain sentence, nothing signed,
+// and exactly one malware / blocked event in the ORDER's organization, with
+// no token and no signer. A real signature is recorded byte for byte.
+// ---------------------------------------------------------------------------
+describe('POST /api/orders/sign — the upload check (part 6)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+  const record = async () => vi.mocked((await import('@/server/security/events')).recordSecurityEvent);
+  const signWith = (bytes: Uint8Array) =>
+    new Request('https://test.local/api/orders/sign', {
+      method: 'POST',
+      body: JSON.stringify({
+        token: TOKEN,
+        signerName: 'Bob Signer',
+        signerEmail: 'bob@site.org',
+        signatureDataUrl: 'data:image/png;base64,' + Buffer.from(bytes).toString('base64'),
+      }),
+    }) as never;
+
+  it('a real signature is recorded as sent, and nothing is recorded as a security event', async () => {
+    const admin = buildAdmin({ status: 'completed', priorFulfilled: 0, totalRequested: 1, totalFulfilled: 1 });
+    const rpc = vi.spyOn(admin, 'rpc');
+    adminHolder.client = admin;
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+    const confirm = rpc.mock.calls.find((c) => c[0] === 'confirm_order_signature');
+    expect((confirm?.[1] as { p_signature_data_url?: string }).p_signature_data_url).toBe(SIGNATURE);
+    expect(await record()).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a web page under a PNG label', HTML_PAGE, 'upload_wrong_type'],
+    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file'],
+  ])('%s: 400, nothing signed, one event in the order\'s organization', async (_what, bytes, reason) => {
+    const admin = buildAdmin({ status: 'completed', priorFulfilled: 0, totalRequested: 1, totalFulfilled: 1 });
+    const rpc = vi.spyOn(admin, 'rpc');
+    adminHolder.client = admin;
+    const res = await POST(signWith(bytes));
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { ok: boolean; error: { code: string; message: string } };
+    expect(body.ok).toBe(false);
+    expect(body.error.code).toBe('validation_error');
+    expect(body.error.message).toMatch(/^[A-Z][^<>{}]+\.$/);
+    expect(rpc).not.toHaveBeenCalled();
+    expectOneRefusal(await record(), { reason, organizationId: 'org-1' }, [TOKEN, 'Bob Signer', 'bob@site.org']);
+  });
+
+  it('a recorder that fails: still refused, nothing signed', async () => {
+    (await record()).mockRejectedValueOnce(new Error('recorder down'));
+    const admin = buildAdmin({ status: 'completed', priorFulfilled: 0, totalRequested: 1, totalFulfilled: 1 });
+    const rpc = vi.spyOn(admin, 'rpc');
+    adminHolder.client = admin;
+    expect((await POST(signWith(HTML_PAGE))).status).toBe(400);
+    expect(rpc).not.toHaveBeenCalled();
   });
 });

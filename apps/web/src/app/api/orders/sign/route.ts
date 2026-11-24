@@ -15,6 +15,7 @@ import { sha256Hex } from '@/lib/token-hash';
 import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import { NOT_SET_UP_MESSAGE } from '@/server/lib/action-error-result';
 import { answerModuleState } from '@/server/lib/api-error-response';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
@@ -287,6 +288,32 @@ export async function POST(req: NextRequest) {
     );
     if (!memberLimit.allowed) return rateLimited();
     memberUserId = ctx.userId;
+  }
+
+  // Part 6: the signature picture, decoded and read by the one upload check
+  // before it is recorded. The schema only pins the data URL's SHAPE (a PNG
+  // or JPEG label and base64 text); nothing had read what the base64 holds,
+  // and the stored URL is later drawn on the order, its PDF and the phone. It
+  // must be a PNG or a JPEG (whatever its label says: both clients send a
+  // PNG) with nothing hidden after the picture. After the token match and
+  // its limits, so only someone who may sign this order reaches it; a
+  // refusal is recorded as a security event in the order's organization
+  // and nothing is signed.
+  const signatureBase64 = parsed.data.signatureDataUrl.slice(
+    parsed.data.signatureDataUrl.indexOf(',') + 1,
+  );
+  const signature = await checkUploadBytes(new Uint8Array(Buffer.from(signatureBase64, 'base64')), {
+    surface: 'order_signature',
+    accept: ['png', 'jpeg'],
+    organizationId: order.organization_id,
+    headers: req.headers,
+    wrongTypeMessage: 'The signature could not be read. Clear it, sign again and send.',
+  });
+  if (!signature.ok) {
+    return NextResponse.json(
+      { ok: false, error: { code: 'validation_error', message: signature.message } },
+      { status: 400 },
+    );
   }
 
   // Before the hand-over: how much had ALREADY shipped. >0 means a prior batch
