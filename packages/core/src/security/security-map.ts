@@ -554,8 +554,14 @@ export interface SecurityCategoryDetectors {
  * PHISHING IS HIDDEN, and showing it is this one line: `shown: true`. What
  * feeds it today is two stand-ins (a member's own sign-in from a new country,
  * and a member saying a sign-in was not them), both flagged and not blocked;
- * the owner has not yet said whether those count as "a real detector". Nothing
- * records Malware, so it cannot be shown whatever `shown` says.
+ * the owner has not yet said whether those count as "a real detector".
+ *
+ * MALWARE IS SHOWN since part 6 (stage 6a): the upload paths through the web
+ * server and its finalize steps call the app's own file checks, and a refused
+ * file is recorded as malware / blocked (apps/web server/security/
+ * upload-checks.ts; upload-checks.registry.guard.test.ts pins that each of
+ * its reasons has that producer). Those checks are not an antivirus; the
+ * words below say what feeds the kind, nothing more.
  *
  * A passkey refusal is not listed: every passkey switch is off, so none can
  * be recorded. When the switches go on, its words are added here.
@@ -587,7 +593,10 @@ export const SECURITY_CATEGORIES_WITH_DETECTOR: Readonly<
     shown: false,
     firesNow: ['a sign-in from a new country', 'a member saying a sign-in was not them'],
   },
-  malware: { shown: false, firesNow: [] },
+  malware: {
+    shown: true,
+    firesNow: ['files refused by the upload checks'],
+  },
 };
 
 /** The categories the map draws, lists and counts in its legend, in the record's own order. */

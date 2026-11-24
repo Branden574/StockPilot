@@ -121,6 +121,19 @@ export const PASSKEY_SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, strin
   passkey_unexplained_sign_in: 'Passkey step passed without a passkey (found by the hourly check)',
 };
 
+/**
+ * The upload refusals the web records (part 6 of the security tools, apps/web
+ * server/security/upload-checks.ts): category malware, outcome blocked, one
+ * reason for each kind of verdict of the app's own file checks. Never a file
+ * name, a path or any of the file's bytes: a row has no column for one.
+ */
+export const UPLOAD_SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
+  upload_wrong_type: 'Upload refused: not the kind of file it said it was',
+  upload_active_content: 'Upload refused: a script, a macro or a program inside the file',
+  upload_hidden_file: 'Upload refused: another file hidden inside the file',
+  upload_could_not_check: 'Upload refused: the file could not be checked',
+};
+
 /** The reason codes this build writes, with the words admins read. */
 export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // Password guessing.
@@ -193,6 +206,8 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // buffer (the web server) could list one by one: counted, not itemised.
   over_minute_cap: 'More events than could be listed',
   over_buffer_cap: 'More events than could be listed',
+  // Malware: a file the app's own checks refused at upload (part 6).
+  ...UPLOAD_SECURITY_EVENT_REASON_LABELS,
 };
 
 /** The words for a reason this build does not know. */

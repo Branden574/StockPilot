@@ -72,6 +72,10 @@ describe('security events: the lists the database checks', () => {
       'too_many_forms_to_count',
       'over_minute_cap',
       'over_buffer_cap',
+      'upload_wrong_type',
+      'upload_active_content',
+      'upload_hidden_file',
+      'upload_could_not_check',
       ...SECURITY_PROBE_KINDS,
       ...SECURITY_BOT_FAMILIES.map(securityBotReason),
     ];
@@ -82,6 +86,23 @@ describe('security events: the lists the database checks', () => {
       expect(label, reason).not.toBe(SECURITY_EVENT_UNKNOWN_REASON_LABEL);
       expect(label.length, reason).toBeGreaterThan(5);
     }
+  });
+
+  it('names the plain words of the four upload refusals (part 6), each under malware', () => {
+    expect(securityEventReasonLabel('upload_wrong_type')).toBe(
+      'Upload refused: not the kind of file it said it was',
+    );
+    expect(securityEventReasonLabel('upload_active_content')).toBe(
+      'Upload refused: a script, a macro or a program inside the file',
+    );
+    expect(securityEventReasonLabel('upload_hidden_file')).toBe(
+      'Upload refused: another file hidden inside the file',
+    );
+    expect(securityEventReasonLabel('upload_could_not_check')).toBe(
+      'Upload refused: the file could not be checked',
+    );
+    expect(securityEventCategoryLabel('malware')).toBe('Malware');
+    expect(securityConsoleCategoryLabel('malware')).toBe('Malware');
   });
 
   it('the two overflow rows read the same', () => {

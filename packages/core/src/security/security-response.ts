@@ -7,9 +7,10 @@
  * carry the cards in its first load.
  *
  * Every reason code the record holds today (SECURITY_EVENT_REASON_LABELS)
- * maps to exactly one card, and every card answers at least one reason
- * (security-response.test.ts pins both). A reason this build does not know
- * has no card: the page shows no control for it rather than a wrong card.
+ * maps to exactly one card, and every card answers at least one reason or is
+ * the general card of a kind (security-response.test.ts pins both). A reason
+ * this build does not know has no card: the page shows no control for it
+ * rather than a wrong card.
  */
 
 import type { SecurityEventCategory } from './security-events';
@@ -40,6 +41,9 @@ export const SECURITY_RESPONSE_CARD_IDS = [
   'public-api-webhook-paused',
   'password-reset-paused',
   'sign-in-alert-link-paused',
+  'upload-checks',
+  'upload-refused',
+  'upload-not-checked',
 ] as const;
 export type SecurityResponseCardId = (typeof SECURITY_RESPONSE_CARD_IDS)[number];
 
@@ -88,6 +92,11 @@ export const SECURITY_RESPONSE_CARD_LEVELS: Readonly<
   'public-api-webhook-paused': 'stopped',
   'password-reset-paused': 'stopped',
   'sign-in-alert-link-paused': 'stopped',
+  // Part 6. The kind's general card asks for a look at the entries of the kind;
+  // a file the checks could not finish is a look, never "nothing to do".
+  'upload-checks': 'look_today',
+  'upload-refused': 'stopped',
+  'upload-not-checked': 'look_today',
 };
 
 /** Every reason code of the record, with the card that answers it. */
@@ -138,6 +147,10 @@ export const SECURITY_RESPONSE_CARD_OF_REASON: Readonly<Record<string, SecurityR
   webhook_paused: 'public-api-webhook-paused',
   password_reset_paused: 'password-reset-paused',
   sign_in_alert_paused: 'sign-in-alert-link-paused',
+  upload_wrong_type: 'upload-refused',
+  upload_active_content: 'upload-refused',
+  upload_hidden_file: 'upload-refused',
+  upload_could_not_check: 'upload-not-checked',
 };
 
 /**
@@ -150,7 +163,10 @@ export const SECURITY_RESPONSE_CARD_OF_REASON: Readonly<Record<string, SecurityR
  *   - the sign-in alerts' kind: a sign-in from a new country (the map's
  *     legend does not list that kind: it is opened from the legend's grey
  *     "Flagged sign-in alert" item, SECURITY_RESPONSE_SIGN_IN_ALERT_CARD);
- *   - Malware: none (nothing records it).
+ *   - Malware (part 6): a card of its own that describes the kind, a file
+ *     the upload checks refused or could not check, and claims no outcome:
+ *     what was done is on each reason's card (upload-refused,
+ *     upload-not-checked). It answers no reason of its own.
  */
 export const SECURITY_RESPONSE_GENERAL_CARD: Readonly<
   Record<SecurityEventCategory, SecurityResponseCardId | null>
@@ -159,7 +175,7 @@ export const SECURITY_RESPONSE_GENERAL_CARD: Readonly<
   exploit: 'probe-scan',
   bots: 'public-forms-paused',
   phishing: 'sign-in-new-country',
-  malware: null,
+  malware: 'upload-checks',
 };
 
 /**
