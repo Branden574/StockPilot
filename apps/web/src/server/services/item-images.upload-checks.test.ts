@@ -69,7 +69,7 @@ function world(objects: Record<string, Uint8Array | null>, window = 4096, sizes:
       error: null,
     },
   });
-  const remove = vi.fn(async () => ({ data: null, error: null }));
+  const remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
   stub.client.storage.from = vi.fn(() => ({ remove, createSignedUrl: vi.fn() })) as never;
   fetchObjectWindowMock.mockImplementation(
     async (_bucket: unknown, path: string, _fetch: unknown, limit?: { maxTotalBytes?: number }) => {
@@ -239,7 +239,8 @@ describe('item photo finalize', () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, failed: true });
     const { stub, svc, remove } = world({ [MASTER]: TINY_JPEG });
     await expect(svc.record(ITEM, MASTER, true)).rejects.toMatchObject({ code: 'conflict' });
-    expect(checkRateLimitMock).toHaveBeenCalledWith('item-images:record:user-test', 60, 60_000, 'closed');
+    // 240 a minute (review round 2, F5): a large pick in the gallery uploader keeps its tail.
+    expect(checkRateLimitMock).toHaveBeenCalledWith('item-images:record:user-test', 240, 60_000, 'closed');
     expect(fetchObjectWindowMock).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
     expect(stub.chains.has('item_images.insert')).toBe(false);

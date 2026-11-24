@@ -26,8 +26,14 @@ import { SIGN_PATHS_PER_CALL, withStorageSignSlot } from './lib/storage-sign-lim
 /** An item photo that could not be read at its finalize (never uploaded, or gone). */
 const ITEM_PHOTO_UNREADABLE_MESSAGE = 'This photo could not be read. Try uploading it again.';
 
-/** Photo finalizes per person per minute (part 6): generous for an item form or a batch. */
-const ITEM_PHOTO_RECORD_LIMIT = 60;
+/**
+ * Photo finalizes per person per minute (part 6). One pick in the gallery
+ * uploader sends one finalize for every photo it accepts, with no cap on how
+ * many (three at a time), and a size run on the item form sends one for every
+ * staged photo of every size: so the limit is set well above any pace a
+ * browser reaches, and only stops a loop.
+ */
+export const ITEM_PHOTO_RECORD_LIMIT = 240;
 
 /**
  * Long-lived signed URL per storage path. The signed URL itself is
