@@ -133,3 +133,4 @@ export * from './account/delete-account-copy';
 export * from './appearance';
 export * from './security/security-events';
 export * from './security/security-briefing';
+export * from './security/security-map';

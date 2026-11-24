@@ -59,13 +59,16 @@ const GATE = `${SESSION}#requireOrgContext`;
 const PLATFORM_GATES = [
   'lib/auth/platform-admin.ts#checkPlatformAdmin',
   'lib/auth/platform-admin.ts#currentUserIsPlatformAdmin',
+  // The console's own rule for a read the open console polls: aal2 outright,
+  // so stricter than the two above (platform-admin.console-read.test.ts).
+  'lib/auth/platform-admin.ts#checkPlatformConsoleRead',
 ];
 const PORTAL_GATE = 'server/services/portal.ts#resolvePortalContext';
 
 type Kind =
   /** Part of signing in: it must run on a session that has not entered its code. */
   | 'before-the-code'
-  /** The platform console: gated by checkPlatformAdmin or currentUserIsPlatformAdmin. */
+  /** The platform console: gated by checkPlatformAdmin, currentUserIsPlatformAdmin or checkPlatformConsoleRead. */
   | 'platform'
   /** The customer portal: asks resolvePortalContext() first, which applies the same rule. */
   | 'portal'
@@ -250,6 +253,11 @@ const REVIEWED: Record<string, Reviewed> = {
   'server/actions/platform/passkeys.ts#setPasskeysKillSwitchAction': {
     kind: 'platform',
     reason: 'Platform admins only, with a fresh step-up (checkPlatformAdmin requireStepUp).',
+  },
+  'server/actions/platform/security-map.ts#pollPlatformSecurityMapAction': {
+    kind: 'platform',
+    reason:
+      "The attack map's poll, a read: checkPlatformConsoleRead first, which is the console page's own rule (the verified allowlisted email and aal2 outright, with or without an authenticator on the account) and answers one fixed refusal.",
   },
   'server/actions/platform/permission-exceptions.ts#setOrderItemsAccessAction': {
     kind: 'platform',
@@ -552,6 +560,7 @@ describe('every Server Action is held to the step-up rule (docket S43c)', () => 
     const admin = REAL.abs('lib/auth/platform-admin.ts');
     expect(REAL.graph.hasExport(admin, 'checkPlatformAdmin')).toBe(true);
     expect(REAL.graph.hasExport(admin, 'currentUserIsPlatformAdmin')).toBe(true);
+    expect(REAL.graph.hasExport(admin, 'checkPlatformConsoleRead')).toBe(true);
     // The portal's funnel, which the 'portal' entries rely on, asks the rule
     // itself, and every action of the portal module is such an entry.
     const byUser = REAL.graph.reach([
@@ -592,7 +601,8 @@ describe('self-test: a planted violation of each rule is reported', () => {
     export const withContext = cache(async () => requireOrgContext());`;
   const PLATFORM_SRC = `
     export async function checkPlatformAdmin() { return { ok: true }; }
-    export async function currentUserIsPlatformAdmin() { return true; }`;
+    export async function currentUserIsPlatformAdmin() { return true; }
+    export async function checkPlatformConsoleRead() { return { ok: true }; }`;
   const PORTAL_SRC = `
     export async function resolvePortalContext() { return null; }`;
   const base = {

@@ -614,6 +614,14 @@ const REGISTRY: Record<string, Entry> = {
   'server/services/platform/security-briefing.ts::platform_security_briefing_members': RO(
     "Reads only: every organization's member counts.",
   ),
+  // The platform console's attack map (service role, behind the console's
+  // own gate: requirePlatformAdmin on the page, checkPlatformConsoleRead on
+  // the poll): one function that only reads, STABLE in its migration
+  // (platform_security_map). It counts the security record across every
+  // organization and none, and writes no row.
+  'server/services/platform/security-map.ts::platform_security_map': RO(
+    'Reads only: the security record by country and by time, for a window, across every organization.',
+  ),
   'server/services/platform/sessions.ts::admin_revoke_user_sessions': [
     'not_org_data',
     "The platform console signs a person out of every session; an account's sessions, not an organization's row.",
