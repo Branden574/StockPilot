@@ -47,6 +47,13 @@
 --      out of reach; a renamed supplier's name on the final; every today in
 --      the organization's zone at any hour (W behind UTC, Z ahead); each
 --      write's lock before its reads.
+--  11. More holes, in the reads, the reminders and names: due soon is 30
+--      days, not 31; only open items counted; closed items left out unless
+--      asked for; an act-as seat is not a current owner in either read; a
+--      due date before none; a deleted supplier's newest name; the current
+--      review, never the draft; a page of at most 500; no claim of an
+--      unknown kind; the email when there is no full name; a final's
+--      status alone refused by the guard.
 --
 -- Every vendor, person and organization below is made up. Namespace
 -- a0481000. Wrapped in begin/rollback: nothing leaks. Run via `supabase test
@@ -54,7 +61,7 @@
 
 begin;
 
-select plan(115);
+select plan(127);
 
 set local timezone = 'UTC';
 
@@ -135,6 +142,11 @@ end $f$;
 
 create function pg_temp.as_user(p_sub uuid, p_sql text, p_aal text default 'aal1')
 returns text language sql as $f$ select pg_temp.run_as('authenticated', p_sub, p_sql, p_aal) $f$;
+-- A function's json answer, or {"err": <the refusal>} when it refused: a refusal where an answer is
+-- expected fails its own test instead of stopping the file at the cast.
+create function pg_temp.j(p text) returns jsonb language sql as $f$
+  select case when p like 'ERR %' then jsonb_build_object('err', p) else p::jsonb end
+$f$;
 
 -- Runs p_sql as the table's owner and undoes it: 'ok', or the SQLSTATE and
 -- the constraint (or the message) that refused it.
@@ -846,13 +858,13 @@ select is(
 
 -- ── 6. Drafts, finishing, the register ──────────────────────────────────────
 select is(
-  (pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{"insurance": {"answer": "no", "note": "None on file."}}')::text$$,
-     :'orgA', :'supA1'))::jsonb ->> 'version'),
+  (pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{"insurance": {"answer": "no", "note": "None on file."}}')::text$$,
+     :'orgA', :'supA1'))) ->> 'version'),
   '1',
   '0481/55: an admin''s first draft for a supplier is version 1');
 select is(
-  (pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{"insurance": {"answer": "yes"}}')::text$$,
-     :'orgA', :'supA1'))::jsonb ->> 'version'),
+  (pg_temp.j(pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{"insurance": {"answer": "yes"}}')::text$$,
+     :'orgA', :'supA1'))) ->> 'version'),
   '1',
   '0481/56: a second save writes the same draft');
 select is(
@@ -884,9 +896,9 @@ select id as rev_a1_v1 from public.supplier_risk_reviews where supplier_id = :'s
 select is(
   (select (x.j - 'review_id' - 'next_review_on')::text || ' | ' || (x.j ->> 'review_id' = :'rev_a1_v1')::text
           || ' | ' || ((x.j ->> 'next_review_on')::date = (pg_temp.today(:'orgA') + interval '12 months')::date)::text
-     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+     from (select pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
              :'orgA', :'supA1', pg_temp.answers('staff', '{"insurance": "no", "hosting_known": "not_shown"}'),
-             pg_temp.items('staff', '{"insurance": "no", "hosting_known": "not_shown"}', :'staffA', pg_temp.today(:'orgA') + 10)))::jsonb j) x),
+             pg_temp.items('staff', '{"insurance": "no", "hosting_known": "not_shown"}', :'staffA', pg_temp.today(:'orgA') + 10)))) j) x),
   '{"items": 2, "result": "approve_with_conditions", "version": 1, "evidence": "adequate", "hard_stops": [], "residual_risk": "low", "starting_risk": "moderate", "computed_result": "approve_with_conditions", "override_result": null, "pending_hard_stops": [], "superseded_review_id": null} | true | true',
   '0481/60: finishing gives the rules'' answer, finishes the open draft in place, and sets the next review 12 months from the organization''s today');
 select is(
@@ -966,8 +978,8 @@ select is(
 select is(
   (select array[x.j ->> 'version', (x.j ->> 'superseded_review_id' = :'rev_a1_v1')::text, x.j ->> 'computed_result',
                 x.j ->> 'result', x.j ->> 'items', ((x.j ->> 'next_review_on')::date - pg_temp.today(:'orgA'))::text]
-     from (select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, %L::date, 'do_not_use', 'The vendor changed owners; we stop for now.', '[]')::text$$,
-             :'orgA', :'supA1', pg_temp.answers('staff'), pg_temp.today(:'orgA') + 100))::jsonb j) x),
+     from (select pg_temp.j(pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, %L::date, 'do_not_use', 'The vendor changed owners; we stop for now.', '[]')::text$$,
+             :'orgA', :'supA1', pg_temp.answers('staff'), pg_temp.today(:'orgA') + 100))) j) x),
   array['2', 'true', 'approve', 'do_not_use', '0', '100'],
   '0481/64: a second finish makes version 2, current, with the override in force and the next date asked for');
 select id as rev_a1_v2 from public.supplier_risk_reviews where supplier_id = :'supA1' and version = 2 \gset
@@ -982,9 +994,9 @@ select is(
 select is(
   (select array[x.j ->> 'result', x.j ->> 'hard_stops', x.j ->> 'evidence',
                 ((x.j ->> 'next_review_on')::date = (pg_temp.today(:'orgA') + interval '6 months')::date)::text]
-     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'student', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+     from (select pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'student', %L::jsonb, null, null, null, %L::jsonb)::text$$,
              :'orgA', :'supA2', pg_temp.answers('student', '{"data_agreement": "no"}'),
-             pg_temp.items('student', '{"data_agreement": "no"}', :'managerA')))::jsonb j) x),
+             pg_temp.items('student', '{"data_agreement": "no"}', :'managerA')))) j) x),
   array['do_not_use', '["student_data_no_agreement"]', 'weak', 'true'],
   '0481/66: student data with no signed data agreement is Do not use, and the next review is 6 months away');
 select is(
@@ -1002,7 +1014,7 @@ select is(
 
 -- A draft is discarded; a final never is.
 select is(
-  array[(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supA1'))::jsonb ->> 'version'),
+  array[(pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supA1'))) ->> 'version'),
         pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supA1')),
         pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supA1')),
         pg_temp.as_user(:'adminB', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgB', :'supA2')),
@@ -1024,7 +1036,7 @@ select is(
   (select array[(x.j ->> 'status'), (x.j ->> 'is_current'), (x.j ->> 'supplier_state'), (x.j ->> 'supplier_name'),
                 (select string_agg(e ->> 'question_key' || ':' || (e ->> 'owner_is_member'), ',') from jsonb_array_elements(x.j -> 'items') e),
                 (select string_agg(k, ',' order by k) from jsonb_object_keys(x.j) k)]
-     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_review(%L, %L)::text$$, :'orgA', :'rev_a1_v1'))::jsonb j) x),
+     from (select pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_review(%L, %L)::text$$, :'orgA', :'rev_a1_v1'))) j) x),
   array['final', 'false', 'active', 'Example Paper Co', 'hosting_known:true,insurance:true',
         'answers,computed_result,created_at,data_level,evidence,hard_stops,id,is_current,items,next_review_on,organization_id,'
         'override_reason,override_result,reminded_30_at,reminded_due_at,residual_risk,result,reviewed_at,reviewer_id,'
@@ -1043,22 +1055,22 @@ select i.id as item_a1_old from public.supplier_risk_items i where i.review_id =
 select is(
   (select array[x.j ->> 'status', (x.j ->> 'closed_at' is not null)::text, x.j ->> 'owner_name', x.j ->> 'action',
                 (x.j ->> 'owner_is_member')]
-     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'done', %L, null, 'Signed agreement received.')::text$$,
-             :'orgA', :'item_a2', :'ownerA'))::jsonb j) x),
+     from (select pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'done', %L, null, 'Signed agreement received.')::text$$,
+             :'orgA', :'item_a2', :'ownerA'))) j) x),
   array['done', 'true', 'Made-up Owner A', 'Signed agreement received.', 'true'],
   '0481/74: an item marked done is closed, with its new owner''s name and action');
 select closed_at as item_a2_closed from public.supplier_risk_items where id = :'item_a2' \gset
 select is(
   (select array[x.j ->> 'status', ((x.j ->> 'closed_at')::timestamptz = :'item_a2_closed'::timestamptz)::text, x.j ->> 'action']
-     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', %L, null, null)::text$$,
-             :'orgA', :'item_a2', :'ownerA'))::jsonb j) x),
+     from (select pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', %L, null, null)::text$$,
+             :'orgA', :'item_a2', :'ownerA'))) j) x),
   array['accepted', 'true', 'Signed agreement received.'],
   '0481/75: done to accepted keeps the closing time; a null action keeps the action');
 select is(
   (select array[x.j ->> 'status', coalesce(x.j ->> 'closed_at', 'none'), coalesce(x.j ->> 'owner_name', 'none'),
                 ((x.j ->> 'due_on')::date - pg_temp.today(:'orgA'))::text]
-     from (select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_item_update(%L, %L, 'open', null, %L::date, null)::text$$,
-             :'orgA', :'item_a2', pg_temp.today(:'orgA') + 7))::jsonb j) x),
+     from (select pg_temp.j(pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_item_update(%L, %L, 'open', null, %L::date, null)::text$$,
+             :'orgA', :'item_a2', pg_temp.today(:'orgA') + 7))) j) x),
   array['open', 'none', 'none', '7'],
   '0481/76: back to open clears the closing time; no owner, and a due date a week ahead');
 select is(
@@ -1084,16 +1096,16 @@ update public.supplier_risk_items set owner_user_id = :'managerA', owner_name = 
 update public.organization_members set role = 'staff', accepted_at = null where organization_id = :'orgA' and user_id = :'managerA';
 select is(
   (select array[x.j ->> 'status', x.j ->> 'owner_name', x.j ->> 'owner_is_member', ((x.j ->> 'due_on')::date = current_date - 30)::text]::text
-     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'in_progress', %L, %L::date, null)::text$$,
-             :'orgA', :'item_a2', :'managerA', current_date - 30))::jsonb j) x),
+     from (select pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'in_progress', %L, %L::date, null)::text$$,
+             :'orgA', :'item_a2', :'managerA', current_date - 30))) j) x),
   '{in_progress,"Made-up Manager A",false,true}',
   '0481/78: an owner who left and a due date already past stay when only the status changes');
 update public.organization_members set role = 'manager', accepted_at = now() where organization_id = :'orgA' and user_id = :'managerA';
 
 -- Archived and deleted suppliers keep their reviews, marked.
 select is(
-  array[(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'none', '{}')::text$$, :'orgA', :'supA4'))::jsonb ->> 'result'),
-        (pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$, :'orgA', :'supA5', pg_temp.answers('staff')))::jsonb ->> 'result')],
+  array[(pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'none', '{}')::text$$, :'orgA', :'supA4'))) ->> 'result'),
+        (pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$, :'orgA', :'supA5', pg_temp.answers('staff')))) ->> 'result')],
   array['approve', 'approve'],
   '0481/79: a supplier that holds no data of ours, and one with every answer Yes, are approved');
 update public.suppliers set deleted_at = now() where id = :'supA4';
@@ -1111,8 +1123,8 @@ select is(
   array[pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'none', '{}')::text$$, :'orgA', :'supA4')),
         pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'none', '{}')::text$$, :'orgA', :'supA5')),
         pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_history(%L, %L)$$, :'orgA', :'supA5')),
-        (pg_temp.as_user(:'adminA', format($$select public.supplier_risk_review(%L, %L)::text$$, :'orgA',
-           (select r.id from public.supplier_risk_reviews r where r.supplier_id = :'supA5')))::jsonb ->> 'supplier_state'),
+        (pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_review(%L, %L)::text$$, :'orgA',
+           (select r.id from public.supplier_risk_reviews r where r.supplier_id = :'supA5')))) ->> 'supplier_state'),
         pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supA4'))],
   array['ERR 22023 supplier_archived hint=supplier_archived', 'ERR 22023 supplier_not_found hint=supplier_not_found', '1', 'deleted', 'false'],
   '0481/81: no new review for an archived or a deleted supplier; the deleted one''s history and review are still read, marked deleted');
@@ -1166,9 +1178,9 @@ select is(
 -- ── 8. An account deleted; an organization deleted ──────────────────────────
 insert into public.suppliers (id, organization_id, name) values ('a0481000-0000-0000-0000-0000000000fb', :'orgA', 'Leaver Review Co');
 select is(
-  (pg_temp.as_user(:'leaver', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+  (pg_temp.j(pg_temp.as_user(:'leaver', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
      :'orgA', 'a0481000-0000-0000-0000-0000000000fb', pg_temp.answers('staff', '{"insurance": "no"}'),
-     pg_temp.items('staff', '{"insurance": "no"}', :'leaver')))::jsonb ->> 'items'),
+     pg_temp.items('staff', '{"insurance": "no"}', :'leaver')))) ->> 'items'),
   '1',
   '0481/86: an admin who will leave finishes a review and owns its item');
 delete from auth.users where id = :'leaver';
@@ -1184,8 +1196,8 @@ select is(
   'Made-up Leaver:true',
   '0481/88: the register says the reviewer''s account was deleted');
 select is(
-  (pg_temp.as_user(:'ownerD', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
-     :'orgD', :'supD1', pg_temp.answers('staff', '{"insurance": "no"}'), pg_temp.items('staff', '{"insurance": "no"}')))::jsonb ->> 'items'),
+  (pg_temp.j(pg_temp.as_user(:'ownerD', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+     :'orgD', :'supD1', pg_temp.answers('staff', '{"insurance": "no"}'), pg_temp.items('staff', '{"insurance": "no"}')))) ->> 'items'),
   '1',
   '0481/89: organization D has a review with an item');
 delete from public.organizations where id = :'orgD';
@@ -1390,8 +1402,8 @@ select i.id as item_h2 from public.supplier_risk_items i join public.supplier_ri
 update public.supplier_risk_items set status = 'done', closed_at = now() - interval '1 day' where id = :'item_h2';
 select is(
   (select (x.j ->> 'status') || ':' || ((x.j ->> 'closed_at')::timestamptz = now() - interval '1 day')::text
-     from (select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', null, null, null)::text$$,
-                                                    :'orgA', :'item_h2'))::jsonb as j) x),
+     from (select pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', null, null, null)::text$$,
+                                                    :'orgA', :'item_h2'))) as j) x),
   'accepted:true',
   '0481/106: an item closed and closed again (done, then accepted) keeps the time it was first closed');
 
@@ -1463,6 +1475,129 @@ select is(
                     'public.supplier_risk_item_update(uuid, uuid, text, uuid, date, text)'::regprocedure)),
   'supplier_risk_draft_discard:true,supplier_risk_draft_save:true,supplier_risk_finalise:true,supplier_risk_item_update:true',
   '0481/115: each of the four writes takes the supplier''s lock before it reads the supplier or the item for writing (the two-session proof is the race script)');
+
+-- ── 11. Holes the final red-check run found (the reads, the reminders, names) ─
+\set orgV 'a0481000-0000-0000-0000-0000000000a8'
+\set noName 'a0481000-0000-0000-0000-0000000000d5'
+\set supS2 'a0481000-0000-0000-0000-000000000302'
+\set supS3 'a0481000-0000-0000-0000-000000000303'
+\set revS3 'a0481000-0000-0000-0000-000000000313'
+-- A final review written straight into the table under a given supplier name.
+create function pg_temp.named_final(p_id uuid, p_org uuid, p_supplier uuid, p_name text, p_version integer,
+                                    p_current boolean, p_next date)
+returns void language sql as $f$
+  insert into public.supplier_risk_reviews
+    (id, organization_id, supplier_id, supplier_name, version, status, is_current, data_level, answers,
+     starting_risk, evidence, residual_risk, hard_stops, computed_result, reviewer_id, reviewer_name,
+     reviewed_at, next_review_on)
+  select p_id, p_org, p_supplier, p_name, p_version, 'final', p_current, 'none', '{}'::jsonb,
+         e ->> 'starting_risk', e ->> 'evidence', e ->> 'residual_risk',
+         array(select jsonb_array_elements_text(e -> 'hard_stops')), e ->> 'result',
+         null, 'Made-up Reviewer', now() - interval '1 year', p_next
+    from public._supplier_risk_evaluate(1::smallint, 'none', '{}'::jsonb) e;
+$f$;
+
+select is(
+  pg_temp.as_user(:'adminA', format($$select string_agg(g.supplier_name || ':' || g.review_due, ',' order by g.supplier_name)
+                                        from public.supplier_risk_register(%L) g where g.supplier_id in (%L, %L)$$,
+                                     :'orgA', :'supR3', :'supR4')),
+  'Reminder In Thirty:due_soon,Reminder In Thirty One:scheduled',
+  '0481/116: the register says due soon 30 days ahead, not 31');
+select is(
+  pg_temp.as_user(:'adminA', format($$select g.open_items || ':' || g.top_open_severity from public.supplier_risk_register(%L) g where g.supplier_id = %L$$,
+                                     :'orgA', :'supR1')),
+  '2:low',
+  '0481/117: the register counts open and in-progress items only (two open, one done)');
+select is(
+  array[pg_temp.as_user(:'adminA', format($$select string_agg(distinct x.status, ',' order by x.status) from public.supplier_risk_items_for_organization(%L) x$$, :'orgA')),
+        pg_temp.as_user(:'adminA', format($$select string_agg(distinct x.status, ',' order by x.status) from public.supplier_risk_items_for_organization(%L, false) x$$, :'orgA'))],
+  array['in_progress,open', 'accepted,done,in_progress,open'],
+  '0481/118: the items list leaves closed items out unless asked for them');
+
+-- An item owned by a live act-as seat, due in ten days, and one owned by an
+-- admin with no due date, both low, on the current review of Holes Table Co.
+insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding, action, owner_user_id, owner_name, due_on)
+values (:'orgA', :'revH1', 'hosting_known', 'no', 'low', 'F', 'A', :'adminA', 'Made-up Admin A', null),
+       (:'orgA', :'revH1', 'insurance', 'no', 'low', 'F', 'A', :'actas', 'Made-up Act As', current_date + 10);
+select is(
+  (select string_agg(e ->> 'question_key' || ':' || (e ->> 'owner_is_member'), ',')
+     from jsonb_array_elements((pg_temp.j(pg_temp.as_user(:'adminA', format($$select public.supplier_risk_review(%L, %L)::text$$, :'orgA', :'revH1')))) -> 'items') e),
+  'hosting_known:true,insurance:false',
+  '0481/119: a review''s items say an act-as seat is not a current member');
+select is(
+  pg_temp.as_user(:'adminA', format($$select string_agg(x.question_key || ':' || x.owner_is_member, ',' order by x.question_key)
+                                        from public.supplier_risk_items_for_organization(%L) x where x.supplier_id = %L$$, :'orgA', :'supH1')),
+  'hosting_known:true,insurance:false',
+  '0481/120: so does the items list');
+select is(
+  pg_temp.as_user(:'adminA', format($$select string_agg(x.question_key, ',' order by x.ordinality)
+                                        from public.supplier_risk_items_for_organization(%L) with ordinality x where x.supplier_id = %L$$, :'orgA', :'supH1')),
+  'insurance,hosting_known',
+  '0481/121: within a severity the items list puts a due date before none (none last)');
+
+insert into public.suppliers (id, organization_id, name, deleted_at) values (:'supS2', :'orgA', 'Holes New Name Co', null);
+select pg_temp.named_final('a0481000-0000-0000-0000-000000000311', :'orgA', :'supS2', 'Holes Old Name Co', 1, false, pg_temp.today(:'orgA') + 100);
+select pg_temp.named_final('a0481000-0000-0000-0000-000000000312', :'orgA', :'supS2', 'Holes New Name Co', 2, true, pg_temp.today(:'orgA') + 200);
+delete from public.suppliers where id = :'supS2';
+select is(
+  pg_temp.as_user(:'adminA', format($$select g.supplier_name || ':' || g.supplier_state || ':' || g.version from public.supplier_risk_register(%L) g where g.supplier_id = %L$$,
+                                     :'orgA', :'supS2')),
+  'Holes New Name Co:deleted:2',
+  '0481/122: the register names a deleted supplier by its newest review''s name');
+
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supH1')) as draft_h1 \gset
+select is(
+  array[pg_temp.as_user(:'adminA', format($$select count(*) || ':' || max(g.version) || ':' || bool_and(g.review_id = %L) || ':' || bool_and(g.draft_review_id is not null)
+                                              from public.supplier_risk_register(%L) g where g.supplier_id = %L$$, :'revH1', :'orgA', :'supH1')),
+        pg_temp.as_user(:'adminA', format($$select coalesce(g.review_id::text, 'none') || ':' || g.review_due || ':' || (g.draft_review_id is not null)
+                                              from public.supplier_risk_register(%L) g where g.supplier_id = %L$$, :'orgA', :'supH3'))],
+  array['1:1:true:true', 'none:not_reviewed:true'],
+  '0481/123: the register shows the current final review and the draft beside it, never the draft as the review');
+
+-- Organization V has 501 reviews due today.
+insert into public.organizations (id, name, slug, mfa_policy, timezone) values
+  (:'orgV', 'Vendor Risk Org V', 'a0481000-org-v', 'optional', 'UTC');
+insert into public.suppliers (id, organization_id, name, deleted_at)
+select format('a0481000-0000-0000-0001-%s', lpad(g::text, 12, '0'))::uuid, :'orgV', 'Many Co ' || g, null
+  from generate_series(1, 501) g;
+select count(*) as many_v from (
+  select pg_temp.final_row(format('a0481000-0000-0000-0002-%s', lpad(g::text, 12, '0'))::uuid, :'orgV',
+                           format('a0481000-0000-0000-0001-%s', lpad(g::text, 12, '0'))::uuid, 1, true,
+                           pg_temp.today(:'orgV'), now() - interval '1 year')
+    from generate_series(1, 501) g) x \gset
+select is(
+  array[pg_temp.run_as('service_role', null, $$select count(*)::text from public.supplier_risk_reminders_due(5000)$$),
+        pg_temp.run_as('service_role', null, $$select count(*)::text from public.supplier_risk_reminders_due(501)$$)],
+  array['500', '500'],
+  '0481/124: a page of the reminder read is at most 500 rows, whatever limit is asked (more than 500 are due)');
+
+insert into public.suppliers (id, organization_id, name, deleted_at) values (:'supS3', :'orgA', 'Holes Soon Co', null);
+select pg_temp.final_row(:'revS3', :'orgA', :'supS3', 1, true, pg_temp.today(:'orgA') + 10, now() - interval '1 year');
+select is(
+  array[pg_temp.run_as('service_role', null, format($$select public.supplier_risk_reminder_claim(%L, 'weekly')::text$$, :'revS3')),
+        pg_temp.run_as('service_role', null, format($$select public.supplier_risk_reminder_claim(%L, null)::text$$, :'revS3')),
+        (select (reminded_30_at is null)::text from public.supplier_risk_reviews where id = :'revS3'),
+        pg_temp.run_as('service_role', null, format($$select public.supplier_risk_reminder_claim(%L, 'due')::text$$, :'revS3')),
+        pg_temp.run_as('service_role', null, format($$select public.supplier_risk_reminder_claim(%L, 'due_soon')::text$$, :'revS3'))],
+  array['false', 'false', 'true', 'false', 'true'],
+  '0481/125: a claim of another kind, or of none, claims nothing, even for a review whose 30-day reminder is due');
+
+insert into auth.users (id, email, raw_user_meta_data) values (:'noName', 'vr-no-name@test.local', '{}'::jsonb);
+update public.user_profiles set full_name = '   ' where id = :'noName';
+select is(
+  array[public._supplier_risk_person_name(:'noName'), public._supplier_risk_person_name(:'adminA'),
+        public._supplier_risk_person_name('a0481000-0000-0000-0000-00000000dead')],
+  array['vr-no-name@test.local', 'Made-up Admin A', 'Unknown'],
+  '0481/126: a name kept on a review or an item is the full name, else the email, else Unknown');
+
+-- 0481/83 sends a final back to draft with its results cleared, which the
+-- guard refuses for the cleared columns too; the status alone must be refused
+-- by the guard as well, not only by the table's check of a draft's columns.
+select is(
+  array[pg_temp.try(format($$update public.supplier_risk_reviews set status = 'draft' where id = %L$$, :'rev_a1_v1')),
+        pg_temp.try(format($$update public.supplier_risk_reviews set status = 'draft', is_current = false where id = %L$$, :'rev_a1_v2'))],
+  array['55000:supplier_risk_final_is_kept', '55000:supplier_risk_final_is_kept'],
+  '0481/127: a final review''s status alone cannot go back to draft (the guard refuses it, not only the check)');
 
 select * from finish();
 rollback;
