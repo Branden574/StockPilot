@@ -157,6 +157,17 @@ describe("a day starts at the zone's own midnight", () => {
     }
   });
 
+  it('a day whose clocks went back over midnight east of UTC starts at the first midnight, not the second', () => {
+    // Amman, 29 October 2021: 01:00 +03 went back to 00:00 +02, so 00:00 came twice.
+    const AMMAN = 'Asia/Amman';
+    const first = '2021-10-28T21:00:00.000Z';
+    expect(iso(dayStartInZone(Date.parse('2021-10-29T10:00:00Z'), AMMAN))).toBe(first);
+    // Taken between the two midnights, too.
+    expect(iso(dayStartInZone(Date.parse('2021-10-28T21:30:00Z'), AMMAN))).toBe(first);
+    // A day of 25 hours.
+    expect(nextDayStartInZone(Date.parse(first), AMMAN) - Date.parse(first)).toBe(25 * 3_600_000);
+  });
+
   it('every zone this runtime knows, every day of 2027: each day starts at its first instant, strictly later than the day before', () => {
     const zones = Intl.supportedValuesOf('timeZone');
     expect(zones.length).toBeGreaterThan(300);
