@@ -561,11 +561,15 @@ export class MaintenanceAttachmentsService {
     // A prefix-read failure here also means "the object was never actually
     // uploaded" (signing a nonexistent object errors) — the finalize-time
     // existence check (no phantom rows for a mint that was never followed by
-    // a real PUT). Nothing to remove.
-    if (!head) {
+    // a real PUT). Nothing to remove. A storage read past its time limit (lab
+    // walk 5) is the same answer: nothing was judged, nothing is removed.
+    if (!head || 'timedOut' in head) {
       this.notifyPhotoRejected(requestId, parent);
       throw new ServiceError('validation_error', 'invalid_image');
     }
+    // An empty object is refused from its size before the check (lab walk 5,
+    // F1): removed, with no security event (an empty file carries nothing).
+    if (head.totalSize === 0) return refuse(new ServiceError('validation_error', 'invalid_image'), true);
 
     // Part 6: the sniff and the declared type are the one upload check's, on
     // the leading bytes, against the bucket's own kinds (0315: no HEIC), and

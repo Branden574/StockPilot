@@ -35,11 +35,16 @@ import {
   checkStoredUploadSignature,
   checkUploadBytes,
   checkUploadPrefix,
+  UPLOAD_EMPTY_MESSAGE,
+  UPLOAD_NOT_CHECKED_MESSAGE,
   UPLOAD_OFFICE_MACRO_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
   UPLOAD_WRONG_TYPE_MESSAGE,
   type StoredUploadBucket,
 } from './upload-checks';
+
+/** What lib/storage-object-prefix.ts answers for a storage step past its time limit (lab walk 5). */
+const TIMED_OUT = Object.freeze({ timedOut: true as const });
 
 const record = vi.mocked(recordSecurityEvent);
 const auditMock = vi.mocked(audit);
@@ -337,6 +342,43 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
     expect(third.remove).not.toHaveBeenCalled();
   });
 
+  it('storage that does not answer in time: "could not be checked", nothing judged, removed or recorded (lab walk 5, F2)', async () => {
+    fetchObjectWindowMock.mockResolvedValue(TIMED_OUT);
+    const first = bucket();
+    expect(await checkStoredUpload(first.store, PATH, stored)).toEqual({
+      ok: false,
+      family: null,
+      message: UPLOAD_NOT_CHECKED_MESSAGE,
+    });
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
+    // The whole read past its limit is the same answer.
+    fetchObjectWindowMock.mockResolvedValue({ prefix: PDF.subarray(0, 8), totalSize: 9000 });
+    fetchObjectWholeMock.mockResolvedValue(TIMED_OUT);
+    const second = bucket();
+    expect(await checkStoredUpload(second.store, PATH, stored)).toEqual({
+      ok: false,
+      family: null,
+      message: UPLOAD_NOT_CHECKED_MESSAGE,
+    });
+    for (const b of [first, second]) expect(b.remove).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('an empty object is refused from its size at once: no further read, removed, an audit line, no event (lab walk 5, F1)', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: 0 });
+    const { store, remove } = bucket();
+    expect(await checkStoredUpload(store, PATH, stored)).toEqual({
+      ok: false,
+      family: null,
+      message: UPLOAD_EMPTY_MESSAGE,
+    });
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
+    expect(record).not.toHaveBeenCalled();
+    onlyRemovalLine('po_attachment', 'empty', 2);
+  });
+
   it('nothing a record still names is ever removed: the refusal stands, a "kept" line, and the event says the file is still in use (review round 2, F1)', async () => {
     fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
     stillNamed.mockResolvedValue(true);
@@ -468,6 +510,26 @@ describe('checkStoredUploadSignature: a video, by its container only', () => {
     });
     expect(fetchObjectWholeMock).not.toHaveBeenCalled();
     expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a video storage does not read in time is "could not be checked"; an empty one is refused at once (lab walk 5)', async () => {
+    const remove = deletes();
+    const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
+    fetchObjectWindowMock.mockResolvedValue(TIMED_OUT);
+    expect(await checkStoredUploadSignature(store, PATH, input)).toEqual({
+      ok: false,
+      family: null,
+      message: UPLOAD_NOT_CHECKED_MESSAGE,
+    });
+    expect(remove).not.toHaveBeenCalled();
+    fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: 0 });
+    expect(await checkStoredUploadSignature(store, PATH, input)).toEqual({
+      ok: false,
+      family: null,
+      message: UPLOAD_EMPTY_MESSAGE,
+    });
+    expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.poster.jpg`]);
     expect(record).not.toHaveBeenCalled();
   });
 

@@ -54,6 +54,30 @@
  * from the server's own configured Supabase origin — the same origin
  * `download()` itself fetches without a guard — and the object path inside it
  * has been shape-validated by every caller before this function runs.
+ *
+ * EVERY STEP ANSWERS, AND IN TIME (lab walk 5). Inside the app, `fetch` is
+ * Next's: a GET with options and no `signal` is deduped, which means its body
+ * is teed and one branch is kept for later. Cancelling the branch we were
+ * handed then settles only when the kept branch is read or cancelled too,
+ * which nothing ever does, so a read that stopped early and awaited its
+ * cancel waited forever (every whole read, every over-size answer). So:
+ *   - every fetch here passes the signal of its own AbortController: that
+ *     opts out of the dedupe (no kept copy), and the request is aborted when
+ *     its step ends, however it ends;
+ *   - nothing here awaits a cancel or an abort: a body we stop reading is
+ *     cancelled without waiting, with any error dropped;
+ *   - every storage step (the object's size, the signed URL, the window, the
+ *     whole read) has a hard time limit, and a step past it answers
+ *     STORAGE_READ_TIMED_OUT, which the callers answer as "could not be
+ *     checked" (refused). storage-js takes no signal for the size and the
+ *     signed URL, so those two are raced against their limit and a late answer
+ *     is dropped.
+ * The object's SIZE is asked first (storage's own record of it): an empty
+ * object is answered from it at once, one over the caller's ceiling is
+ * answered without reading any of its body, and the window asks for no more
+ * bytes than the object has (the lab's storage never answers a range that
+ * runs past the end of a small object). When storage gives no size, the
+ * window read learns it from its headers, as before.
  */
 
 import { sniffNeedsMoreBytes } from './image-signature';
@@ -65,6 +89,57 @@ export const SNIFF_PREFIX_BYTES = 4096;
  *  indeterminate-window fallback fires) — 60s is generous headroom, not a
  *  grant. */
 const PREFIX_URL_TTL_SECONDS = 60;
+
+/**
+ * The hard time limits (lab walk 5). A small step (the size, the signed URL,
+ * the leading window) answers in milliseconds from a healthy storage; the
+ * whole read is at most a bucket's cap (15 MB). Past its limit a step is
+ * STORAGE_READ_TIMED_OUT.
+ */
+export const STORAGE_STEP_LIMIT_MS = 8_000;
+export const STORAGE_WHOLE_READ_LIMIT_MS = 20_000;
+
+/** A storage step that did not answer inside its time limit: the object could not be checked. */
+export type StorageReadTimedOut = { readonly timedOut: true };
+export const STORAGE_READ_TIMED_OUT: StorageReadTimedOut = Object.freeze({ timedOut: true as const });
+
+/** True for the timed-out answer (structural, so a caller's test double of this module need not export it). */
+export function isStorageReadTimedOut(value: unknown): value is StorageReadTimedOut {
+  return typeof value === 'object' && value !== null && (value as { timedOut?: unknown }).timedOut === true;
+}
+
+/**
+ * Runs one storage step under a hard time limit. The step is handed the
+ * signal of its own AbortController, which every fetch in it passes; the
+ * controller is aborted when the step ends, answered or not, and nothing
+ * waits for that. A step that throws is null, like every failure here.
+ */
+async function withinLimit<T>(
+  ms: number,
+  step: (signal: AbortSignal) => Promise<T>,
+): Promise<T | null | StorageReadTimedOut> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<StorageReadTimedOut>((resolve) => {
+    timer = setTimeout(() => resolve(STORAGE_READ_TIMED_OUT), ms);
+  });
+  const work = step(controller.signal).then(
+    (value) => value,
+    () => null,
+  );
+  try {
+    return await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+/** Stops reading a body without waiting: a teed body's cancel may never settle. */
+function dropBody(res: Response): void {
+  if (!res.body) return;
+  void res.body.cancel().catch(() => undefined);
+}
 
 export type ObjectPrefix = {
   /** The first min(SNIFF_PREFIX_BYTES, totalSize) bytes of the object —
@@ -92,7 +167,7 @@ function overLimitAnswer(total: number): ObjectPrefix {
   return { prefix: new Uint8Array(0), totalSize: total, overLimit: true };
 }
 
-/** The one storage-js method this helper needs, stated structurally so tests
+/** The storage-js methods this helper needs, stated structurally so tests
  *  and callers are not coupled to the concrete StorageFileApi class. */
 export type PrefixCapableBucket = {
   createSignedUrl(
@@ -102,7 +177,33 @@ export type PrefixCapableBucket = {
     data: { signedUrl: string } | null;
     error: { message: string } | null;
   }>;
+  /** The object's record: its size (lab walk 5, F1). */
+  info(path: string): Promise<{
+    data: { size?: number | null } | null;
+    error: { message: string } | null;
+  }>;
 };
+
+/**
+ * The size storage recorded for the object, under the step limit. Null when
+ * storage gave none (an error, a missing object, an older storage): the
+ * window read then learns the size from its own headers, as before.
+ */
+async function recordedSize(bucket: PrefixCapableBucket, path: string): Promise<number | null | StorageReadTimedOut> {
+  return withinLimit(STORAGE_STEP_LIMIT_MS, async () => {
+    const { data, error } = await bucket.info(path);
+    const size = error ? null : data?.size;
+    return typeof size === 'number' && Number.isSafeInteger(size) && size >= 0 ? size : null;
+  });
+}
+
+/** A signed URL for the object, under the step limit. Null when storage refuses (a missing object). */
+async function signedUrlFor(bucket: PrefixCapableBucket, path: string): Promise<string | null | StorageReadTimedOut> {
+  return withinLimit(STORAGE_STEP_LIMIT_MS, async () => {
+    const { data, error } = await bucket.createSignedUrl(path, PREFIX_URL_TTL_SECONDS);
+    return error || !data?.signedUrl ? null : data.signedUrl;
+  });
+}
 
 /** `Content-Range: bytes 0-4095/12345` → 12345. Null when the header is
  *  absent or the total is the unknown-length `*`. */
@@ -131,8 +232,9 @@ async function readPrefixFromStream(
     }
   } finally {
     // Cancel rather than drain: this is the entire point of the range read.
-    // (After a clean `done` this is a no-op.)
-    await reader.cancel().catch(() => undefined);
+    // (After a clean `done` this is a no-op.) Never awaited: on a teed body it
+    // may never settle (lab walk 5); the step's abort ends the request.
+    void reader.cancel().catch(() => undefined);
   }
   const out = new Uint8Array(Math.min(received, limit));
   let offset = 0;
@@ -146,29 +248,49 @@ async function readPrefixFromStream(
 }
 
 /**
+ * The object's size first, then its leading window (lab walk 5): an empty
+ * object is answered from its size alone, and one over the ceiling without
+ * any of its body read. Each step under its time limit.
+ */
+async function leadingWindowOf(
+  bucket: PrefixCapableBucket,
+  path: string,
+  fetchImpl: typeof fetch,
+  limit: ObjectReadLimit,
+): Promise<{ head: ObjectPrefix; signedUrl: string | null } | null | StorageReadTimedOut> {
+  const size = await recordedSize(bucket, path);
+  if (isStorageReadTimedOut(size)) return size;
+  if (size === 0) return { head: { prefix: new Uint8Array(0), totalSize: 0 }, signedUrl: null };
+  if (size !== null && limit.maxTotalBytes !== undefined && size > limit.maxTotalBytes) {
+    return { head: overLimitAnswer(size), signedUrl: null };
+  }
+  const signedUrl = await signedUrlFor(bucket, path);
+  if (signedUrl === null || isStorageReadTimedOut(signedUrl)) return signedUrl;
+  const head = await withinLimit(STORAGE_STEP_LIMIT_MS, (signal) =>
+    fetchLeadingWindow(signedUrl, fetchImpl, limit, size, signal),
+  );
+  if (head === null || isStorageReadTimedOut(head)) return head;
+  return { head, signedUrl };
+}
+
+/**
  * Fetches the object's leading SNIFF_PREFIX_BYTES and its full size — widened
  * to the whole object when the window alone cannot decide the sniff (see the
  * header comment). Null on ANY failure (missing object, sign refusal, bad
  * status, undeterminable size) — callers fail closed on null exactly as they
- * did on a failed `download()`.
+ * did on a failed `download()`. A step past its time limit is
+ * STORAGE_READ_TIMED_OUT.
  */
 export async function fetchObjectPrefix(
   bucket: PrefixCapableBucket,
   path: string,
   fetchImpl: typeof fetch = fetch,
   limit: ObjectReadLimit = {},
-): Promise<ObjectPrefix | null> {
-  let signedUrl: string;
-  try {
-    const { data, error } = await bucket.createSignedUrl(path, PREFIX_URL_TTL_SECONDS);
-    if (error || !data?.signedUrl) return null;
-    signedUrl = data.signedUrl;
-  } catch {
-    return null;
-  }
-
-  const head = await fetchLeadingWindow(signedUrl, fetchImpl, limit);
-  if (!head || head.overLimit) return head;
+): Promise<ObjectPrefix | null | StorageReadTimedOut> {
+  const window = await leadingWindowOf(bucket, path, fetchImpl, limit);
+  if (window === null || isStorageReadTimedOut(window)) return window;
+  const { head, signedUrl } = window;
+  if (head.overLimit || signedUrl === null) return head;
 
   // The metadata-heavy-JPEG fallback: only when the sniff of the window is
   // INDETERMINATE (classifier ran out of bytes — never for a definitive
@@ -176,7 +298,9 @@ export async function fetchObjectPrefix(
   // the window did not. This re-fetch is what the OLD code did on every
   // call; here it is the exception, not the rule.
   if (head.totalSize > head.prefix.byteLength && sniffNeedsMoreBytes(head.prefix)) {
-    return fetchWholeObject(signedUrl, head.totalSize, fetchImpl);
+    return withinLimit(STORAGE_WHOLE_READ_LIMIT_MS, (signal) =>
+      fetchWholeObject(signedUrl, head.totalSize, fetchImpl, signal),
+    );
   }
   return head;
 }
@@ -187,23 +311,17 @@ export async function fetchObjectPrefix(
  * procedure video of up to a gigabyte. `fetchObjectPrefix` widens to the
  * whole object when an image sniff of the window cannot decide, and an MP4's
  * leading box is exactly the shape that can ask for that. Null on any
- * failure, like fetchObjectPrefix.
+ * failure, like fetchObjectPrefix; STORAGE_READ_TIMED_OUT past a time limit.
  */
 export async function fetchObjectWindow(
   bucket: PrefixCapableBucket,
   path: string,
   fetchImpl: typeof fetch = fetch,
   limit: ObjectReadLimit = {},
-): Promise<ObjectPrefix | null> {
-  let signedUrl: string;
-  try {
-    const { data, error } = await bucket.createSignedUrl(path, PREFIX_URL_TTL_SECONDS);
-    if (error || !data?.signedUrl) return null;
-    signedUrl = data.signedUrl;
-  } catch {
-    return null;
-  }
-  return fetchLeadingWindow(signedUrl, fetchImpl, limit);
+): Promise<ObjectPrefix | null | StorageReadTimedOut> {
+  const window = await leadingWindowOf(bucket, path, fetchImpl, limit);
+  if (window === null || isStorageReadTimedOut(window)) return window;
+  return window.head;
 }
 
 /**
@@ -212,41 +330,45 @@ export async function fetchObjectWindow(
  * its ceiling), read from a stream that is cancelled at that size, so a
  * misbehaving or replaced object can never make this buffer more. A body that
  * ends short, or a failure anywhere, is null: the caller answers "could not be
- * read" and judges nothing.
+ * read" and judges nothing. Past a time limit: STORAGE_READ_TIMED_OUT.
  */
 export async function fetchObjectWhole(
   bucket: PrefixCapableBucket,
   path: string,
   expectedSize: number,
   fetchImpl: typeof fetch = fetch,
-): Promise<Uint8Array | null> {
-  let signedUrl: string;
-  try {
-    const { data, error } = await bucket.createSignedUrl(path, PREFIX_URL_TTL_SECONDS);
-    if (error || !data?.signedUrl) return null;
-    signedUrl = data.signedUrl;
-  } catch {
-    return null;
-  }
-  const whole = await fetchWholeObject(signedUrl, expectedSize, fetchImpl);
-  return whole && whole.prefix.byteLength === expectedSize ? whole.prefix : null;
+): Promise<Uint8Array | null | StorageReadTimedOut> {
+  const signedUrl = await signedUrlFor(bucket, path);
+  if (signedUrl === null || isStorageReadTimedOut(signedUrl)) return signedUrl;
+  const whole = await withinLimit(STORAGE_WHOLE_READ_LIMIT_MS, (signal) =>
+    fetchWholeObject(signedUrl, expectedSize, fetchImpl, signal),
+  );
+  if (whole === null || isStorageReadTimedOut(whole)) return whole;
+  return whole.prefix.byteLength === expectedSize ? whole.prefix : null;
 }
 
 /** The Range request for the leading window, and the full size from the
  *  response's own headers. Null on any failure. With a ceiling, a stated
- *  size above it is answered from the headers alone: the body is cancelled
- *  unread. */
+ *  size above it is answered from the headers alone: the body is dropped
+ *  unread. With the size storage recorded (`knownSize`, never 0 here), the
+ *  range asks for no byte past the object's end, and a response naming any
+ *  other size is not this object (it changed): null. */
 async function fetchLeadingWindow(
   signedUrl: string,
   fetchImpl: typeof fetch,
-  limit: ObjectReadLimit = {},
+  limit: ObjectReadLimit,
+  knownSize: number | null,
+  signal: AbortSignal,
 ): Promise<ObjectPrefix | null> {
   const over = (total: number) => limit.maxTotalBytes !== undefined && total > limit.maxTotalBytes;
+  const last = knownSize === null ? SNIFF_PREFIX_BYTES - 1 : Math.min(SNIFF_PREFIX_BYTES, knownSize) - 1;
+  const changed = (total: number) => knownSize !== null && total !== knownSize;
   let res: Response;
   try {
     res = await fetchImpl(signedUrl, {
-      headers: { range: `bytes=0-${SNIFF_PREFIX_BYTES - 1}` },
+      headers: { range: `bytes=0-${last}` },
       cache: 'no-store',
+      signal,
     });
   } catch {
     return null;
@@ -258,17 +380,20 @@ async function fetchLeadingWindow(
   // empty prefix and let the caller's sniff refuse it — which routes it down
   // the delete-the-fake path, same as the full download used to.
   if (res.status === 416) {
+    dropBody(res);
     const total = totalFromContentRange(res.headers.get('content-range'));
-    if (total !== 0) return null;
-    await res.body?.cancel().catch(() => undefined);
+    if (total !== 0 || changed(total)) return null;
     return { prefix: new Uint8Array(0), totalSize: 0 };
   }
 
   if (res.status === 206) {
     const total = totalFromContentRange(res.headers.get('content-range'));
-    if (total === null) return null;
+    if (total === null || changed(total)) {
+      dropBody(res);
+      return null;
+    }
     if (over(total)) {
-      await res.body?.cancel().catch(() => undefined);
+      dropBody(res);
       return overLimitAnswer(total);
     }
     // The body is the (at most SNIFF_PREFIX_BYTES-long) range itself. A body
@@ -298,11 +423,13 @@ async function fetchLeadingWindow(
     // 0, so a bare `Number(res.headers.get(...))` would silently report a
     // headerless response as a zero-byte object instead of failing closed.
     const lenHeader = res.headers.get('content-length');
-    if (lenHeader === null) return null;
-    const total = Number(lenHeader);
-    if (!Number.isSafeInteger(total) || total < 0) return null;
+    const total = lenHeader === null ? NaN : Number(lenHeader);
+    if (!Number.isSafeInteger(total) || total < 0 || changed(total)) {
+      dropBody(res);
+      return null;
+    }
     if (over(total)) {
-      await res.body?.cancel().catch(() => undefined);
+      dropBody(res);
       return overLimitAnswer(total);
     }
     if (!res.body) {
@@ -317,7 +444,7 @@ async function fetchLeadingWindow(
     }
   }
 
-  await res.body?.cancel().catch(() => undefined);
+  dropBody(res);
   return null;
 }
 
@@ -340,22 +467,23 @@ async function fetchWholeObject(
   signedUrl: string,
   expectedSize: number,
   fetchImpl: typeof fetch,
+  signal: AbortSignal,
 ): Promise<ObjectPrefix | null> {
   let res: Response;
   try {
-    res = await fetchImpl(signedUrl, { cache: 'no-store' });
+    res = await fetchImpl(signedUrl, { cache: 'no-store', signal });
   } catch {
     return null;
   }
   if (res.status !== 200) {
-    await res.body?.cancel().catch(() => undefined);
+    dropBody(res);
     return null;
   }
   // A stated length other than the one the window read named means the
   // object changed between the two reads: unreadable, judged on nothing.
   const lenHeader = res.headers.get('content-length');
   if (lenHeader !== null && Number(lenHeader) !== expectedSize) {
-    await res.body?.cancel().catch(() => undefined);
+    dropBody(res);
     return null;
   }
   if (!res.body) return null;

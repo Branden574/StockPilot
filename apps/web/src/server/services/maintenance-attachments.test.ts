@@ -81,6 +81,7 @@ vi.mock('@/lib/image-reencode', async () => {
 import { DEFAULT_MODULE_IDS, MAINTENANCE_MAX_PHOTOS, MAINTENANCE_MAX_PHOTO_BYTES, type ModuleId } from '@stockpilot/core';
 
 import { checkRateLimit } from '@/lib/rate-limit';
+import { recordSecurityEvent } from '@/server/security/events';
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { audit } from './audit';
@@ -853,6 +854,43 @@ describe('finalize', () => {
         declaredMime: 'image/jpeg',
       }),
     ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+  });
+
+  it('storage that does not answer in time is the same answer, with nothing removed or recorded (lab walk 5, F2)', async () => {
+    fetchObjectPrefixMock.mockResolvedValue({ timedOut: true });
+    const { ctx, adminDb } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.jpg`;
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'slow.jpg',
+        declaredMime: 'image/jpeg',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
+    expect(adminRemoveMock).not.toHaveBeenCalled();
+    expect(vi.mocked(recordSecurityEvent)).not.toHaveBeenCalled();
+    expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
+  });
+
+  it('an empty object is refused from its size before the check: removed, no event (lab walk 5, F1)', async () => {
+    fetchObjectPrefixMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: 0 });
+    const { ctx, adminDb } = build({
+      'maintenance_requests.select': { data: OPEN_REQUEST_ROW, error: null },
+    });
+    const path = `${ctx.organizationId}/${REQ_ID}/${UUID_1}.png`;
+    const derivedThumbPath = `${ctx.organizationId}/${REQ_ID}/${UUID_1}-thumb.webp`;
+    await expect(
+      new MaintenanceAttachmentsService(ctx).finalize(REQ_ID, {
+        path,
+        originalFilename: 'empty.png',
+        declaredMime: 'image/png',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: 'invalid_image' });
+    expect(adminRemoveMock).toHaveBeenCalledWith([path, derivedThumbPath]);
+    expect(vi.mocked(recordSecurityEvent)).not.toHaveBeenCalled();
     expect(adminDb.chainArgs.has('maintenance_request_attachments.insert')).toBe(false);
   });
 

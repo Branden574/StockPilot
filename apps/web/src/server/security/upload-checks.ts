@@ -8,6 +8,7 @@ import {
   fetchObjectWhole,
   fetchObjectWindow,
   type PrefixCapableBucket,
+  type StorageReadTimedOut,
 } from '@/lib/storage-object-prefix';
 import {
   inspectUpload,
@@ -267,7 +268,7 @@ export type StoredUploadResult =
  * check's family, an object over its path's ceiling, or a refusal of the
  * path's own (a limit, a cap, a failed re-encode).
  */
-export type UploadRemovalWhy = UploadRefusalFamily | 'too_large' | 'path_refusal';
+export type UploadRemovalWhy = UploadRefusalFamily | 'too_large' | 'empty' | 'path_refusal';
 
 /** Who a removal is written to the audit log as: the caller's own context. */
 export interface UploadRemovedBy {
@@ -301,6 +302,46 @@ export interface StoredUploadInput extends UploadCheckInput {
 
 /** The sentence for an object over its path's ceiling, when the path has none of its own. */
 export const UPLOAD_TOO_LARGE_MESSAGE = 'This file is too large to upload. Pick a smaller one.';
+
+/**
+ * The sentence for a file that could not be checked (lab walk 5): a storage
+ * read past its time limit, or a file the check could not finish. Refused;
+ * the person is told to try again.
+ */
+export const UPLOAD_NOT_CHECKED_MESSAGE =
+  'We could not check this file just now, so it was not added. Try again in a moment. If it happens again, save a new copy of the file and upload that.';
+
+/** The sentence for an empty file (lab walk 5, F1): refused from its size, at once. */
+export const UPLOAD_EMPTY_MESSAGE = 'This file is empty. Choose the file again and upload it.';
+
+/**
+ * A storage read past its time limit (lib/storage-object-prefix.ts). Checked
+ * by shape here, not with that module's own function, so that the many tests
+ * that stand in for that module need not stand in for this too.
+ */
+function readTimedOut(value: unknown): value is StorageReadTimedOut {
+  return typeof value === 'object' && value !== null && (value as { timedOut?: unknown }).timedOut === true;
+}
+
+/**
+ * The answer when storage did not answer in time: refused as "could not be
+ * checked". Nothing was judged, so nothing is removed and no event is
+ * recorded (a slow storage is not a file anyone sent); the object stays as
+ * an upload that never finished.
+ */
+function notChecked(): StoredUploadResult {
+  return { ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE };
+}
+
+/**
+ * An empty object, refused from its size before anything else (lab walk 5,
+ * F1): removed like one over the ceiling, with its audit line, and no event
+ * (an empty file carries nothing).
+ */
+async function refuseEmpty(store: StoredUploadBucket, input: StoredUploadInput): Promise<StoredUploadResult> {
+  await removeRefused(store, input, 'empty');
+  return { ok: false, family: null, message: UPLOAD_EMPTY_MESSAGE };
+}
 
 /**
  * What became of a refused upload's objects: removed (storage listed them as
@@ -483,7 +524,9 @@ function windowUndecided(head: { prefix: Uint8Array; totalSize: number }): boole
  * at most the ceiling and exactly the stated size (a short or failed read is
  * "could not be read": nothing judged, recorded or removed). On a refusal the
  * upload's objects are removed (never while a record names one) and one event
- * is recorded.
+ * is recorded. An empty object is refused from its size at once (removed, no
+ * event), and a storage read past its time limit is "could not be checked"
+ * (refused; nothing judged, removed or recorded).
  */
 export async function checkStoredUpload(
   store: StoredUploadBucket,
@@ -491,11 +534,13 @@ export async function checkStoredUpload(
   input: StoredUploadInput,
 ): Promise<StoredUploadResult> {
   const head = await fetchObjectWindow(store, path, fetch, { maxTotalBytes: input.maxBytes });
+  if (readTimedOut(head)) return notChecked();
   if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
   if (head.overLimit) {
     await removeRefused(store, input, 'too_large');
     return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
   }
+  if (head.totalSize === 0) return refuseEmpty(store, input);
   const prefixKinds = input.accept.filter((k) => k !== 'text' && k !== 'docx' && k !== 'xlsx');
   if (prefixKinds.length === input.accept.length && !windowUndecided(head)) {
     const first = inspectUploadPrefix(head.prefix, input);
@@ -505,6 +550,7 @@ export async function checkStoredUpload(
     head.totalSize > head.prefix.byteLength
       ? await fetchObjectWhole(store, path, head.totalSize)
       : head.prefix;
+  if (readTimedOut(whole)) return notChecked();
   if (!whole || whole.byteLength !== head.totalSize) {
     // Readable a moment ago, not now: nothing judged, so nothing removed or
     // recorded. The person is asked to try again.
@@ -529,11 +575,13 @@ export async function checkStoredUploadSignature(
   input: StoredUploadInput,
 ): Promise<StoredUploadResult> {
   const head = await fetchObjectWindow(store, path, fetch, { maxTotalBytes: input.maxBytes });
+  if (readTimedOut(head)) return notChecked();
   if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
   if (head.overLimit) {
     await removeRefused(store, input, 'too_large');
     return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
   }
+  if (head.totalSize === 0) return refuseEmpty(store, input);
   const verdict = inspectUploadPrefix(head.prefix, input);
   if (!verdict.ok) return refuseStored(store, input, verdict);
   const clean = judged(verdict, input);

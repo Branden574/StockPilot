@@ -1,14 +1,20 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { createDedupeFetch } from 'next/dist/server/lib/dedupe-fetch';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { sniffImage } from './image-signature';
 import {
   fetchObjectPrefix,
   fetchObjectWhole,
   fetchObjectWindow,
+  isStorageReadTimedOut,
   SNIFF_PREFIX_BYTES,
+  STORAGE_READ_TIMED_OUT,
+  STORAGE_STEP_LIMIT_MS,
+  STORAGE_WHOLE_READ_LIMIT_MS,
+  type StorageReadTimedOut,
 } from './storage-object-prefix';
 
 /**
@@ -28,13 +34,30 @@ import {
 
 const PATH = 'org-1/items/item-1/master.png';
 
-function okSigner() {
+/**
+ * The storage client: a signed URL, and the object's record. Given a size,
+ * the record states it (lab walk 5: the size is asked first); without one it
+ * answers an error, the storage that gives no size, and the window read
+ * learns the size from its own headers, as it always did.
+ */
+function okSigner(size?: number) {
   return {
     createSignedUrl: vi.fn(async () => ({
       data: { signedUrl: 'https://supa.example.com/storage/v1/object/sign/b/x?token=t' },
       error: null,
     })),
+    info: vi.fn(async () =>
+      size === undefined
+        ? { data: null, error: { message: 'no record' } }
+        : { data: { size }, error: null },
+    ),
   };
+}
+
+/** The answer, when it is not the timed-out one: a test that expects an answer must not get that. */
+function inTime<T>(value: T | StorageReadTimedOut): T {
+  expect(isStorageReadTimedOut(value)).toBe(false);
+  return value as T;
 }
 
 /** 10240 deterministic bytes whose head is the PNG signature — enough to
@@ -75,7 +98,7 @@ describe('fetchObjectPrefix', () => {
         headers: { 'content-range': 'bytes 0-4095/10240' },
       }),
     );
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).not.toBeNull();
     expect(out!.totalSize).toBe(10240);
     expect(out!.totalSize).not.toBe(4096);
@@ -91,7 +114,7 @@ describe('fetchObjectPrefix', () => {
         headers: { 'content-range': 'bytes 0-25/26' },
       }),
     );
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).toEqual({ prefix: full, totalSize: 26 });
   });
 
@@ -136,7 +159,7 @@ describe('fetchObjectPrefix', () => {
       new Response(stream, { status: 200, headers: { 'content-length': '10240' } }),
     );
 
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).not.toBeNull();
     expect(out!.totalSize).toBe(10240);
     expect(out!.prefix.byteLength).toBe(SNIFF_PREFIX_BYTES);
@@ -154,7 +177,7 @@ describe('fetchObjectPrefix', () => {
     const fetchImpl = vi.fn(async () =>
       new Response(bodyOf(full), { status: 200, headers: { 'content-length': '26' } }),
     );
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).not.toBeNull();
     expect(out!.totalSize).toBe(26);
     expect(Array.from(out!.prefix)).toEqual(Array.from(full));
@@ -179,13 +202,14 @@ describe('fetchObjectPrefix', () => {
     const fetchImpl = vi.fn(async () =>
       new Response(null, { status: 416, headers: { 'content-range': 'bytes */0' } }),
     );
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).toEqual({ prefix: new Uint8Array(0), totalSize: 0 });
   });
 
   it('a signing refusal is null — the finalize-time existence check the old download() provided', async () => {
     const signer = {
       createSignedUrl: vi.fn(async () => ({ data: null, error: { message: 'Object not found' } })),
+      info: vi.fn(async () => ({ data: null, error: { message: 'Object not found' } })),
     };
     const fetchImpl = vi.fn();
     expect(await fetchObjectPrefix(signer, PATH, fetchImpl as unknown as typeof fetch)).toBeNull();
@@ -264,7 +288,7 @@ describe('fetchObjectPrefix — indeterminate-window fallback', () => {
       new Response(bodyOf(full), { status: 200, headers: { 'content-length': '8209' } }),
     );
 
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).not.toBeNull();
     expect(out!.totalSize).toBe(8209);
     expect(out!.prefix.byteLength).toBe(8209);
@@ -291,7 +315,7 @@ describe('fetchObjectPrefix — indeterminate-window fallback', () => {
       throw new Error('the fallback must not fire for a decided window');
     });
 
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).not.toBeNull();
     expect(out!.totalSize).toBe(10240);
     expect(out!.prefix.byteLength).toBe(SNIFF_PREFIX_BYTES);
@@ -305,7 +329,7 @@ describe('fetchObjectPrefix — indeterminate-window fallback', () => {
       throw new Error('the fallback must not fire for a definitive fake');
     });
 
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out).not.toBeNull();
     expect(out!.prefix.byteLength).toBe(SNIFF_PREFIX_BYTES);
     expect(sniffImage(out!.prefix)).toBeNull();
@@ -355,9 +379,9 @@ describe('a ceiling on the read (part 6)', () => {
     const fetchImpl = vi.fn(async () =>
       new Response(stream, { status: 206, headers: { 'content-range': 'bytes 0-4095/20000' } }),
     );
-    const out = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
+    const out = inTime(await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
       maxTotalBytes: 10000,
-    });
+    }));
     expect(out).toEqual({ prefix: new Uint8Array(0), totalSize: 20000, overLimit: true });
     expect(seen.pulled).toBeLessThanOrEqual(1024);
     expect(seen.cancelled).toBe(true);
@@ -369,9 +393,9 @@ describe('a ceiling on the read (part 6)', () => {
     const fetchImpl = vi.fn(async () =>
       new Response(stream, { status: 200, headers: { 'content-length': '20000' } }),
     );
-    const out = await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
+    const out = inTime(await fetchObjectPrefix(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
       maxTotalBytes: 10000,
-    });
+    }));
     expect(out).toMatchObject({ totalSize: 20000, overLimit: true });
     expect(out!.prefix.byteLength).toBe(0);
     expect(seen.pulled).toBeLessThan(full.byteLength);
@@ -388,12 +412,12 @@ describe('a ceiling on the read (part 6)', () => {
         headers: { 'content-range': 'bytes 0-4095/10240' },
       }),
     );
-    const at = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
+    const at = inTime(await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch, {
       maxTotalBytes: 10240,
-    });
+    }));
     expect(at).toMatchObject({ totalSize: 10240 });
     expect(at).not.toHaveProperty('overLimit');
-    const none = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const none = inTime(await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(none).not.toHaveProperty('overLimit');
   });
 
@@ -406,7 +430,7 @@ describe('a ceiling on the read (part 6)', () => {
         headers: { 'content-range': 'bytes 0-4095/8209' },
       }),
     );
-    const out = await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch));
     expect(out!.prefix.byteLength).toBe(4096);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -419,7 +443,7 @@ describe('fetchObjectWhole (part 6)', () => {
     const fetchImpl = vi.fn(
       async () => new Response(stream, { status: 200, headers: { 'content-length': '10240' } }),
     );
-    const out = await fetchObjectWhole(okSigner(), PATH, 10240, fetchImpl as unknown as typeof fetch);
+    const out = inTime(await fetchObjectWhole(okSigner(), PATH, 10240, fetchImpl as unknown as typeof fetch));
     expect(out!.byteLength).toBe(10240);
     expect(Array.from(out!.subarray(0, 8))).toEqual(Array.from(full.subarray(0, 8)));
     expect(seen.pulled).toBeLessThanOrEqual(10240 + 1024);
@@ -442,7 +466,7 @@ describe('fetchObjectWhole (part 6)', () => {
     expect(await fetchObjectWhole(okSigner(), PATH, 10240, oneMore as unknown as typeof fetch)).toBeNull();
     // A body that ends by itself at the stated size is the whole object.
     const exact = unstated(full);
-    const out = await fetchObjectWhole(okSigner(), PATH, 10240, exact as unknown as typeof fetch);
+    const out = inTime(await fetchObjectWhole(okSigner(), PATH, 10240, exact as unknown as typeof fetch));
     expect(out!.byteLength).toBe(10240);
   });
 
@@ -456,7 +480,10 @@ describe('fetchObjectWhole (part 6)', () => {
     expect(await fetchObjectWhole(okSigner(), PATH, 10240, other as unknown as typeof fetch)).toBeNull();
     const gone = vi.fn(async () => new Response('gone', { status: 404 }));
     expect(await fetchObjectWhole(okSigner(), PATH, 10240, gone as unknown as typeof fetch)).toBeNull();
-    const refused = { createSignedUrl: vi.fn(async () => ({ data: null, error: { message: 'no' } })) };
+    const refused = {
+      createSignedUrl: vi.fn(async () => ({ data: null, error: { message: 'no' } })),
+      info: vi.fn(async () => ({ data: null, error: { message: 'no' } })),
+    };
     expect(await fetchObjectWhole(refused, PATH, 10240, short as unknown as typeof fetch)).toBeNull();
   });
 });
@@ -467,6 +494,343 @@ function concat2(a: Uint8Array, b: Uint8Array): Uint8Array {
   out.set(b, a.byteLength);
   return out;
 }
+
+// ─────────────────────────── lab walk 5 ───────────────────────────
+
+/**
+ * A body the way one comes off the network (undici's is a byte stream): its
+ * bytes are there, and its end arrives a moment later.
+ */
+function networkBody(bytes: Uint8Array, chunk = 16384): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    type: 'bytes',
+    start(controller) {
+      for (let at = 0; at < bytes.byteLength; at += chunk) controller.enqueue(bytes.slice(at, at + chunk));
+      setTimeout(() => {
+        try {
+          controller.close();
+        } catch {
+          // cancelled before its end arrived
+        }
+      }, 20);
+    },
+  });
+}
+
+/** A request that is never answered, until its signal aborts it. */
+function neverAnswered(init?: RequestInit): Promise<Response> {
+  return new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+  });
+}
+
+/**
+ * Storage as the lab's answered it (lab walk 5): a Range inside the object
+ * is a 206 with the true Content-Range, a plain GET a 200 with the size, and
+ * a Range that runs past the end of the object (any Range on an empty one)
+ * is never answered. Each request's Range and signal are kept.
+ */
+function labStorage(object: Uint8Array, opts: { ignoresRange?: boolean } = {}) {
+  const calls: Array<{ range: string | null; signal: AbortSignal | null }> = [];
+  const impl = async (_url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const range = ((init?.headers ?? {}) as Record<string, string>).range ?? null;
+    calls.push({ range, signal: init?.signal ?? null });
+    if (range !== null && !opts.ignoresRange) {
+      const last = Number(/^bytes=0-(\d+)$/.exec(range)?.[1] ?? NaN);
+      if (!(last < object.byteLength)) return neverAnswered(init);
+      return new Response(networkBody(object.subarray(0, last + 1)), {
+        status: 206,
+        headers: { 'content-range': `bytes 0-${last}/${object.byteLength}` },
+      });
+    }
+    return new Response(networkBody(object), {
+      status: 200,
+      headers: { 'content-length': String(object.byteLength) },
+    });
+  };
+  return { impl: impl as typeof fetch, calls };
+}
+
+/** Next 16's own fetch dedupe around a fetch: a GET with options and no signal has its body teed, one branch kept. */
+function nextsFetch(inner: typeof fetch): typeof fetch {
+  return createDedupeFetch(inner) as typeof fetch;
+}
+
+/** A fetch that keeps a copy of every body it hands out, signal or not: the class whose cancel never settles. */
+function keepsACopy(inner: typeof fetch): typeof fetch {
+  const kept: Response[] = [];
+  return (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const res = await inner(url, init);
+    kept.push(res.clone());
+    return res;
+  }) as typeof fetch;
+}
+
+/** Whether a promise settles inside `ms` (real time). */
+async function settlesWithin<T>(ms: number, p: Promise<T>): Promise<{ settled: true; value: T } | { settled: false }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<{ settled: false }>((resolve) => {
+    timer = setTimeout(() => resolve({ settled: false }), ms);
+  });
+  try {
+    return await Promise.race([p.then((value) => ({ settled: true as const, value })), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+describe('a fetch that keeps a copy of the body, as Next 16 does inside the app (lab walk 5, F2)', () => {
+  it('the doubles behave as the app saw: a read that stops at the size and awaits its cancel never settles', async () => {
+    const object = objectBytes(30798);
+    for (const wrap of [nextsFetch, keepsACopy]) {
+      const res = await wrap(labStorage(object).impl)('https://storage.example/o', { cache: 'no-store' });
+      const reader = res.body!.getReader();
+      let got = 0;
+      while (got < object.byteLength) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        got += value.byteLength;
+      }
+      expect(got).toBe(object.byteLength);
+      expect((await settlesWithin(300, reader.cancel())).settled).toBe(false);
+    }
+    // The same read off a fetch that keeps nothing settles at once.
+    const plain = await labStorage(object).impl('https://storage.example/o', { cache: 'no-store' });
+    const reader = plain.body!.getReader();
+    await reader.read();
+    expect((await settlesWithin(300, reader.cancel())).settled).toBe(true);
+  });
+
+  for (const [name, wrap] of [
+    ["Next's fetch", nextsFetch],
+    ['a fetch that keeps a copy even with a signal', keepsACopy],
+  ] as const) {
+    describe(`through ${name}`, () => {
+      it('the whole read answers with the whole object', async () => {
+        const object = objectBytes(30798);
+        const storage = labStorage(object);
+        const out = await settlesWithin(1000, fetchObjectWhole(okSigner(30798), PATH, 30798, wrap(storage.impl)));
+        expect(out.settled).toBe(true);
+        expect(out.settled && Array.from(inTime(out.value)!)).toEqual(Array.from(object));
+      });
+
+      it("the widened read of a window the sniff cannot decide answers", async () => {
+        const jpeg = new Uint8Array(8209);
+        jpeg.set([0xff, 0xd8, 0xff, 0xe1, 0x20, 0x02]);
+        jpeg.fill(0x45, 6, 6 + 8192);
+        jpeg.set([0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x05, 0x00, 0x04, 0x01, 0x00], 6 + 8192);
+        const storage = labStorage(jpeg);
+        const out = await settlesWithin(1000, fetchObjectPrefix(okSigner(8209), PATH, wrap(storage.impl)));
+        expect(out.settled).toBe(true);
+        expect(out.settled && inTime(out.value)).toMatchObject({ totalSize: 8209 });
+        expect(storage.calls.map((c) => c.range)).toEqual(['bytes=0-4095', null]);
+      });
+
+      it('an object over the ceiling answers, from the window when storage keeps no size record', async () => {
+        const storage = labStorage(objectBytes(20000));
+        const out = await settlesWithin(
+          1000,
+          fetchObjectWindow(okSigner(), PATH, wrap(storage.impl), { maxTotalBytes: 10000 }),
+        );
+        expect(out.settled && out.value).toEqual({ prefix: new Uint8Array(0), totalSize: 20000, overLimit: true });
+      });
+
+      it('a window read from a storage that ignores the range answers with the window', async () => {
+        const storage = labStorage(objectBytes(20000), { ignoresRange: true });
+        const out = await settlesWithin(1000, fetchObjectWindow(okSigner(20000), PATH, wrap(storage.impl)));
+        expect(out.settled).toBe(true);
+        expect(out.settled && inTime(out.value)!.prefix.byteLength).toBe(SNIFF_PREFIX_BYTES);
+      });
+    });
+  }
+
+  it("every read passes its own signal (Next's fetch keeps no copy of such a body), and each is aborted once its step is over", async () => {
+    const object = objectBytes(30798);
+    const storage = labStorage(object);
+    const viaNext = nextsFetch(storage.impl);
+    const head = inTime(await fetchObjectWindow(okSigner(30798), PATH, viaNext))!;
+    inTime(await fetchObjectWhole(okSigner(30798), PATH, head.totalSize, viaNext));
+    expect(storage.calls).toHaveLength(2);
+    for (const call of storage.calls) {
+      expect(call.signal).toBeInstanceOf(AbortSignal);
+      expect(call.signal!.aborted).toBe(true);
+    }
+  });
+});
+
+describe('the size first (lab walk 5, F1)', () => {
+  it('an empty object is answered from its size at once: no signed URL, no read', async () => {
+    const signer = okSigner(0);
+    const storage = labStorage(new Uint8Array(0));
+    const out = await settlesWithin(1000, fetchObjectWindow(signer, PATH, storage.impl, { maxTotalBytes: 100 }));
+    expect(out.settled && out.value).toEqual({ prefix: new Uint8Array(0), totalSize: 0 });
+    expect(signer.createSignedUrl).not.toHaveBeenCalled();
+    expect(storage.calls).toHaveLength(0);
+    expect(inTime(await fetchObjectPrefix(okSigner(0), PATH, storage.impl))).toEqual({
+      prefix: new Uint8Array(0),
+      totalSize: 0,
+    });
+  });
+
+  it('a small object asks for no byte past its end, so the storage answers', async () => {
+    const object = objectBytes(1136);
+    const storage = labStorage(object);
+    const out = await settlesWithin(1000, fetchObjectWindow(okSigner(1136), PATH, storage.impl));
+    expect(out.settled && inTime(out.value)).toEqual({ prefix: object, totalSize: 1136 });
+    expect(storage.calls.map((c) => c.range)).toEqual(['bytes=0-1135']);
+  });
+
+  it('an object of the window or more asks for the window, as before', async () => {
+    for (const size of [4096, 10240]) {
+      const storage = labStorage(objectBytes(size));
+      inTime(await fetchObjectWindow(okSigner(size), PATH, storage.impl));
+      expect(storage.calls.map((c) => c.range)).toEqual(['bytes=0-4095']);
+    }
+  });
+
+  it('a recorded size over the ceiling is answered from the record: nothing minted, nothing read', async () => {
+    const signer = okSigner(20000);
+    const fetchImpl = vi.fn();
+    const out = await fetchObjectWindow(signer, PATH, fetchImpl as unknown as typeof fetch, { maxTotalBytes: 10000 });
+    expect(out).toEqual({ prefix: new Uint8Array(0), totalSize: 20000, overLimit: true });
+    expect(signer.createSignedUrl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a window that names another size than the record is not this object: null', async () => {
+    const storage = labStorage(objectBytes(20000));
+    expect(await fetchObjectWindow(okSigner(10240), PATH, storage.impl)).toBeNull();
+    const ignoring = labStorage(objectBytes(20000), { ignoresRange: true });
+    expect(await fetchObjectWindow(okSigner(10240), PATH, ignoring.impl)).toBeNull();
+  });
+
+  it('with no size record the window learns the size from its headers, as before', async () => {
+    const storage = labStorage(objectBytes(10240));
+    expect(inTime(await fetchObjectWindow(okSigner(), PATH, storage.impl))).toMatchObject({ totalSize: 10240 });
+    expect(storage.calls.map((c) => c.range)).toEqual(['bytes=0-4095']);
+  });
+});
+
+describe('a hard time limit on every storage step (lab walk 5)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const never = (): Promise<never> => new Promise<never>(() => undefined);
+
+  /** Runs `start` with fake time moved `ms` on, and says whether it had answered before then. */
+  async function at<T>(ms: number, start: () => Promise<T>): Promise<{ before: boolean; value: T }> {
+    vi.useFakeTimers();
+    let answered = false;
+    const p = start().then((v) => {
+      answered = true;
+      return v;
+    });
+    await vi.advanceTimersByTimeAsync(ms - 1);
+    const before = answered;
+    await vi.advanceTimersByTimeAsync(1);
+    return { before, value: await p };
+  }
+
+  it('a size record that never answers: timed out at the step limit, nothing else asked', async () => {
+    const signer = { ...okSigner(), info: vi.fn(never) };
+    const fetchImpl = vi.fn();
+    const out = await at(STORAGE_STEP_LIMIT_MS, () =>
+      fetchObjectWindow(signer, PATH, fetchImpl as unknown as typeof fetch),
+    );
+    expect(out).toEqual({ before: false, value: STORAGE_READ_TIMED_OUT });
+    expect(signer.createSignedUrl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a signed URL that never comes: timed out, for the window and for the whole read', async () => {
+    const signer = { ...okSigner(10240), createSignedUrl: vi.fn(never) };
+    const fetchImpl = vi.fn();
+    const window = await at(STORAGE_STEP_LIMIT_MS, () =>
+      fetchObjectWindow(signer, PATH, fetchImpl as unknown as typeof fetch),
+    );
+    expect(window).toEqual({ before: false, value: STORAGE_READ_TIMED_OUT });
+    const whole = await at(STORAGE_STEP_LIMIT_MS, () =>
+      fetchObjectWhole(signer, PATH, 10240, fetchImpl as unknown as typeof fetch),
+    );
+    expect(whole).toEqual({ before: false, value: STORAGE_READ_TIMED_OUT });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('a window read that is never answered (the lab, on a range past the end): timed out, its request aborted', async () => {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      signals.push(init!.signal!);
+      return neverAnswered(init);
+    });
+    const out = await at(STORAGE_STEP_LIMIT_MS, () =>
+      fetchObjectWindow(okSigner(), PATH, fetchImpl as unknown as typeof fetch),
+    );
+    expect(out).toEqual({ before: false, value: STORAGE_READ_TIMED_OUT });
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(true);
+  });
+
+  it('a window body that stops coming: timed out, its request aborted', async () => {
+    let signal: AbortSignal | undefined;
+    const stalled = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(1024));
+        },
+        pull: () => never(),
+      });
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      signal = init!.signal!;
+      return new Response(stalled(), { status: 200, headers: { 'content-length': '10240' } });
+    });
+    const out = await at(STORAGE_STEP_LIMIT_MS, () =>
+      fetchObjectWindow(okSigner(10240), PATH, fetchImpl as unknown as typeof fetch),
+    );
+    expect(out).toEqual({ before: false, value: STORAGE_READ_TIMED_OUT });
+    expect(signal!.aborted).toBe(true);
+  });
+
+  it('a whole read whose body stops coming: timed out at the whole-read limit, its request aborted', async () => {
+    let signal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      signal = init!.signal!;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(4096));
+          },
+          pull: () => never(),
+        }),
+        { status: 200, headers: { 'content-length': '10240' } },
+      );
+    });
+    const out = await at(STORAGE_WHOLE_READ_LIMIT_MS, () =>
+      fetchObjectWhole(okSigner(10240), PATH, 10240, fetchImpl as unknown as typeof fetch),
+    );
+    expect(out).toEqual({ before: false, value: STORAGE_READ_TIMED_OUT });
+    expect(signal!.aborted).toBe(true);
+  });
+
+  it('the widened read of an undecided window has the whole-read limit too', async () => {
+    const jpeg = new Uint8Array(8209);
+    jpeg.set([0xff, 0xd8, 0xff, 0xe1, 0x20, 0x02]);
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const range = ((init?.headers ?? {}) as Record<string, string>).range;
+      if (range) {
+        return new Response(bodyOf(jpeg.subarray(0, 4096)), {
+          status: 206,
+          headers: { 'content-range': 'bytes 0-4095/8209' },
+        });
+      }
+      return neverAnswered(init);
+    });
+    const out = await at(STORAGE_WHOLE_READ_LIMIT_MS, () =>
+      fetchObjectPrefix(okSigner(8209), PATH, fetchImpl as unknown as typeof fetch),
+    );
+    expect(out).toEqual({ before: false, value: STORAGE_READ_TIMED_OUT });
+  });
+});
 
 /**
  * B29: the bucket sizes the module's comments give are the buckets' own
