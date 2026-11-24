@@ -630,6 +630,12 @@ const REGISTRY: Record<string, Entry> = {
   'server/services/platform/security-map.ts::platform_security_map': RO(
     'Reads only: the security record by country and by time, for a window, across every organization.',
   ),
+  // What scanners asked for (service role, behind checkPlatformConsoleRead in
+  // the panel's action): one function that only reads, STABLE in its
+  // migration (0479, platform_security_event_samples).
+  'server/services/platform/security-event-samples.ts::platform_security_event_samples': RO(
+    'Reads only: what scanners asked for, by hour, across every organization and none.',
+  ),
   'server/services/platform/sessions.ts::admin_revoke_user_sessions': [
     'not_org_data',
     "The platform console signs a person out of every session; an account's sessions, not an organization's row.",
