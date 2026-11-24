@@ -6,6 +6,7 @@ import {
   SECURITY_MAP_MARK_WORDS,
   SECURITY_MAP_POLL_FAILED,
   SECURITY_MAP_POLL_REFUSED,
+  SECURITY_MAP_READ_LIMIT_MS,
   SECURITY_MAP_REPLAY_STEP_MS,
   SECURITY_MAP_WORDS,
   securityEventCategoryLabel,
@@ -300,62 +301,58 @@ const chooseFlat = () =>
 /* ────────────────────────────────── tests ────────────────────────────────── */
 
 describe('the reads', () => {
-  it("the first read is the whole window with the viewer's day start, at once; then the last ten minutes every 30 seconds; the whole window every 5 minutes", async () => {
+  it("the server's read is the page's one read of the whole window when it opens; then the last ten minutes every 30 seconds, and the whole window 5 minutes on, with the viewer's day start", async () => {
     const { spy } = mount(async (input) =>
       (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
     );
     await advance(0);
-    expect(spy).toHaveBeenCalledTimes(1);
-    const first = spy.mock.calls[0]![0] as { scope: string; dayStart: string };
-    expect(first.scope).toBe('whole');
-    expect(new Date(first.dayStart).getHours()).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
     await advance(30_000);
-    expect(spy.mock.calls[1]![0]).toEqual({ scope: 'recent', dayStart: null });
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([{ scope: 'recent', dayStart: null }]);
     // Each read is scheduled when the one before it has landed.
     for (let i = 0; i < 9; i += 1) await advance(30_000);
     expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
-      'whole',
-      'recent',
-      'recent',
-      'recent',
-      'recent',
-      'recent',
-      'recent',
-      'recent',
-      'recent',
-      'recent',
+      ...Array.from({ length: 9 }, () => 'recent'),
       'whole',
     ]);
+    const whole = spy.mock.calls[9]![0] as { scope: string; dayStart: string };
+    expect(new Date(whole.dayStart).getHours()).toBe(0);
   });
 
-  it("the day's counter: 'Not counted yet' until the read with the day start lands, then its number", async () => {
+  it("the day's counter: 'Not counted yet' until the island's first read of the whole window lands with the day start, then its number", async () => {
     let release: (v: unknown) => void = () => {};
-    const { spy } = mount(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
+    const { spy } = mount((input) =>
+      (input as { scope: string }).scope === 'whole'
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve(recentRead(liveAnswer())),
     );
     expect(today()).toBe('Not counted yet');
-    await advance(0);
+    for (let i = 0; i < 10; i += 1) await advance(30_000);
+    const whole = spy.mock.calls.at(-1)![0] as { scope: string };
+    expect(whole.scope).toBe('whole');
+    expect(today()).toBe('Not counted yet');
     await act(async () => {
-      release(dayRead()(spy.mock.calls[0]![0]));
+      release(dayRead()(whole));
     });
     expect(today()).toBe('9');
   });
 
   it("the whole window is read again at the viewer's midnight, with the new day, between the 30-second reads", async () => {
-    vi.setSystemTime(new Date(2026, 10, 23, 23, 57, 50));
+    // Opened at 23:52:50: the island's first read of the whole window is at 23:57:50.
+    vi.setSystemTime(new Date(2026, 10, 23, 23, 52, 50));
     const { spy } = mount(async (input) =>
       (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
     );
     await advance(0);
-    for (let i = 0; i < 4; i += 1) await advance(30_000);
+    for (let i = 0; i < 14; i += 1) await advance(30_000);
     expect(today()).toBe('9');
     // 23:59:50 was the last read; midnight is 10 seconds on, before the next 30-second read.
     await advance(10_000);
     const calls = spy.mock.calls.map((c) => c[0] as { scope: string; dayStart: string | null });
     expect(calls.map((c) => c.scope)).toEqual([
+      ...Array.from({ length: 9 }, () => 'recent'),
       'whole',
       'recent',
       'recent',
@@ -363,21 +360,23 @@ describe('the reads', () => {
       'recent',
       'whole',
     ]);
-    expect(new Date(calls[0]!.dayStart!).getDate()).toBe(23);
-    const next = new Date(calls[5]!.dayStart!);
+    expect(new Date(calls[9]!.dayStart!).getDate()).toBe(23);
+    const next = new Date(calls[14]!.dayStart!);
     expect([next.getDate(), next.getHours(), next.getMinutes()]).toEqual([24, 0, 0]);
     expect(today()).toBe('9');
   });
 
   it("past midnight, before the new day is read, the day's counter says 'Not counted yet', never the old day's number", async () => {
-    vi.setSystemTime(new Date(2026, 10, 23, 23, 59, 45));
+    vi.setSystemTime(new Date(2026, 10, 23, 23, 54, 45));
     let wholeReads = 0;
     mount(async (input) => {
       if ((input as { scope: string }).scope !== 'whole') return recentRead(liveAnswer());
       wholeReads += 1;
       return wholeReads === 1 ? dayRead()(input) : SECURITY_MAP_POLL_FAILED;
     });
-    await advance(0);
+    // The island's first read of the whole window, at 23:59:45, counts the 23rd.
+    for (let i = 0; i < 10; i += 1) await advance(30_000);
+    expect(wholeReads).toBe(1);
     expect(today()).toBe('9');
     await advance(15_000);
     expect(wholeReads).toBe(2);
@@ -396,14 +395,13 @@ describe('the reads', () => {
     await advance(30_000);
     await advance(30_000);
     expect(lastGlobe().timing).toBe('live');
-    // 90 seconds after the whole read, the last ten minutes come back empty: the replay begins.
+    // 90 seconds after the server's whole read, the last ten minutes come back empty: the replay begins.
     await advance(30_000);
     await advance(0);
-    expect(scopes()).toEqual(['whole', 'recent', 'recent', 'recent', 'whole']);
+    expect(scopes()).toEqual(['recent', 'recent', 'recent', 'whole']);
     expect(lastGlobe().timing).toBe('replay');
     for (let i = 0; i < 4; i += 1) await advance(30_000);
     expect(scopes()).toEqual([
-      'whole',
       'recent',
       'recent',
       'recent',
@@ -438,15 +436,16 @@ describe('the reads', () => {
     expect(lastGlobe().timing).toBe('replay');
     await advance(30_000);
     expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
-      'whole',
       'recent',
       'recent',
     ]);
   });
 
   it('never reads while the tab is hidden; an overdue read goes at once when it comes back', async () => {
-    const { spy } = mount(async () => wholeRead());
-    await advance(0);
+    const { spy } = mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? wholeRead() : recentRead(liveAnswer()),
+    );
+    await advance(30_000);
     expect(spy).toHaveBeenCalledTimes(1);
     visibility = 'hidden';
     act(() => {
@@ -462,15 +461,100 @@ describe('the reads', () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  it('one read at a time: a slow read holds the next one back', async () => {
+  it('one read at a time: a read still out holds the next one back, up to the read limit', async () => {
     const { spy } = mount(() => new Promise(() => {}));
-    await advance(10 * 60_000);
+    await advance(30_000);
     expect(spy).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 19; i += 1) await advance(1_000);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('security-map-stop')).toBeNull();
+  });
+
+  it('a read with no answer in 20 seconds is counted out: "Not updating since", the play stops, and its late answer is ignored', async () => {
+    let release: (v: unknown) => void = () => {};
+    const { spy } = mount((input) =>
+      spy.mock.calls.length === 1
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve(recentRead(liveAnswer())),
+    );
+    await advance(30_000);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(lastGlobe().timing).toBe('replay');
+    await advance(SECURITY_MAP_READ_LIMIT_MS - 1);
+    expect(screen.queryByTestId('security-map-stop')).toBeNull();
+    await advance(1);
+    expect(screen.getByTestId('security-map-stop').textContent).toMatch(
+      /^Not updating since \d\d:\d\d, your time\. The map is stopped and shows what was read then\.$/,
+    );
+    expect(lastGlobe().timing).toBe('still');
+    expect(lastGlobe().mayTurn).toBe(false);
+    // The late answer would make the play live: it belongs to no read, and is ignored.
+    await act(async () => {
+      release(recentRead(liveAnswer()));
+    });
+    expect(screen.getByTestId('security-map-stop')).toBeInTheDocument();
+    expect(lastGlobe().timing).toBe('still');
+    // The next read goes after the back-off; a good one starts the play again.
+    await advance(119_000);
+    expect(spy).toHaveBeenCalledTimes(1);
+    await advance(1_000);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId('security-map-stop')).toBeNull();
+    expect(lastGlobe().timing).toBe('live');
+  });
+
+  it('a failed read of the whole window: the last ten minutes go on, and the next try waits 2, then 4 minutes; the totals say they may be out of date', async () => {
+    const at: Array<[string, number]> = [];
+    const opened = Date.now();
+    mount(async (input) => {
+      const scope = (input as { scope: string }).scope;
+      at.push([scope, (Date.now() - opened) / 1000]);
+      return scope === 'whole' ? SECURITY_MAP_POLL_FAILED : recentRead(liveAnswer());
+    });
+    for (let i = 0; i < 24; i += 1) await advance(30_000);
+    expect(at.filter(([scope]) => scope === 'whole').map(([, s]) => s)).toEqual([300, 420, 660]);
+    // Never two reads of the whole window in a row: the last ten minutes in between, every time.
+    const scopes = at.map(([scope]) => scope);
+    expect(scopes.some((scope, i) => scope === 'whole' && scopes[i + 1] === 'whole')).toBe(false);
+    expect(scopes.filter((scope) => scope === 'recent').length).toBeGreaterThan(15);
+    expect(
+      screen.getByText(
+        /^Totals and table as of \d\d:\d\d, your time\. The newest count could not be read/,
+      ),
+    ).toBeInTheDocument();
+    // The last ten minutes stay live, against the last good whole read.
+    expect(lastGlobe().timing).toBe('live');
+    expect(screen.queryByTestId('security-map-stop')).toBeNull();
+  });
+
+  it("no good read of the whole window yet: the last ten minutes run alone, the page says the day's picture is incomplete, and the whole window is tried 2 minutes on", async () => {
+    const at: Array<[string, number]> = [];
+    const opened = Date.now();
+    mount(async (input) => {
+      const scope = (input as { scope: string }).scope;
+      at.push([scope, (Date.now() - opened) / 1000]);
+      return scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer());
+    }, SECURITY_MAP_POLL_FAILED);
+    expect(screen.getByText(SECURITY_MAP_WORDS.wholeUnread)).toBeInTheDocument();
+    await advance(0);
+    expect(at).toEqual([['recent', 0]]);
+    for (let i = 0; i < 4; i += 1) await advance(30_000);
+    expect(at).toEqual([
+      ['recent', 0],
+      ['recent', 30],
+      ['recent', 60],
+      ['recent', 90],
+      ['whole', 120],
+    ]);
+    expect(screen.queryByText(SECURITY_MAP_WORDS.wholeUnread)).toBeNull();
+    expect(today()).toBe('9');
   });
 
   it('one read at a time: a tab hidden and shown while a read is out sends no second read', async () => {
     const { spy } = mount(() => new Promise(() => {}));
-    await advance(0);
+    await advance(30_000);
     expect(spy).toHaveBeenCalledTimes(1);
     visibility = 'hidden';
     act(() => {
@@ -480,7 +564,7 @@ describe('the reads', () => {
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await advance(10 * 60_000);
+    for (let i = 0; i < 19; i += 1) await advance(1_000);
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
@@ -808,7 +892,6 @@ describe('the flagged list beside the map', () => {
     await advance(0);
     for (let i = 0; i < 3; i += 1) await advance(30_000);
     expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
-      'whole',
       'recent',
       'recent',
       'recent',
@@ -857,14 +940,14 @@ describe('the flagged list beside the map', () => {
         return recentRead(answer({ ...liveAnswer(), feed: [], flagged_feed: [] }));
       }
       wholeReads += 1;
-      // The second read of the whole window no longer holds either entry.
-      return wholeReads === 1 ? dayRead()(input) : dayRead({ feed: [], flagged_feed: [] })(input);
+      // The island's read of the whole window no longer holds either entry of the server's.
+      return dayRead({ feed: [], flagged_feed: [] })(input);
     });
     await advance(0);
     expect(entries()).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
     for (let i = 0; i < 10; i += 1) await advance(30_000);
-    expect(wholeReads).toBe(2);
+    expect(wholeReads).toBe(1);
     expect(entries()).toHaveLength(0);
     expect(screen.queryByRole('button', { name: /Request for a settings file/ })).toBeNull();
   });
@@ -940,7 +1023,7 @@ describe('when the page stops', () => {
 
   it('a refused read: "Sign in again" and nothing moves', async () => {
     mount(async () => SECURITY_MAP_POLL_REFUSED);
-    await advance(0);
+    await advance(30_000);
     expect(screen.getByTestId('security-map-stop').textContent).toMatch(/^Sign in again\./);
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
@@ -954,7 +1037,9 @@ describe('when the page stops', () => {
   });
 
   it('Pause stops the play and the turning; the reads go on', async () => {
-    const { spy } = mount(async () => wholeRead());
+    const { spy } = mount(async (input) =>
+      (input as { scope: string }).scope === 'whole' ? wholeRead() : recentRead(quietAnswer()),
+    );
     await advance(0);
     fireEvent.click(screen.getByRole('button', { name: SECURITY_MAP_WORDS.pause }));
     expect(screen.getByRole('button', { name: SECURITY_MAP_WORDS.play })).toBeInTheDocument();
@@ -964,7 +1049,12 @@ describe('when the page stops', () => {
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
     await advance(30_000);
+    expect(spy).toHaveBeenCalledTimes(1);
+    await advance(30_000);
     expect(spy).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('security-map-stop').textContent).toBe(
+      'Paused. The numbers still update.',
+    );
   });
 
   it('a hidden tab stops the globe', () => {

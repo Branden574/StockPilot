@@ -148,84 +148,132 @@ describe('the line for places with no point', () => {
 
 describe('when to read', () => {
   const T = 1_000_000;
-  /** No midnight in sight and no replay just begun. */
-  const QUIET = { dayEndsAt: null, wholeWanted: false } as const;
+  /** All well: the server's first read at T, no midnight in sight and no replay just begun. */
+  const WELL = {
+    lastPollAt: T,
+    lastWholeAt: T,
+    lastWholeTryAt: T,
+    failures: 0,
+    wholeFailures: 0,
+    dayEndsAt: null,
+    wholeWanted: false,
+  } as const;
 
-  it("first, at once: the whole window with the viewer's day start", () => {
-    expect(
-      nextPoll(
-        { lastPollAt: null, lastWholeAt: T - 10, failures: 0, dayCounted: false, ...QUIET },
-        T,
-      ),
-    ).toEqual({ scope: 'whole', at: T });
+  it("the server's first read is the page's one read of the whole window when it opens: then the last ten minutes, 30 seconds on", () => {
+    expect(nextPoll(WELL, T)).toEqual({ scope: 'recent', at: T + 30_000 });
+    // No read at all yet: the last ten minutes at once, never a second read of the whole window.
+    expect(nextPoll({ ...WELL, lastPollAt: null }, T)).toEqual({ scope: 'recent', at: T });
   });
 
   it('then the last ten minutes every 30 seconds, and the whole window in their place every 5 minutes', () => {
-    expect(
-      nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 0, dayCounted: true, ...QUIET }, T),
-    ).toEqual({
-      scope: 'recent',
-      at: T + 30_000,
-    });
     const whole = T + SECURITY_MAP_WHOLE_POLL_MS;
-    expect(
-      nextPoll(
-        { lastPollAt: whole - 10_000, lastWholeAt: T, failures: 0, dayCounted: true, ...QUIET },
-        T,
-      ),
-    ).toEqual({ scope: 'whole', at: whole });
+    expect(nextPoll({ ...WELL, lastPollAt: whole - 10_000 }, T)).toEqual({
+      scope: 'whole',
+      at: whole,
+    });
+    expect(nextPoll({ ...WELL, lastPollAt: whole - 40_000 }, T)).toEqual({
+      scope: 'recent',
+      at: whole - 10_000,
+    });
   });
 
   it('after failed reads the wait grows, 60 then 120 seconds, and nothing is sent sooner', () => {
-    expect(
-      nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 1, dayCounted: true, ...QUIET }, T),
-    ).toEqual({
-      scope: 'recent',
-      at: T + 60_000,
-    });
-    expect(
-      nextPoll({ lastPollAt: T, lastWholeAt: T, failures: 5, dayCounted: true, ...QUIET }, T),
-    ).toEqual({
-      scope: 'recent',
+    expect(nextPoll({ ...WELL, failures: 1 }, T)).toEqual({ scope: 'recent', at: T + 60_000 });
+    expect(nextPoll({ ...WELL, failures: 5 }, T)).toEqual({ scope: 'recent', at: T + 120_000 });
+    // A whole read that is overdue still waits out the back-off.
+    expect(nextPoll({ ...WELL, lastWholeAt: T - 3_600_000, failures: 2 }, T)).toEqual({
+      scope: 'whole',
       at: T + 120_000,
     });
-    // A whole read that is overdue still waits out the back-off.
-    expect(
-      nextPoll(
-        { lastPollAt: T, lastWholeAt: T - 3_600_000, failures: 2, dayCounted: true, ...QUIET },
-        T,
-      ),
-    ).toEqual({ scope: 'whole', at: T + 120_000 });
-    expect(
-      nextPoll({ lastPollAt: T, lastWholeAt: null, failures: 1, dayCounted: false, ...QUIET }, T),
-    ).toEqual({ scope: 'whole', at: T + 60_000 });
+  });
+
+  it('after a failed read of the whole window the next waits 2, 4, 8, then 10 minutes from that attempt; the last ten minutes go on in between', () => {
+    const failed = { ...WELL, lastWholeAt: T - 600_000, wholeFailures: 1, failures: 1 };
+    // The next read is the last ten minutes, after the ordinary back-off, never the whole window again.
+    expect(nextPoll(failed, T)).toEqual({ scope: 'recent', at: T + 60_000 });
+    // A good read of the last ten minutes since: they go on every 30 seconds.
+    const going = { ...failed, failures: 0, lastPollAt: T + 60_000 };
+    expect(nextPoll(going, T + 60_000)).toEqual({ scope: 'recent', at: T + 90_000 });
+    expect(nextPoll({ ...going, lastPollAt: T + 100_000 }, T + 100_000)).toEqual({
+      scope: 'whole',
+      at: T + 120_000,
+    });
+    for (const [wholeFailures, wait] of [
+      [2, 240_000],
+      [3, 480_000],
+      [4, 600_000],
+      [9, 600_000],
+    ] as const) {
+      const clock = { ...going, wholeFailures, lastPollAt: T + wait - 10_000 };
+      expect(nextPoll(clock, T), String(wholeFailures)).toEqual({ scope: 'whole', at: T + wait });
+    }
+    // Not one whole read in a row: run the old way for an hour, the count is the back-off's.
+    let clock: Parameters<typeof nextPoll>[0] = { ...going, lastPollAt: T };
+    let now = T;
+    const whole: number[] = [];
+    while (now < T + 3_600_000) {
+      const step = nextPoll(clock, now);
+      now = step.at;
+      if (step.scope === 'whole') {
+        whole.push(now - T);
+        clock = {
+          ...clock,
+          lastPollAt: now,
+          lastWholeTryAt: now,
+          wholeFailures: clock.wholeFailures + 1,
+        };
+      } else {
+        clock = { ...clock, lastPollAt: now };
+      }
+    }
+    expect(whole.slice(0, 5)).toEqual([120_000, 360_000, 840_000, 1_440_000, 2_040_000]);
+    expect(whole.length).toBeLessThanOrEqual(7);
+  });
+
+  it('no good read of the whole window yet: the last ten minutes run alone', () => {
+    const none = { ...WELL, lastWholeAt: null, wholeFailures: 1 };
+    expect(nextPoll(none, T)).toEqual({ scope: 'recent', at: T + 30_000 });
+    expect(nextPoll({ ...none, lastPollAt: T + 100_000 }, T + 100_000)).toEqual({
+      scope: 'whole',
+      at: T + 120_000,
+    });
   });
 
   it("at the viewer's midnight the whole window is read, even between the 30-second reads", () => {
-    const clock = { lastPollAt: T, lastWholeAt: T, failures: 0, dayCounted: true };
-    expect(nextPoll({ ...clock, dayEndsAt: T + 10_000, wholeWanted: false }, T)).toEqual({
+    expect(nextPoll({ ...WELL, dayEndsAt: T + 10_000 }, T)).toEqual({
       scope: 'whole',
       at: T + 10_000,
     });
     // A midnight later than the 5-minute read changes nothing.
-    expect(
-      nextPoll({ ...clock, dayEndsAt: T + SECURITY_MAP_WHOLE_POLL_MS + 1, wholeWanted: false }, T),
-    ).toEqual({ scope: 'recent', at: T + 30_000 });
+    expect(nextPoll({ ...WELL, dayEndsAt: T + SECURITY_MAP_WHOLE_POLL_MS + 1 }, T)).toEqual({
+      scope: 'recent',
+      at: T + 30_000,
+    });
     // After failed reads the midnight read waits out the back-off too.
-    expect(
-      nextPoll({ ...clock, failures: 2, dayEndsAt: T + 10_000, wholeWanted: false }, T),
-    ).toEqual({ scope: 'whole', at: T + 120_000 });
+    expect(nextPoll({ ...WELL, failures: 2, dayEndsAt: T + 10_000 }, T)).toEqual({
+      scope: 'whole',
+      at: T + 120_000,
+    });
+    // And after a failed read of the whole window, its own.
+    expect(nextPoll({ ...WELL, wholeFailures: 1, dayEndsAt: T + 10_000 }, T)).toEqual({
+      scope: 'recent',
+      at: T + 30_000,
+    });
   });
 
-  it('the replay just begun on an old read: the whole window at once (after the back-off when reads fail)', () => {
-    const clock = { lastPollAt: T, lastWholeAt: T - 90_000, dayCounted: true, dayEndsAt: null };
-    expect(nextPoll({ ...clock, failures: 0, wholeWanted: true }, T + 5)).toEqual({
-      scope: 'whole',
-      at: T + 5,
-    });
-    expect(nextPoll({ ...clock, failures: 1, wholeWanted: true }, T + 5)).toEqual({
-      scope: 'whole',
-      at: T + 60_000,
+  it('the replay just begun on an old read: the whole window at once (after the back-offs when reads fail)', () => {
+    const clock = {
+      ...WELL,
+      lastWholeAt: T - 90_000,
+      lastWholeTryAt: T - 90_000,
+      wholeWanted: true,
+    };
+    expect(nextPoll(clock, T + 5)).toEqual({ scope: 'whole', at: T + 5 });
+    expect(nextPoll({ ...clock, failures: 1 }, T + 5)).toEqual({ scope: 'whole', at: T + 60_000 });
+    // A failed whole read a moment ago: its own back-off, the replay does not hurry it.
+    expect(nextPoll({ ...clock, wholeFailures: 1, lastWholeTryAt: T }, T + 5)).toEqual({
+      scope: 'recent',
+      at: T + 30_000,
     });
   });
 

@@ -182,7 +182,9 @@ export function SecurityMapClient({
       <SecurityMapCounters counters={counters} />
 
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-muted-foreground text-[12.5px]">{securityMapAsOfWords(state.whole)}</p>
+        <p className="text-muted-foreground text-[12.5px]">
+          {securityMapAsOfWords(state.whole, undefined, state.wholeFailures > 0)}
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"

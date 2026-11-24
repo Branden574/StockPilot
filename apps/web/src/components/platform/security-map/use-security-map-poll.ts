@@ -6,6 +6,7 @@ import {
   SECURITY_MAP_HEALTH_AT_START,
   SECURITY_MAP_MAX_FEED,
   SECURITY_MAP_MAX_FLAGGED_FEED,
+  SECURITY_MAP_READ_LIMIT_MS,
   planSecurityMapPlayback,
   readSecurityMapPollResult,
   securityMapHealthAfter,
@@ -24,20 +25,25 @@ import { localDayStart, nextLocalMidnight, nextPoll, replayWantsWhole } from './
 
 /**
  * THE MAP'S POLL: one small hook local to the island (no shared polling
- * hook). It asks the console's Server Action for the map's data: the whole
- * window with the viewer's day start at once, then the last ten minutes every
- * 30 seconds; the whole window again every 5 minutes, at the viewer's
- * midnight, and when the replay begins on a read more than a minute old
- * (map-model.ts nextPoll). A read of the last ten minutes only adds the
- * newest live arcs, and merges its feed entries into the two lists kept since
- * the newest whole read (an entry the poll does not carry stays); it replaces
- * none of the whole read's numbers or lists.
+ * hook). It asks the console's Server Action for the map's data. The
+ * server's first read is the page's one read of the whole window when it
+ * opens (review S3); then the last ten minutes every 30 seconds, and the
+ * whole window again 5 minutes after its last good read (with the viewer's
+ * day start), at the viewer's midnight, and when the replay begins on a read
+ * more than a minute old (map-model.ts nextPoll). After a failed read of the
+ * whole window the next waits 2, 4, 8, then 10 minutes, and the reads of the
+ * last ten minutes go on in between (review S2). A read of the last ten
+ * minutes only adds the newest live arcs, and merges its feed entries into
+ * the two lists kept since the newest whole read (an entry the poll does not
+ * carry stays); it replaces none of the whole read's numbers or lists.
  *
- * One request at a time; nothing is sent while the tab is hidden, and when it
- * comes back an overdue read is sent at once; after a failed read the wait
- * grows. Every answer is read again in the browser (core's
- * readSecurityMapPollResult): a shape this build does not know is a failed
- * read, never a picture.
+ * One request at a time; a read with no answer within
+ * SECURITY_MAP_READ_LIMIT_MS (20 s) is counted out, the page says it is not
+ * updating, and its answer, if one ever comes, is ignored (review S1).
+ * Nothing is sent while the tab is hidden, and when it comes back an overdue
+ * read is sent at once; after a failed read the wait grows. Every answer is
+ * read again in the browser (core's readSecurityMapPollResult): a shape this
+ * build does not know is a failed read, never a picture.
  */
 
 export interface SecurityMapPollState {
@@ -62,12 +68,24 @@ export interface SecurityMapPollState {
   /** The page's clock: when the last read came back, and the last good whole read. */
   lastPollAt: number | null;
   lastWholeAt: number | null;
+  /** When a read of the whole window last came back, good or not (the server's first read too). */
+  lastWholeTryAt: number | null;
+  /** Failed reads of the whole window in a row: the next one waits longer (review S2). */
+  wholeFailures: number;
 }
 
 export type SecurityMapPollInput = { scope: 'whole' | 'recent'; dayStart: string | null };
 export type SecurityMapPoll = (input: SecurityMapPollInput) => Promise<unknown>;
 
-/** The state from the server's first read (which could not carry the viewer's day start). */
+/**
+ * The state from the server's first read, the page's one read of the whole
+ * window when it opens (review S3). It could not carry the viewer's day
+ * start, so the day is counted by the next read of the whole window. A good
+ * first read is the newest read: the last ten minutes follow 30 seconds on.
+ * A failed one is a failed read of the whole window: the last ten minutes
+ * are read at once and run alone, and the whole window is tried again after
+ * its back-off.
+ */
 export function initialPollState(initial: unknown, nowMs: number): SecurityMapPollState {
   const read = readSecurityMapPollResult(initial);
   const base: SecurityMapPollState = {
@@ -81,6 +99,8 @@ export function initialPollState(initial: unknown, nowMs: number): SecurityMapPo
     refusedWindow: null,
     lastPollAt: null,
     lastWholeAt: null,
+    lastWholeTryAt: nowMs,
+    wholeFailures: 1,
   };
   if (!read.ok) {
     return {
@@ -108,7 +128,9 @@ export function initialPollState(initial: unknown, nowMs: number): SecurityMapPo
     feed: read.view.feed,
     flaggedFeed: read.view.flaggedFeed,
     health: securityMapHealthAfter(base.health, 'ok', nowMs),
+    lastPollAt: nowMs,
     lastWholeAt: nowMs,
+    wholeFailures: 0,
   };
 }
 
@@ -127,7 +149,16 @@ export function pollStateAfter(
   sentDayStart: boolean,
 ): SecurityMapPollState {
   const read = readSecurityMapPollResult(raw);
-  const next = { ...state, lastPollAt: nowMs };
+  // A read of the whole window that fails counts toward its own back-off.
+  const next =
+    scope === 'whole'
+      ? {
+          ...state,
+          lastPollAt: nowMs,
+          lastWholeTryAt: nowMs,
+          wholeFailures: state.wholeFailures + 1,
+        }
+      : { ...state, lastPollAt: nowMs };
   if (!read.ok) {
     return {
       ...next,
@@ -178,8 +209,32 @@ export function pollStateAfter(
     refusedWindow: null,
     health,
     lastWholeAt: nowMs,
+    wholeFailures: 0,
     dayStartAsked: state.dayStartAsked || sentDayStart,
   };
+}
+
+/**
+ * The state after a read that did not answer within SECURITY_MAP_READ_LIMIT_MS
+ * (review S1): a failure that stops the play at once ("Not updating since
+ * ..."), and, for a read of the whole window, a failed attempt at it. What
+ * the page shows stays as it was; nothing is made up in its place.
+ */
+export function pollStateAfterTimeout(
+  state: SecurityMapPollState,
+  scope: 'whole' | 'recent',
+  nowMs: number,
+): SecurityMapPollState {
+  const health = securityMapHealthAfter(state.health, 'timed_out', nowMs);
+  return scope === 'whole'
+    ? {
+        ...state,
+        health,
+        lastPollAt: nowMs,
+        lastWholeTryAt: nowMs,
+        wholeFailures: state.wholeFailures + 1,
+      }
+    : { ...state, health, lastPollAt: nowMs };
 }
 
 export interface SecurityMapPollResult {
@@ -190,7 +245,8 @@ export interface SecurityMapPollResult {
 
 /**
  * The poll, run while the island is mounted. `hidden` stops it (a hidden
- * tab); the read in flight, if any, still lands.
+ * tab); the read in flight, if any, still lands, unless it was counted out
+ * at the read limit first.
  */
 export function useSecurityMapPoll(
   initial: unknown,
@@ -205,6 +261,10 @@ export function useSecurityMapPoll(
   const replaying = plan.mode === 'replay';
   const inFlight = useRef(false);
   const mounted = useRef(true);
+  // Which read is out: a read counted out at the limit moves it on, so its
+  // late answer is known for what it is and ignored.
+  const readId = useRef(0);
+  const limit = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The turn to the replay, seen once: whether the play was replaying when
   // last looked at, and whether that turn asks for the whole window again.
   const wasReplaying = useRef(false);
@@ -214,6 +274,8 @@ export function useSecurityMapPoll(
     mounted.current = true;
     return () => {
       mounted.current = false;
+      if (limit.current !== null) clearTimeout(limit.current);
+      limit.current = null;
     };
   }, []);
 
@@ -233,7 +295,8 @@ export function useSecurityMapPoll(
         lastPollAt: state.lastPollAt,
         lastWholeAt: state.lastWholeAt,
         failures: state.health.failures,
-        dayCounted: state.dayStartAsked,
+        lastWholeTryAt: state.lastWholeTryAt,
+        wholeFailures: state.wholeFailures,
         dayEndsAt: state.dayStartAsked
           ? nextLocalMidnight(state.whole?.whole.dayStart ?? null)
           : null,
@@ -245,20 +308,34 @@ export function useSecurityMapPoll(
       () => {
         if (inFlight.current) return;
         inFlight.current = true;
-        if (step.scope === 'whole') wholeWanted.current = false;
-        const dayStart = step.scope === 'whole' ? localDayStart(new Date()) : null;
+        const scope = step.scope;
+        if (scope === 'whole') wholeWanted.current = false;
+        const dayStart = scope === 'whole' ? localDayStart(new Date()) : null;
+        readId.current += 1;
+        const id = readId.current;
+        limit.current = setTimeout(() => {
+          limit.current = null;
+          if (readId.current !== id) return;
+          // Counted out: the next read may go (after the back-off), and this
+          // one's answer, if it ever comes, belongs to no read.
+          readId.current += 1;
+          inFlight.current = false;
+          if (!mounted.current) return;
+          setState((prev) => pollStateAfterTimeout(prev, scope, Date.now()));
+        }, SECURITY_MAP_READ_LIMIT_MS);
         void Promise.resolve()
-          .then(() => poll({ scope: step.scope, dayStart }))
+          .then(() => poll({ scope, dayStart }))
           .then(
             (raw) => raw,
             () => null,
           )
           .then((raw) => {
+            if (readId.current !== id) return;
+            if (limit.current !== null) clearTimeout(limit.current);
+            limit.current = null;
             inFlight.current = false;
             if (!mounted.current) return;
-            setState((prev) =>
-              pollStateAfter(prev, step.scope, raw, Date.now(), dayStart !== null),
-            );
+            setState((prev) => pollStateAfter(prev, scope, raw, Date.now(), dayStart !== null));
           });
       },
       Math.max(0, step.at - Date.now()),

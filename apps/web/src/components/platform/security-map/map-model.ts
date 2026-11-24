@@ -4,6 +4,7 @@ import {
   SECURITY_MAP_WHOLE_POLL_MS,
   SECURITY_MAP_WORDS,
   securityMapNextPollDelay,
+  securityMapNextWholeDelay,
   securityMapShownCategories,
   type SecurityEventCategory,
   type SecurityMapArc,
@@ -203,10 +204,12 @@ export interface PollClock {
   lastPollAt: number | null;
   /** When the whole window was last read successfully, or null. */
   lastWholeAt: number | null;
-  /** Failed reads in a row. */
+  /** When a read of the whole window was last sent and came back, good or not, or null. */
+  lastWholeTryAt: number | null;
+  /** Failed reads in a row, of any kind. */
   failures: number;
-  /** Whether a whole read that carried the viewer's day start has come back. */
-  dayCounted: boolean;
+  /** Failed reads of the whole window in a row. */
+  wholeFailures: number;
   /**
    * The viewer's next midnight after the day the newest whole read counted
    * (the page's clock), or null. The whole window is read again then, so the
@@ -226,24 +229,35 @@ export interface PollStep {
 /**
  * The next read. A read of the last ten minutes holds no ten-minute cells
  * and no groups by country (contract version 2), so the whole window is read
- * again on its own: first, at once, with the viewer's day start (the server's
- * first read could not know the viewer's midnight); then every 5 minutes; at
- * the viewer's midnight, so the day's count starts over; and as soon as may
- * be when the replay begins on a read more than a minute old. In between, the
- * last ten minutes every 30 seconds. After a failed read the wait grows (30,
- * 60, then 120 seconds) and nothing is sent sooner, whichever read is due.
+ * on its own: 5 minutes after the last good read of it (the server's first
+ * read, when the page opens, is that read: review S3), at the viewer's
+ * midnight once a day has been counted, and as soon as may be when the
+ * replay begins on a read more than a minute old. After a failed read of the
+ * whole window the next waits 2, 4, 8, then 10 minutes from that attempt
+ * (review S2), and neither the midnight nor the replay hurries it. In
+ * between, the last ten minutes every 30 seconds, against the last good
+ * whole read or alone when there is none. After any failed read the wait
+ * grows (30, 60, then 120 seconds) and nothing is sent sooner.
  */
 export function nextPoll(clock: PollClock, now: number): PollStep {
-  const wait = securityMapNextPollDelay(clock.failures);
-  const afterLast = clock.lastPollAt === null ? now : clock.lastPollAt + wait;
-  if (!clock.dayCounted) return { scope: 'whole', at: afterLast };
-  const soonest = clock.failures > 0 ? afterLast : now;
-  if (clock.wholeWanted) return { scope: 'whole', at: soonest };
-  const recentAt = afterLast;
-  const every = clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
-  const wholeDue = clock.dayEndsAt === null ? every : Math.min(every, clock.dayEndsAt);
+  const afterLast =
+    clock.lastPollAt === null ? now : clock.lastPollAt + securityMapNextPollDelay(clock.failures);
+  let wholeDue: number;
+  if (clock.wholeFailures > 0) {
+    wholeDue =
+      clock.lastWholeTryAt === null
+        ? now
+        : clock.lastWholeTryAt + securityMapNextWholeDelay(clock.wholeFailures);
+  } else if (clock.wholeWanted) {
+    wholeDue = now;
+  } else {
+    const every = clock.lastWholeAt === null ? now : clock.lastWholeAt + SECURITY_MAP_WHOLE_POLL_MS;
+    wholeDue = clock.dayEndsAt === null ? every : Math.min(every, clock.dayEndsAt);
+  }
   const wholeAt = Math.max(wholeDue, clock.failures > 0 ? afterLast : -Infinity);
-  return wholeAt <= recentAt ? { scope: 'whole', at: wholeAt } : { scope: 'recent', at: recentAt };
+  return wholeAt <= afterLast
+    ? { scope: 'whole', at: wholeAt }
+    : { scope: 'recent', at: afterLast };
 }
 
 /** A whole read older than this is read again when the replay begins. */
