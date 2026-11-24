@@ -1,16 +1,29 @@
 import 'server-only';
 
-import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import {
-  isSniffedFileAllowedInBucket,
-  sniffFile,
+  DOCUMENT_BUCKET_MIME_ALLOWLISTS,
   type DocumentBucket,
   type SniffedFile,
 } from '@/lib/file-signature';
-import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
+import { MIME_FOR_UPLOAD_KIND, type UploadKind } from '@/lib/upload-inspect';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { checkStoredUpload, type UploadSurface } from '@/server/security/upload-checks';
 
-import { ServiceError } from './context';
+import { ServiceError, type ServiceContext } from './context';
+
+/** The kinds a document bucket holds: the kinds whose MIME its pin lists. */
+function kindsOfBucket(bucket: DocumentBucket): UploadKind[] {
+  const allowed: readonly string[] = DOCUMENT_BUCKET_MIME_ALLOWLISTS[bucket];
+  return (Object.keys(MIME_FOR_UPLOAD_KIND) as UploadKind[]).filter((kind) =>
+    allowed.includes(MIME_FOR_UPLOAD_KIND[kind]),
+  );
+}
+
+const SURFACE_OF_BUCKET: Readonly<Record<DocumentBucket, UploadSurface>> = {
+  'po-attachments': 'po_attachment',
+  'order-attachments': 'order_attachment',
+  'support-attachments': 'support_screenshot',
+};
 
 /**
  * The finalize-time gate for client-direct uploads into the DOCUMENT buckets.
@@ -56,73 +69,32 @@ import { ServiceError } from './context';
  * for a file to hide.
  */
 export async function verifyStoredDocumentOrDelete(
+  ctx: ServiceContext,
   bucket: DocumentBucket,
   storagePath: string,
 ): Promise<SniffedFile> {
-  const admin = createAdminClient();
-  const store = admin.storage.from(bucket);
+  const store = createAdminClient().storage.from(bucket);
 
-  // The prefix read doubles as the existence check, so a finalize never
-  // preceded by a real PUT writes no phantom row.
-  const head = await fetchObjectPrefix(store, storagePath);
-  if (!head) {
-    throw new ServiceError('validation_error', 'This file could not be verified.');
+  // Both questions, in the order above, are asked by the one upload check
+  // (server/security/upload-checks.ts, part 6), which also records a refusal
+  // as a security event in this organization. The prefix read doubles as the
+  // existence check, so a finalize never preceded by a real PUT writes no
+  // phantom row; an object readable a moment ago and unreadable now is
+  // removed and refused (we have not inspected it, so it gets no row).
+  const checked = await checkStoredUpload(store, storagePath, {
+    surface: SURFACE_OF_BUCKET[bucket],
+    accept: kindsOfBucket(bucket),
+    organizationId: ctx.organizationId,
+    removeOnRefusal: [storagePath],
+    unreadableMessage: 'This file could not be verified.',
+    wrongTypeMessage: 'This file could not be uploaded because it failed our security checks.',
+  });
+  if (!checked.ok) {
+    // The specific message for a verdict, not the generic one. The uploader
+    // is a warehouse manager holding a real invoice they need attached, and
+    // "failed our security checks" with no route forward is a support ticket.
+    // Every verdict's sentence names the problem and the way out.
+    throw new ServiceError('validation_error', checked.message);
   }
-
-  const sniffed = sniffFile(head.prefix);
-  if (!sniffed || !isSniffedFileAllowedInBucket(sniffed, bucket)) {
-    await removeQuietly(store, storagePath);
-    throw new ServiceError(
-      'validation_error',
-      'This file could not be uploaded because it failed our security checks.',
-    );
-  }
-
-  const whole =
-    head.totalSize > head.prefix.byteLength
-      ? await downloadWhole(store, storagePath)
-      : head.prefix;
-  if (!whole) {
-    // Readable a moment ago, unreadable now. Fail closed: we have not
-    // inspected this object, so it does not get a row.
-    await removeQuietly(store, storagePath);
-    throw new ServiceError('validation_error', 'This file could not be verified.');
-  }
-
-  const threat = scanDocumentBytes(whole, sniffed.kind);
-  if (threat) {
-    await removeQuietly(store, storagePath);
-    // The specific message, not the generic one. The uploader is a warehouse
-    // manager holding a real invoice they need attached, and "failed our
-    // security checks" with no route forward is a support ticket. Every one of
-    // these names the problem and the way out.
-    throw new ServiceError('validation_error', THREAT_MESSAGES[threat.code]);
-  }
-
-  return sniffed;
-}
-
-type StoreApi = ReturnType<ReturnType<typeof createAdminClient>['storage']['from']>;
-
-async function downloadWhole(store: StoreApi, path: string): Promise<Uint8Array | null> {
-  const { data, error } = await store.download(path);
-  if (error || !data) return null;
-  return new Uint8Array(await data.arrayBuffer());
-}
-
-/**
- * The delete is best-effort ON PURPOSE, and the refusal is not.
- *
- * If the remove fails we still refuse the upload — the row is what makes an
- * object reachable through the app, and there is no row. Letting a failed
- * cleanup throw would replace a clear "this file was rejected" with an
- * internal error, and would leave the caller unable to tell a rejected upload
- * from a broken one.
- */
-async function removeQuietly(store: StoreApi, path: string): Promise<void> {
-  try {
-    await store.remove([path]);
-  } catch {
-    // Deliberately swallowed — see above.
-  }
+  return { kind: checked.kind, mime: checked.mime } as SniffedFile;
 }

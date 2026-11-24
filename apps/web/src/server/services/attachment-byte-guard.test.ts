@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
+import { recordSecurityEvent } from '@/server/security/events';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 // ---------------------------------------------------------------------------
@@ -385,5 +386,61 @@ describe('finalize byte guard — whole-object scan', () => {
     expect(download).toHaveBeenCalledWith(path);
     expect(stub.fromCalls).not.toContain('order_request_attachments');
     expect(remove).toHaveBeenCalledWith([path]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PART 6: a refusal is recorded as a security event (malware / blocked, the
+// verdict's family, this organization), exactly once, with nothing of the
+// file in it; a clean attachment records nothing; a recorder that fails
+// changes no answer.
+// ---------------------------------------------------------------------------
+describe('both attachment finalizes record a refusal, once', () => {
+  const record = vi.mocked(recordSecurityEvent);
+
+  it.each([
+    ['PO, the wrong type', 'po', HTML, 'upload_wrong_type'],
+    ['PO, a launch action', 'po', LAUNCH_PDF, 'upload_active_content'],
+    ['order, the wrong type', 'order', HTML, 'upload_wrong_type'],
+    ['order, a launch action', 'order', LAUNCH_PDF, 'upload_active_content'],
+  ] as const)('%s: one event, this organization, no file name', async (_what, which, body, reason) => {
+    armStorage(body);
+    const err =
+      which === 'po'
+        ? await poSvc().svc.add(poInput()).catch((e: unknown) => e)
+        : await orderSvc()
+            .svc.add({
+              orderRequestId: ENTITY,
+              storagePath: `${ORG}/${ENTITY}/${FILE}.pdf`,
+              fileName: 'proof.pdf',
+              contentType: 'application/pdf',
+              sizeBytes: 999,
+              kind: 'dropoff_photo' as const,
+            })
+            .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(record).toHaveBeenCalledTimes(1);
+    const [event] = record.mock.calls[0]!;
+    expect(event).toEqual({ category: 'malware', outcome: 'blocked', reason, source: 'web', organizationId: ORG });
+    expect(JSON.stringify(record.mock.calls[0])).not.toMatch(/invoice|proof|\.pdf/);
+  });
+
+  it('a clean attachment records nothing; an unreadable one records nothing', async () => {
+    armStorage(PDF);
+    await poSvc().svc.add(poInput());
+    armStorage(null);
+    await poSvc().svc.add(poInput()).catch(() => undefined);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a recorder that fails: the refusal stands and the object is still removed', async () => {
+    record.mockImplementationOnce(async () => {
+      throw new Error('recorder down');
+    });
+    armStorage(HTML);
+    const { stub, svc } = poSvc();
+    await expect(svc.add(poInput())).rejects.toBeInstanceOf(ServiceError);
+    expect(stub.fromCalls).not.toContain('po_attachments');
+    expect(remove).toHaveBeenCalledWith([`${ORG}/${ENTITY}/${FILE}.pdf`]);
   });
 });
