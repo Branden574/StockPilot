@@ -44,7 +44,8 @@ import { SecurityResponseLevelBadge } from './security-response-level';
  * to the platform audit when it is opened.
  *
  * Escape and the Close buttons close it; focus stays inside while it is open
- * (the dialog's own trap) and goes back to the control that opened it.
+ * (the dialog's own trap) and goes back to the control that opened it, or,
+ * when that control has left the page, to the heading of its list.
  */
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -58,6 +59,13 @@ export function filledRoute(route: string, organizationId: string | null): strin
 }
 
 const LINK = 'text-foreground underline underline-offset-2 hover:text-ink-2';
+
+/** Focus on an element still on the page that may not take focus of its own (a heading): from code only. */
+function focusNear(el: HTMLElement | null): void {
+  if (!el || !el.isConnected) return;
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus();
+}
 
 function Place({
   place,
@@ -157,6 +165,7 @@ export function SecurityResponsePanel({
   open,
   onOpenChange,
   returnFocusTo,
+  fallbackFocusTo,
 }: SecurityResponsePanelProps) {
   // The cards opened in this panel, the first being the entry's: Back goes one down.
   const [trail, setTrail] = React.useState<SecurityResponseCardId[]>([request.cardId]);
@@ -252,6 +261,8 @@ export function SecurityResponsePanel({
           event.preventDefault();
           const to = returnFocusTo.current;
           if (to && to.isConnected) to.focus();
+          // Else (a poll moved its entry out of the list) to the list's heading (review S1).
+          else focusNear(fallbackFocusTo?.current ?? null);
         }}
       >
         <div className="flex items-start gap-3 border-b px-5 pb-4 pt-5 sm:px-6">

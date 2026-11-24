@@ -386,6 +386,31 @@ describe('the control and the host', () => {
     expect(document.activeElement).toBe(button);
   });
 
+  it("the control's entry left the list while the panel was open: focus goes to the list's heading (review S1)", async () => {
+    const user = userEvent.setup();
+    const List = ({ entry }: { entry: boolean }) => (
+      <SecurityResponseHost>
+        <section aria-label="Attack map">
+          <section aria-labelledby="flagged-heading">
+            <h3 id="flagged-heading">Flagged</h3>
+            {entry ? <SecurityResponseButton request={request()} /> : null}
+          </section>
+        </section>
+      </SecurityResponseHost>
+    );
+    const view = render(<List entry />);
+    await user.click(screen.getByRole('button', { name: /^How to respond: / }));
+    await screen.findByRole('dialog');
+    // A poll moves the entry out of the list while the card is read.
+    view.rerender(<List entry={false} />);
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const heading = screen.getByRole('heading', { name: 'Flagged' });
+    expect(document.activeElement).toBe(heading);
+    // Focus from code only: the heading is not put in the Tab order.
+    expect(heading).toHaveAttribute('tabindex', '-1');
+  });
+
   it('the Close button closes it too, and a second press opens the card again from its start', async () => {
     const user = userEvent.setup();
     render(

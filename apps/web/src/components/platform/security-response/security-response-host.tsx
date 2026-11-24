@@ -16,7 +16,7 @@ import type { SecurityResponseCardId } from '@stockpilot/core';
  *
  * The panel is a dialog over the right side of the page, not a route. On
  * close, focus goes back to the control that opened it, when that control is
- * still on the page.
+ * still on the page; else to the heading of the list it was in.
  */
 
 /** What the entry the card was opened from shows already, and nothing else. */
@@ -55,6 +55,24 @@ export interface SecurityResponsePanelProps {
   onOpenChange: (open: boolean) => void;
   /** The control to give focus back to on close. */
   returnFocusTo: React.RefObject<HTMLElement | null>;
+  /** Where focus goes instead when that control has left the page meanwhile (focusFallbackOf). */
+  fallbackFocusTo?: React.RefObject<HTMLElement | null>;
+}
+
+/**
+ * Where focus goes on close when the control that opened the panel has left
+ * the page meanwhile (a poll moved its entry out of the list; review S1): the
+ * heading of the list it was in (a section named by its heading), else the
+ * nearest named section or region. Found when the panel opens, while the
+ * control is still on the page.
+ */
+export function focusFallbackOf(trigger: HTMLElement | null): HTMLElement | null {
+  const near =
+    trigger?.parentElement?.closest<HTMLElement>(
+      'section[aria-labelledby], section[aria-label], [role="region"][aria-label]',
+    ) ?? null;
+  const headingId = near?.getAttribute('aria-labelledby');
+  return (headingId ? near?.ownerDocument.getElementById(headingId) : null) ?? near;
 }
 
 interface Host {
@@ -83,10 +101,12 @@ export function SecurityResponseHost({ children }: { children: React.ReactNode }
   );
   const [open, setOpen] = React.useState(false);
   const returnFocusTo = React.useRef<HTMLElement | null>(null);
+  const fallbackFocusTo = React.useRef<HTMLElement | null>(null);
   const host = React.useMemo<Host>(
     () => ({
       open(request, trigger) {
         returnFocusTo.current = trigger;
+        fallbackFocusTo.current = focusFallbackOf(trigger);
         // A new mount for each opening: the panel starts at the card asked for.
         setShown((was) => ({ request, n: (was?.n ?? 0) + 1 }));
         setOpen(true);
@@ -107,6 +127,7 @@ export function SecurityResponseHost({ children }: { children: React.ReactNode }
           open={open}
           onOpenChange={setOpen}
           returnFocusTo={returnFocusTo}
+          fallbackFocusTo={fallbackFocusTo}
         />
       ) : null}
     </HostContext.Provider>
