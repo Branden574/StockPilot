@@ -1,4 +1,4 @@
-import { resolveOrgTimezone, zonedParts } from '@stockpilot/core';
+import { resolveOrgTimezone, zonedParts, zoneShortName } from '@stockpilot/core';
 
 /**
  * Dates on the platform console.
@@ -58,15 +58,7 @@ export function formatMomentInZone(input: Instant, timeZone: string | null | und
   return `${p.day} ${MONTHS[p.month - 1]} ${p.year}, ${hh}:${mm} ${zoneName(ms, zone)}`;
 }
 
-/** The zone's short name at that instant ("PDT", "PST", "UTC"), or the zone id. */
+/** The zone's short name at that instant ("PDT", "PST", "UTC"), or the zone id: core's one rule. */
 function zoneName(ms: number, zone: string): string {
-  try {
-    const part = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'short' })
-      .formatToParts(new Date(ms))
-      .find((x) => x.type === 'timeZoneName');
-    if (part?.value) return part.value;
-  } catch {
-    // An engine without zone names: the zone id still says which zone it is.
-  }
-  return zone;
+  return zoneShortName(ms, zone);
 }
