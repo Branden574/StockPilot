@@ -415,11 +415,26 @@ describe('the reads', () => {
   });
 
   it('a replay that begins within a minute of the last whole read asks for nothing more', async () => {
-    const { spy } = mount(async (input) =>
-      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(quietAnswer()),
+    // The whole window's own last ten minutes hold an arc: the play starts live.
+    const liveWhole = {
+      timeline: [
+        ...answer().timeline,
+        cell('2026-11-23T21:59:00+00:00', 60, 'CN', 'exploit', 'blocked', 4),
+      ],
+    };
+    const { spy } = mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole'
+          ? dayRead(liveWhole)(input)
+          : recentRead(quietAnswer()),
+      wholeRead(answer(liveWhole)),
     );
     await advance(0);
+    expect(lastGlobe().timing).toBe('live');
+    // 30 seconds after the whole read the last ten minutes are empty: the replay, on a fresh read.
     await advance(30_000);
+    await advance(0);
+    expect(lastGlobe().timing).toBe('replay');
     await advance(30_000);
     expect(spy.mock.calls.map((c) => (c[0] as { scope: string }).scope)).toEqual([
       'whole',
