@@ -14,6 +14,7 @@ import {
   securityMapLegend,
   securityMapModeWords,
   securityMapCutWords,
+  securityMapNewerThanTotals,
   securityMapNotes,
   securityMapPillWords,
   securityMapRefusedWindowWords,
@@ -21,6 +22,8 @@ import {
   securityMapStopReason,
   securityMapStopWords,
 } from '@stockpilot/core';
+
+import { SecurityResponseHost } from '../security-response/security-response-host';
 
 import type { StageInsets } from './globe-renderer';
 import {
@@ -208,7 +211,14 @@ export function SecurityMapClient({
   // "More happened than ... can draw", of the play on screen only (lab walk 2, note A).
   const cutNote = securityMapCutWords(plan);
   const noteLines = [...notes, ...(cutNote ? [cutNote] : []), ...(notOnMap ? [notOnMap] : [])];
-  const empty = securityMapEmptyWords(state.whole);
+  // The feed or the live play holds entries newer than the totals (a poll brought
+  // them): the totals are being counted again, and nothing says "nothing" meanwhile.
+  const behind = securityMapNewerThanTotals(
+    state.whole,
+    [...state.feed, ...state.flaggedFeed],
+    state.recent,
+  );
+  const empty = securityMapEmptyWords(state.whole, behind);
   const stepIndex = Math.max(0, stage.stepIndex);
   const modeWords = securityMapModeWords(plan, state.whole, stepIndex);
   const pill = securityMapPillWords(plan, stop, state.health, stepIndex);
@@ -282,126 +292,133 @@ export function SecurityMapClient({
   );
 
   return (
-    <div ref={rootRef} className="flex min-w-0 flex-col gap-2" data-testid="security-map">
-      <style>{FLAT_MAP_CSS + STAGE_CSS}</style>
+    <SecurityResponseHost>
+      <div ref={rootRef} className="flex min-w-0 flex-col gap-2" data-testid="security-map">
+        <style>{FLAT_MAP_CSS + STAGE_CSS}</style>
 
-      {shortened ? (
-        <p
-          data-testid="security-map-shortened"
-          className="border-border bg-muted text-foreground rounded-md border px-3 py-2 text-[13px] font-medium"
+        {shortened ? (
+          <p
+            data-testid="security-map-shortened"
+            className="border-border bg-muted text-foreground rounded-md border px-3 py-2 text-[13px] font-medium"
+          >
+            {shortened}
+          </p>
+        ) : null}
+
+        <SecurityMapCounters counters={counters} />
+
+        <div
+          ref={stageRef}
+          data-testid="security-map-stage"
+          data-layout={wide ? 'wide' : notPhone ? 'medium' : 'phone'}
+          className="sm-stage relative h-[420px] w-full min-w-0 overflow-hidden rounded-xl sm:h-[clamp(420px,68vh,760px)]"
+          style={notPhone && stageHeight !== null ? { height: stageHeight } : undefined}
         >
-          {shortened}
-        </p>
-      ) : null}
-
-      <SecurityMapCounters counters={counters} />
-
-      <div
-        ref={stageRef}
-        data-testid="security-map-stage"
-        data-layout={wide ? 'wide' : notPhone ? 'medium' : 'phone'}
-        className="sm-stage relative h-[420px] w-full min-w-0 overflow-hidden rounded-xl sm:h-[clamp(420px,68vh,760px)]"
-        style={notPhone && stageHeight !== null ? { height: stageHeight } : undefined}
-      >
-        <div className="absolute inset-0" aria-hidden="true">
-          {shown.view === 'globe' ? (
-            <SecurityMapGlobe
-              arcs={stage.drawn}
-              timing={stage.timing}
-              startedAt={startedAt}
-              stepMs={SECURITY_MAP_REPLAY_STEP_MS}
-              target={target}
-              mayTurn={stop === null || stop === 'nothing_to_play'}
-              still={reducedMotion}
-              hidden={hidden}
-              heat={stage.heat}
-              labels={labels}
-              showLabels={notPhone}
-              insets={insets}
-              onUnavailable={onUnavailable}
-              onLost={onLost}
-            />
-          ) : (
-            <div
-              className="flex h-full w-full items-center justify-center p-3 sm:p-6"
-              style={wide ? { paddingRight: PANEL_WIDTH + PANEL_MARGIN * 2 } : undefined}
-            >
-              <SecurityMapFlat
+          <div className="absolute inset-0" aria-hidden="true">
+            {shown.view === 'globe' ? (
+              <SecurityMapGlobe
                 arcs={stage.drawn}
                 timing={stage.timing}
-                stepKey={stage.timing === 'replay' ? step.index : 0}
+                startedAt={startedAt}
+                stepMs={SECURITY_MAP_REPLAY_STEP_MS}
+                target={target}
+                mayTurn={stop === null || stop === 'nothing_to_play'}
+                still={reducedMotion}
+                hidden={hidden}
+                heat={stage.heat}
+                labels={labels}
+                showLabels={notPhone}
+                insets={insets}
+                onUnavailable={onUnavailable}
+                onLost={onLost}
+              />
+            ) : (
+              <div
+                className="flex h-full w-full items-center justify-center p-3 sm:p-6"
+                style={wide ? { paddingRight: PANEL_WIDTH + PANEL_MARGIN * 2 } : undefined}
+              >
+                <SecurityMapFlat
+                  arcs={stage.drawn}
+                  timing={stage.timing}
+                  stepKey={stage.timing === 'replay' ? step.index : 0}
+                />
+              </div>
+            )}
+          </div>
+          <div className="sm-vignette pointer-events-none absolute inset-0" aria-hidden="true" />
+
+          <div className="absolute left-3 top-3 sm:left-4 sm:top-4">
+            <SecurityMapModePill pill={pill} />
+          </div>
+          {notPhone ? (
+            <div className="absolute right-3 top-3 sm:right-4 sm:top-4">{controls}</div>
+          ) : null}
+          {wide ? (
+            <div
+              className="absolute bottom-[68px] top-[62px] flex flex-col"
+              style={{ right: PANEL_MARGIN, width: PANEL_WIDTH }}
+            >
+              {flaggedList}
+            </div>
+          ) : null}
+          {notPhone ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-4 px-4 pb-3.5"
+              aria-hidden="true"
+            >
+              <SecurityMapStageLegend items={legend} />
+              <SecurityMapTicker
+                row={tickerRow}
+                reserveRight={wide ? PANEL_WIDTH + PANEL_MARGIN : 0}
               />
             </div>
-          )}
+          ) : null}
         </div>
-        <div className="sm-vignette pointer-events-none absolute inset-0" aria-hidden="true" />
 
-        <div className="absolute left-3 top-3 sm:left-4 sm:top-4">
-          <SecurityMapModePill pill={pill} />
-        </div>
-        {notPhone ? (
-          <div className="absolute right-3 top-3 sm:right-4 sm:top-4">{controls}</div>
-        ) : null}
-        {wide ? (
+        {notPhone ? null : <div className="flex flex-wrap gap-2">{controls}</div>}
+        <div className="flex min-w-0">
           <div
-            className="absolute bottom-[68px] top-[62px] flex flex-col"
-            style={{ right: PANEL_MARGIN, width: PANEL_WIDTH }}
+            ref={captionRef}
+            className="text-muted-foreground grid min-w-0 flex-1 gap-x-8 text-[12.5px] leading-snug lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
+            data-testid="security-map-caption"
           >
-            {flaggedList}
-          </div>
-        ) : null}
-        {notPhone ? (
-          <div
-            className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end gap-4 px-4 pb-3.5"
-            aria-hidden="true"
-          >
-            <SecurityMapStageLegend items={legend} />
-            <SecurityMapTicker
-              row={tickerRow}
-              reserveRight={wide ? PANEL_WIDTH + PANEL_MARGIN : 0}
-            />
-          </div>
-        ) : null}
-      </div>
-
-      {notPhone ? null : <div className="flex flex-wrap gap-2">{controls}</div>}
-      <div className="flex min-w-0">
-        <div
-          ref={captionRef}
-          className="text-muted-foreground grid min-w-0 flex-1 gap-x-8 text-[12.5px] leading-snug lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]"
-          data-testid="security-map-caption"
-        >
-          {/* Always there, so a screen reader is told when the map stops and why
+            {/* Always there, so a screen reader is told when the map stops and why
               (review S9): "Not updating since ...", "Sign in again". Polite. */}
-          <div role="status" data-testid="security-map-stop-status" className="lg:col-span-2">
-            {stopWords ? (
-              <p data-testid="security-map-stop" className="text-foreground mb-1 font-medium">
-                {stopWords}
-              </p>
-            ) : null}
+            <div role="status" data-testid="security-map-stop-status" className="lg:col-span-2">
+              {stopWords ? (
+                <p data-testid="security-map-stop" className="text-foreground mb-1 font-medium">
+                  {stopWords}
+                </p>
+              ) : null}
+              {behind ? (
+                <p data-testid="security-map-recounting" className="text-foreground mb-1">
+                  {SECURITY_MAP_WORDS.recounting}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex min-w-0 flex-col gap-1">
+              <p data-testid="security-map-mode">{modeWords}</p>
+              {shown.note ? <p data-testid="security-map-view-note">{shown.note}</p> : null}
+            </div>
+            <p className="mt-1 lg:mt-0">
+              {securityMapAsOfWords(state.whole, undefined, state.wholeFailures > 0)}
+            </p>
           </div>
-          <div className="flex min-w-0 flex-col gap-1">
-            <p data-testid="security-map-mode">{modeWords}</p>
-            {shown.note ? <p data-testid="security-map-view-note">{shown.note}</p> : null}
-          </div>
-          <p className="mt-1 lg:mt-0">
-            {securityMapAsOfWords(state.whole, undefined, state.wholeFailures > 0)}
-          </p>
+        </div>
+
+        {wide ? null : flaggedList}
+
+        {refused ? <p className="text-destructive text-[13px]">{refused}</p> : null}
+        {empty ? <p className="text-foreground text-[13px]">{empty}</p> : null}
+
+        <SecurityMapLegend items={legend} />
+        <SecurityMapNotes lines={noteLines} />
+
+        <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+          <SecurityMapFeedList title={SECURITY_MAP_WORDS.feedTitle} rows={state.feed} />
+          <SecurityMapCountryTable whole={state.whole} behind={behind} />
         </div>
       </div>
-
-      {wide ? null : flaggedList}
-
-      {refused ? <p className="text-destructive text-[13px]">{refused}</p> : null}
-      {empty ? <p className="text-foreground text-[13px]">{empty}</p> : null}
-
-      <SecurityMapLegend items={legend} />
-      <SecurityMapNotes lines={noteLines} />
-
-      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-        <SecurityMapFeedList title={SECURITY_MAP_WORDS.feedTitle} rows={state.feed} />
-        <SecurityMapCountryTable whole={state.whole} />
-      </div>
-    </div>
+    </SecurityResponseHost>
   );
 }

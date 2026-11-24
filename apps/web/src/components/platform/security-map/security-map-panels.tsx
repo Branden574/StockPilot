@@ -10,8 +10,13 @@ import {
   SECURITY_MAP_COULD_NOT_CHECK,
   SECURITY_MAP_MARK_WORDS,
   SECURITY_MAP_WORDS,
+  SECURITY_RESPONSE_GENERAL_CARD,
+  SECURITY_RESPONSE_SIGN_IN_ALERT_CARD,
+  securityEventCategoryLabel,
   securityEventReasonLabel,
   securityEventSourceLabel,
+  securityResponseCardIdFor,
+  securityResponseLevelFor,
   securityMapFeedWords,
   securityMapFlaggedWords,
   securityMapTableRows,
@@ -21,9 +26,11 @@ import {
   type SecurityMapLegendItem,
   type SecurityMapPillKind,
   type SecurityMapWholeRead,
+  type SecurityResponseCardId,
 } from '@stockpilot/core';
 
 import { PlatformTable } from '../platform-table';
+import { SecurityResponseButton } from '../security-response/security-response-button';
 
 import { LABEL_LEADER } from './globe-math';
 import { markPath } from './security-map-flat';
@@ -340,6 +347,20 @@ export function SecurityMapStageLegend({ items }: { items: readonly SecurityMapL
             </span>
           );
         })}
+        <span
+          data-legend-alert=""
+          className="flex items-center gap-1.5"
+          style={{ color: ON_STAGE.text }}
+        >
+          <CategoryMark
+            shape={HIDDEN_KIND_LOOK.shape}
+            colour={HIDDEN_KIND_LOOK.hex}
+            hollow
+            tile={false}
+            size={13}
+          />
+          {SECURITY_MAP_WORDS.legendSignInAlert}
+        </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="flex items-center gap-1.5">
@@ -438,6 +459,31 @@ export function SecurityMapTicker({
   );
 }
 
+/** A kind's "How to respond": its general card (core's SECURITY_RESPONSE_GENERAL_CARD), no badge. */
+function KindResponse({
+  cardId,
+  label,
+}: {
+  /** The general card of the kind (core's SECURITY_RESPONSE_GENERAL_CARD); none for a kind with none. */
+  cardId: SecurityResponseCardId | null;
+  label: string;
+}) {
+  if (cardId === null) return null;
+  return (
+    <div className="mt-1.5">
+      <SecurityResponseButton
+        showLevel={false}
+        request={{
+          cardId,
+          what: label,
+          context: { kind: label, place: null, time: null, organization: null },
+          organizationId: null,
+        }}
+      />
+    </div>
+  );
+}
+
 export function SecurityMapLegend({ items }: { items: readonly SecurityMapLegendItem[] }) {
   return (
     <div className="flex flex-col gap-3">
@@ -454,9 +500,28 @@ export function SecurityMapLegend({ items }: { items: readonly SecurityMapLegend
                 {item.blocked} · {item.flagged}
               </p>
               {item.help ? <p className="text-muted-foreground text-[12px]">{item.help}</p> : null}
+              <KindResponse
+                cardId={SECURITY_RESPONSE_GENERAL_CARD[item.category]}
+                label={item.label}
+              />
             </li>
           );
         })}
+        <li data-legend-alert="" className="min-w-0">
+          <p className="text-foreground flex items-center gap-2 text-[13px] font-medium">
+            <CategoryMark shape={HIDDEN_KIND_LOOK.shape} colour={HIDDEN_KIND_LOOK.hex} hollow />
+            {SECURITY_MAP_WORDS.legendSignInAlert}
+          </p>
+          <p className="text-muted-foreground text-[12px]">
+            {SECURITY_MAP_WORDS.legendSignInAlertHelp}
+          </p>
+          {/* The flagged sign-in alerts are of a kind the map does not show: its
+              general card, called by the legend's own words. */}
+          <KindResponse
+            cardId={SECURITY_RESPONSE_SIGN_IN_ALERT_CARD}
+            label={SECURITY_MAP_WORDS.legendSignInAlert}
+          />
+        </li>
       </ul>
       <ul className="text-muted-foreground flex flex-wrap gap-x-6 gap-y-1 text-[12.5px]">
         <li className="flex items-center gap-2">
@@ -544,14 +609,15 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
       ),
     ],
   ];
+  const cardId = securityResponseCardIdFor(w.reason);
   return (
-    <li className="border-border border-b last:border-b-0">
+    <li className="border-border flex flex-wrap items-center border-b last:border-b-0">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((v) => !v)}
-        className={`hover:bg-muted/50 flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-[13px] ${FOCUS_INSIDE}`}
+        className={`hover:bg-muted/50 flex min-w-0 flex-[1_1_20rem] items-center gap-2 px-3 py-2 text-left text-[13px] ${FOCUS_INSIDE}`}
       >
         <CategoryMark shape={look.shape} colour={look.hex} hollow={w.outcome === 'flagged'} />
         <span className="text-muted-foreground shrink-0 font-mono text-[12px] tabular-nums">
@@ -562,10 +628,27 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
         </span>
         <span className="text-muted-foreground ml-auto shrink-0 text-[12px]">{w.outcomeLabel}</span>
       </button>
+      {cardId !== null ? (
+        <div className="flex shrink-0 justify-end px-3 pb-2 pl-9 pt-0.5 sm:pb-1.5 sm:pl-3">
+          <SecurityResponseButton
+            request={{
+              cardId,
+              what: securityEventReasonLabel(w.reason),
+              context: {
+                kind: w.categoryLabel,
+                place,
+                time: w.time,
+                organization: w.organizationName ?? w.organizationId ?? w.organizationWords,
+              },
+              organizationId: w.organizationId,
+            }}
+          />
+        </div>
+      ) : null}
       <dl
         id={id}
         hidden={!open}
-        className="grid gap-x-4 gap-y-1 px-3 pb-3 text-[12.5px] sm:grid-cols-[8rem_1fr]"
+        className="grid basis-full gap-x-4 gap-y-1 px-3 pb-3 text-[12.5px] sm:grid-cols-[8rem_1fr]"
       >
         {facts.map(([label, value]) => (
           <React.Fragment key={label}>
@@ -576,6 +659,12 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
       </dl>
     </li>
   );
+}
+
+/** The flagged rows with the Act now ones first, each group in its own order. */
+export function actNowFirst<R extends SecurityMapFlaggedRow>(rows: readonly R[]): R[] {
+  const now = (row: R) => securityResponseLevelFor(row[5]) === 'act_now';
+  return [...rows.filter(now), ...rows.filter((row) => !now(row))];
 }
 
 /** How many entries a list shows before "Show all N". */
@@ -696,7 +785,9 @@ export function SecurityMapFlaggedList({
   const [all, setAll] = React.useState(false);
   const stage = tone === 'stage';
   const more = rows.length > FLAGGED_VISIBLE;
-  const shown = all || !more ? rows : rows.slice(0, FLAGGED_VISIBLE);
+  // Show all puts the Act now entries first (their level from the reason, here in the
+  // browser: nothing new is sent); the short list keeps the newest first.
+  const shown = !more ? rows : all ? actNowFirst(rows) : rows.slice(0, FLAGGED_VISIBLE);
   const strong = stage ? undefined : 'text-foreground';
   const quiet = stage ? undefined : 'text-muted-foreground';
   const strongStyle = stage ? { color: ON_STAGE.text } : undefined;
@@ -745,6 +836,7 @@ export function SecurityMapFlaggedList({
           {shown.map((row) => {
             const w = securityMapFlaggedWords(row);
             const look = flaggedLookOf(w.category);
+            const cardId = securityResponseCardIdFor(row[5]);
             return (
               <li
                 key={w.key}
@@ -786,6 +878,26 @@ export function SecurityMapFlaggedList({
                       {w.time} · {w.count}
                     </span>
                   )}
+                  {cardId !== null ? (
+                    <span className="mt-1.5 flex">
+                      <SecurityResponseButton
+                        tone={tone}
+                        request={{
+                          cardId,
+                          what: w.what,
+                          // The kind only when the map shows it: a hidden kind is never named.
+                          context: {
+                            kind:
+                              w.category === null ? null : securityEventCategoryLabel(w.category),
+                            place: placeOf(w),
+                            time: w.time,
+                            organization: null,
+                          },
+                          organizationId: null,
+                        }}
+                      />
+                    </span>
+                  ) : null}
                 </span>
               </li>
             );
@@ -815,7 +927,14 @@ export function SecurityMapFlaggedList({
 }
 
 /** The by-country table: the map's numbers in full, and what a screen reader has in its place. */
-export function SecurityMapCountryTable({ whole }: { whole: SecurityMapWholeRead | null }) {
+export function SecurityMapCountryTable({
+  whole,
+  behind = false,
+}: {
+  whole: SecurityMapWholeRead | null;
+  /** The kept lists hold entries newer than the totals: an empty table is being counted again. */
+  behind?: boolean;
+}) {
   const rows = whole ? securityMapTableRows(whole) : null;
   return (
     <section className="flex min-w-0 flex-col gap-2" aria-label={SECURITY_MAP_WORDS.tableTitle}>
@@ -824,7 +943,9 @@ export function SecurityMapCountryTable({ whole }: { whole: SecurityMapWholeRead
       {rows === null ? (
         <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_COULD_NOT_CHECK}.</p>
       ) : rows.length === 0 ? (
-        <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_WORDS.feedEmpty}</p>
+        <p className="text-muted-foreground text-[13px]" data-testid="security-map-table-empty">
+          {behind ? SECURITY_MAP_WORDS.tableRecounting : SECURITY_MAP_WORDS.feedEmpty}
+        </p>
       ) : (
         <PlatformTable label="Blocked and flagged events by country" minWidth={520}>
           <TableHeader>
