@@ -56,7 +56,7 @@
 
 begin;
 
-select plan(162);
+select plan(167);
 
 -- Every time below is compared as text; the functions write UTC whatever
 -- the session says (0480/67), and so does this file.
@@ -470,7 +470,7 @@ select is(
   array['CREATE INDEX platform_security_alert_changes_changed_at_idx ON public.platform_security_alert_changes USING btree (changed_at)',
         'CREATE INDEX platform_security_alerts_awaiting_idx ON public.platform_security_alerts USING btree (claimed_at) WHERE ((push_planned OR email_planned) AND (resulted_at IS NULL) AND (disposition = ANY (ARRAY[''sent''::text, ''email_only_budget''::text])))',
         'CREATE INDEX platform_security_alerts_claimed_at_idx ON public.platform_security_alerts USING btree (claimed_at)',
-        'CREATE INDEX platform_security_alerts_open_idx ON public.platform_security_alerts USING btree (rule, subject) WHERE ((phase = ''started''::text) AND (rule <> ''serious_flag''::text) AND (state_ended_at IS NULL))',
+        'CREATE INDEX platform_security_alerts_open_idx ON public.platform_security_alerts USING btree (rule, subject) WHERE ((phase = ''started''::text) AND (rule = ANY (ARRAY[''aimed_guessing''::text, ''spike''::text, ''record_trouble''::text])) AND (state_ended_at IS NULL))',
         'CREATE UNIQUE INDEX platform_security_alert_changes_pkey ON public.platform_security_alert_changes USING btree (id)',
         'CREATE UNIQUE INDEX platform_security_alert_state_pkey ON public.platform_security_alert_state USING btree (id)',
         'CREATE UNIQUE INDEX platform_security_alerts_alert_key ON public.platform_security_alerts USING btree (rule, subject, event_key, phase)',
@@ -495,8 +495,8 @@ select is(
 select is(
   (select thresholds from public.platform_security_alert_state),
   '{"aimed_guessing_events": 20, "aimed_guessing_minutes": 30, "record_trouble_rows": 1, "serious_pushes_per_hour": 6,
-    "spike_event_floor": 50, "spike_learning_days": 14, "spike_source_floor": 10, "subject_pushes_per_day": 4,
-    "volume_pushes_per_day": 8}'::jsonb,
+    "serious_reason_pushes_per_day": 4, "spike_event_floor": 50, "spike_learning_days": 14, "spike_source_floor": 10,
+    "subject_pushes_per_day": 4, "volume_pushes_per_day": 8}'::jsonb,
   '0480/12: the thresholds'' names and defaults to the letter (the constants for core)');
 
 -- ── 2. Privileges ───────────────────────────────────────────────────────────
@@ -614,6 +614,8 @@ select is(
         pg_temp.constant_of('public.platform_security_alert_heartbeat(text, uuid, boolean, boolean)', 'c_serious_abandon_after'),
         pg_temp.constant_of('public.platform_security_alert_heartbeat(text, uuid, boolean, boolean)', 'c_report_gap'),
         pg_temp.constant_of('public.platform_security_alert_claim(text, text, text, text, jsonb)', 'c_volume_emails_per_day'),
+        pg_temp.constant_of('public.platform_security_alert_claim(text, text, text, text, jsonb)', 'c_record_emails_per_day'),
+        pg_temp.constant_of('public.platform_security_alert_claim(text, text, text, text, jsonb)', 'c_notice_gap'),
         pg_temp.constant_of('public.platform_security_alert_set(uuid, text, jsonb, jsonb)', 'c_check_gap'),
         pg_temp.constant_of('public.platform_security_alert_set(uuid, text, jsonb, jsonb)', 'c_checks_per_day'),
         pg_temp.constant_of('public.platform_security_alert_baseline()', 'c_max_rows'),
@@ -625,9 +627,10 @@ select is(
   array['interval := ''8 hours''', 'integer := 400000', 'integer := 100', 'interval := ''5 minutes''',
         'interval := ''8 hours''', 'interval := ''5 minutes''', 'interval := ''1 hour''', 'interval := ''24 hours''',
         'integer := 3', 'interval := ''30 minutes''', 'interval := ''10 hours''', 'interval := ''6 hours''', 'integer := 24',
+        'integer := 6', 'interval := ''6 hours''',
         'interval := ''30 minutes''', 'integer := 4', 'integer := 1500000', 'float8 := 0.99', 'interval := ''6 hours''',
         'interval := ''7 days''', 'integer := 20', 'integer := 30'],
-  '0480/33: the bounds, each written as designed: 8 hours read, 400,000 rows, 100 organizations, a retry after 5 minutes, push budgets by the hour and the day, three failures reported, an untaken retry abandoned after 30 minutes (a serious flag''s after 10 hours: the 8 hours read and a margin), the failing notice at most once in 6 hours, 24 volume and record emails a day, a planned check not within 30 minutes of the last and at most 4 a day, a baseline of 7 days, 1,500,000 rows, the 99th percentile, not again within 6 hours, 20 addresses, a planned check of 30 minutes at most');
+  '0480/33: the bounds, each written as designed: 8 hours read, 400,000 rows, 100 organizations, a retry after 5 minutes, push budgets by the hour and the day, three failures reported, an untaken retry abandoned after 30 minutes (a serious flag''s after 10 hours: the 8 hours read and a margin), the failing notice at most once in 6 hours, 24 volume emails a day and 6 of record trouble, the notice that alerts are held at most once in 6 hours, a planned check not within 30 minutes of the last and at most 4 a day, a baseline of 7 days, 1,500,000 rows, the 99th percentile, not again within 6 hours, 20 addresses, a planned check of 30 minutes at most');
 select is(
   array[pg_temp.constant_of('public.platform_security_alert_inputs()', 'c_serious_reasons'),
         pg_temp.constant_of('public.platform_security_alert_inputs()', 'c_aimed_reasons'),
@@ -770,6 +773,7 @@ select is(
   array[pg_temp.try($$ insert into public.platform_security_alert_state (id) values (true) $$),
         pg_temp.try($$ insert into public.platform_security_alert_state (id) values (false) $$),
         pg_temp.try($$ update public.platform_security_alert_state set thresholds = thresholds - 'spike_event_floor' $$),
+        pg_temp.try($$ update public.platform_security_alert_state set thresholds = thresholds - 'serious_reason_pushes_per_day' $$),
         pg_temp.try($$ update public.platform_security_alert_state set thresholds = thresholds || '{"extra": 1}' $$),
         pg_temp.try($$ update public.platform_security_alert_state set thresholds = thresholds || '{"spike_event_floor": "50"}' $$),
         pg_temp.try($$ update public.platform_security_alert_state set thresholds = thresholds || '{"spike_event_floor": -1}' $$),
@@ -777,8 +781,8 @@ select is(
         pg_temp.try($$ update public.platform_security_alert_state set thresholds = thresholds || '{"spike_event_floor": 1000001}' $$),
         pg_temp.try($$ update public.platform_security_alert_state set thresholds = '[]' $$),
         pg_temp.try($$ update public.platform_security_alert_state set thresholds = thresholds || '{"spike_event_floor": 1000000, "volume_pushes_per_day": 0}' $$)],
-  array['23505', '23514', '23514', '23514', '23514', '23514', '23514', '23514', '23514', 'ok'],
-  '0480/45: the state is one row (no second, no false key); its thresholds are exactly the nine names, each a whole number from 0 to 1,000,000');
+  array['23505', '23514', '23514', '23514', '23514', '23514', '23514', '23514', '23514', '23514', 'ok'],
+  '0480/45: the state is one row (no second, no false key); its thresholds are exactly the ten names, each a whole number from 0 to 1,000,000');
 select is(
   array[pg_temp.try($$ update public.platform_security_alert_state set baseline_computed_at = now() $$),
         pg_temp.try($$ update public.platform_security_alert_state set baseline_event_high = 1 $$),
@@ -858,7 +862,8 @@ begin
   return pg_temp.try(format(
     'insert into public.platform_security_alerts (rule, class, event_key, phase, disposition, push_planned, email_planned, '
     'email_floor, push_result, email_result, resulted_at) values (%L, %L, %L, ''started'', %L, %L, %L, %L, %L, %L, %L)',
-    p_rule, case p_rule when 'serious_flag' then 'serious' when 'record_trouble' then 'record' else 'volume' end,
+    p_rule, case p_rule when 'serious_flag' then 'serious' when 'record_trouble' then 'record' when 'alerts_held' then 'notice'
+                        else 'volume' end,
     case p_rule when 'serious_flag' then 'sign_in_not_me|2026-11-24T10:00Z' else '2026-11-24T10:20Z' end,
     p_disp, p_push, p_email, p_floor,
     case when p_result and p_push then '{"failed": 1}' end, case when p_result and p_email then '{"sent": 1}' end,
@@ -876,9 +881,18 @@ select is(
         pg_temp.ins('serious_flag', 'email_only_budget', false, false, 'push_budget_spent'),
         pg_temp.ins('serious_flag', 'email_only_budget', false, true, 'email_off'),
         pg_temp.ins('spike', 'email_only_budget', false, true, 'push_budget_spent'),
-        pg_temp.ins('record_trouble', 'sent', true, true, 'push_failed', true)],
-  array['ok', '23514', 'ok', 'ok', 'ok', '23514', '23514', '23514', '23514', '23514', '23514'],
-  '0480/49: held for the summary hands out nothing; an email that went although email alerts were off is a serious flag''s only, and says why: the push budget was spent (no push), or the push reached no one (after its result)');
+        pg_temp.ins('record_trouble', 'sent', true, true, 'push_failed', true),
+        pg_temp.ins('spike', 'held_with_notice', false, false, null),
+        pg_temp.ins('spike', 'held_with_notice', true, false, null),
+        pg_temp.ins('alerts_held', 'sent', false, true, null),
+        pg_temp.ins('alerts_held', 'sent', true, false, null),
+        pg_temp.ins('alerts_held', 'sent', false, true, 'push_budget_spent'),
+        pg_temp.try($$ insert into public.platform_security_alerts (rule, class, event_key, phase, disposition) values ('alerts_held', 'volume', '2026-11-24T10:20Z', 'started', 'record_only') $$),
+        pg_temp.try($$ insert into public.platform_security_alerts (rule, class, event_key, phase, disposition) values ('alerts_held', 'notice', '2026-11-24T10:20Z', 'ended', 'record_only') $$),
+        pg_temp.try($$ insert into public.platform_security_alerts (rule, class, event_key, phase, disposition, state_ended_at) values ('alerts_held', 'notice', '2026-11-24T10:20Z', 'started', 'record_only', now()) $$)],
+  array['ok', '23514', 'ok', 'ok', 'ok', '23514', '23514', '23514', '23514', '23514', '23514',
+        'ok', '23514', 'ok', 'ok', '23514', '23514', '23514', '23514'],
+  '0480/49: held for the summary or with a notice hands out nothing; the notice that more alerts are held (alerts_held) is its own class, started only, never a state; an email that went although email alerts were off is a serious flag''s only, and says why: the push budget was spent (no push), or the push reached no one (after its result)');
 select is(
   array[pg_temp.try($$ select pg_temp.raw('{}'), pg_temp.raw('{}') $$),
         pg_temp.try($$ select pg_temp.raw('{}'), pg_temp.raw('{"phase": "ended"}') $$),
@@ -897,7 +911,7 @@ select is(
         pg_temp.try($$ insert into public.platform_security_alert_changes (actor_user_id, name, old_value, new_value) values (gen_random_uuid(), 'spike_event_floor', '50', '60') $$),
         pg_temp.try($$ insert into public.platform_security_alert_changes (actor_user_id, name, old_value, new_value) values (gen_random_uuid(), 'spike_event_floor', '50', 'true') $$)],
   array['ok', '23514', '23514', '23514', '23502', 'ok', '23514', 'ok', '23514'],
-  '0480/51: a change row names one of the thirteen settings and an actor, and goes from one value to another of its kind (a switch boolean, a planned check an end time or none, a threshold a number)');
+  '0480/51: a change row names one of the fourteen settings and an actor, and goes from one value to another of its kind (a switch boolean, a planned check an end time or none, a threshold a number)');
 
 -- ── 6. What the job reads ───────────────────────────────────────────────────
 savepoint inputs_fixture;
@@ -1066,7 +1080,7 @@ select is(
   array[pg_temp.inp() - 'generated_at', pg_temp.lst() - 'generated_at', pg_temp.claim('spike', '', pg_temp.bk(-3)),
         pg_temp.hb('start'), pg_temp.setv(pg_temp.u(1), 'push_on', 'true'), pg_temp.base()],
   array['{"window": null, "refused": "no_state"}'::jsonb, '{"refused": "no_state"}'::jsonb,
-        '{"outcome": "refused", "refused": "no_state", "id": null, "disposition": null, "push": false, "email": false, "attempt": null, "open_key": null}'::jsonb,
+        '{"outcome": "refused", "refused": "no_state", "id": null, "disposition": null, "push": false, "email": false, "attempt": null, "open_key": null, "notice": null}'::jsonb,
         '{"step": "start", "refused": "no_state"}'::jsonb,
         '{"changed": false, "refused": "unknown_actor", "name": "push_on", "old_value": null, "new_value": null, "changed_at": null}'::jsonb,
         '{"computed": false, "refused": "no_state"}'::jsonb],
@@ -1192,7 +1206,7 @@ select is(
   (select array[pg_temp.keys_of(c1.a)::text, c1.a ->> 'outcome', c1.a ->> 'disposition', c1.a ->> 'push', c1.a ->> 'email',
                 c1.a ->> 'attempt', c2.a ->> 'outcome', (c2.a ->> 'id' = c1.a ->> 'id')::text, c2.a ->> 'push', c2.a ->> 'email']
      from c1, c2),
-  array['{attempt,disposition,email,id,open_key,outcome,push,refused}', 'new', 'record_only', 'false', 'false', '1',
+  array['{attempt,disposition,email,id,notice,open_key,outcome,push,refused}', 'new', 'record_only', 'false', 'false', '1',
         'duplicate', 'true', 'false', 'false'],
   '0480/75: two runs claim the same serious flag (one with a subject of null, one of ''''): the first is new, the second a duplicate of the same row and sends nothing (M9: no hole for a missing subject)');
 select is(
@@ -1240,8 +1254,8 @@ select pg_temp.age((select (a ->> 'id')::uuid from r1), interval '5 minutes');
 select is(
   array[pg_temp.claim('serious_flag', '', pg_temp.hk('sign_in_not_me', pg_temp.at(-3))) - 'id',
         pg_temp.claim('serious_flag', '', pg_temp.hk('sign_in_not_me', pg_temp.at(-3))) - 'id'],
-  array['{"outcome": "not_sent", "refused": null, "disposition": "not_sent", "push": false, "email": false, "attempt": 2, "open_key": null}'::jsonb,
-        '{"outcome": "duplicate", "refused": null, "disposition": "not_sent", "push": false, "email": false, "attempt": 2, "open_key": null}'::jsonb],
+  array['{"outcome": "not_sent", "refused": null, "disposition": "not_sent", "push": false, "email": false, "attempt": 2, "open_key": null, "notice": null}'::jsonb,
+        '{"outcome": "duplicate", "refused": null, "disposition": "not_sent", "push": false, "email": false, "attempt": 2, "open_key": null, "notice": null}'::jsonb],
   '0480/80: with no result 5 minutes after the second, it is marked not_sent and never handed out again');
 select is(
   array[(select pg_temp.res((a ->> 'id')::uuid, 2, '{"sent": 1}', '{"sent": 1}') ->> 'refused' from r1),
@@ -1345,7 +1359,7 @@ select is(
 select pg_temp.fresh();
 create temporary table off1 as select pg_temp.claim('serious_flag', '', pg_temp.hk('sign_in_not_me', pg_temp.at(-3))) as a;
 select is(
-  array[(select a - 'id' - 'refused' - 'open_key' - 'attempt' from off1),
+  array[(select a - 'id' - 'refused' - 'open_key' - 'attempt' - 'notice' from off1),
         (select to_jsonb(a) - 'id' - 'claimed_at' - 'counts' - 'event_key' - 'subject' - 'rule' - 'class' - 'phase'
            from public.platform_security_alerts a)],
   array['{"outcome": "new", "disposition": "record_only", "push": false, "email": false}'::jsonb,
@@ -1451,6 +1465,28 @@ select is(
                        'unrecorded_server_form_code', 'over_minute_cap', 'over_buffer_cap', 'auth_log_over_cap'], 24),
   'pushes:32 emails:192 not new:0',
   '0480/95: every serious key of every hour for a day pushes at most 4 times for each of the eight reasons (32 in all, not 144), and every one goes by email');
+-- A flood of one serious reason, one new key an hour: what each claim
+-- answers, as 'first then each other answer xN' (in the order first seen).
+create function pg_temp.flood(p_hours integer) returns text language plpgsql as $$
+declare
+  h integer;
+  c jsonb;
+  v text[] := '{}';
+begin
+  for h in 1..p_hours loop
+    c := pg_temp.claim('serious_flag', '', pg_temp.hk('sign_in_not_me', now()));
+    v := v || ((c ->> 'outcome') || ':' || coalesce(c ->> 'disposition', '-') || ':' || coalesce(c ->> 'push', '-') || ':'
+               || coalesce(c ->> 'email', '-'));
+    update public.platform_security_alerts
+       set event_key = 'sign_in_not_me|' || to_char(timestamp '2001-01-01 00:00' + make_interval(hours => h), 'YYYY-MM-DD"T"HH24":00Z"')
+     where id = (c ->> 'id')::uuid;
+    update public.platform_security_alerts set claimed_at = claimed_at - interval '1 hour';
+  end loop;
+  return v[1] || ' then ' || coalesce((select string_agg(x.e || ' x' || x.n, ', ' order by x.first)
+                                         from (select e, count(*) as n, min(o) as first
+                                                 from unnest(v[2:]) with ordinality u(e, o) group by e) x), 'nothing');
+end;
+$$;
 -- Six cheap alerts do not delay a serious flag (M6).
 select pg_temp.fresh();
 select pg_temp.sw(true, true);
@@ -1515,6 +1551,7 @@ declare
   ak     text;
   pushes integer := 0;
   emails integer := 0;
+  notices integer := 0;
   other  integer := 0;
 begin
   for cy in 1..p_cycles loop
@@ -1527,15 +1564,19 @@ begin
       end if;
       pushes := pushes + coalesce((c ->> 'push')::boolean::integer, 0) + coalesce((e ->> 'push')::boolean::integer, 0);
       emails := emails + coalesce((c ->> 'email')::boolean::integer, 0) + coalesce((e ->> 'email')::boolean::integer, 0);
+      notices := notices + (jsonb_typeof(c -> 'notice') = 'object')::integer + (jsonb_typeof(e -> 'notice') = 'object')::integer;
       update public.platform_security_alerts set event_key = ak where id in ((c ->> 'id')::uuid, (e ->> 'id')::uuid);
     end loop;
+    -- A notice's key is the bucket it was made in; this one's goes to the past with it.
+    update public.platform_security_alerts set event_key = ak where rule = 'alerts_held' and event_key = pg_temp.bk(0);
     update public.platform_security_alerts set claimed_at = claimed_at - interval '20 minutes';
   end loop;
-  return 'pushes:' || pushes || ' emails:' || emails || ' not new:' || other;
+  return 'pushes:' || pushes || ' emails:' || emails || ' notices:' || notices || ' not new:' || other;
 end;
 $$;
 select pg_temp.fresh();
 select pg_temp.sw(true, true);
+update public.platform_security_alert_state set summary_on = true;
 create temporary table flap1 as select pg_temp.flapping_orgs(10, 72) as a;
 create temporary table flap1_s as select pg_temp.claim('serious_flag', '', pg_temp.hk('sign_in_not_me', now())) as a;
 select is(
@@ -1543,8 +1584,71 @@ select is(
         (select string_agg(x.disposition || '=' || x.n, ',' order by x.disposition)
            from (select disposition, count(*) as n from public.platform_security_alerts where rule = 'aimed_guessing' group by 1) x),
         (select (a ->> 'disposition') || ' push:' || (a ->> 'push') || ' email:' || (a ->> 'email') from flap1_s)],
-  array['pushes:8 emails:24 not new:0', 'email_only_budget=4,held_for_summary=1416,sent=20', 'sent push:true email:true'],
-  '0480/102: volume alerts that stop and start cannot email without bound: ten organizations, a start and an end every 20 minutes for 24 hours, send 8 pushes and 24 emails, the other 1,416 held for the daily summary; a serious flag after them still goes by push and email');
+  array['pushes:8 emails:24 notices:0 not new:0', 'email_only_budget=4,held_for_summary=1416,sent=20', 'sent push:true email:true'],
+  '0480/102: volume alerts that stop and start cannot email without bound: ten organizations, a start and an end every 20 minutes for 24 hours, send 8 pushes and 24 emails, the other 1,416 held for the daily summary (it is on); a serious flag after them still goes by push and email');
+-- With the summary off, held is never silent: the claim hands out one
+-- notice that more alerts are being held (open the console), at most once
+-- in 6 hours, and the rows say they were held with it.
+select pg_temp.fresh();
+select pg_temp.sw(true, true);
+create temporary table flap2 as select pg_temp.flapping_orgs(10, 72) as a;
+select is(
+  array[(select a from flap2),
+        (select string_agg(x.disposition || '=' || x.n, ',' order by x.disposition)
+           from (select disposition, count(*) as n from public.platform_security_alerts where rule = 'aimed_guessing' group by 1) x),
+        (select string_agg(a.class || ':' || a.disposition || ':' || a.push_planned || ':' || a.email_planned || ':'
+                           || coalesce(a.counts ->> 'held', '-'), ',' order by a.claimed_at)
+           from public.platform_security_alerts a where a.rule = 'alerts_held'),
+        (select count(*)::text from public.platform_security_alerts a
+          where a.rule = 'aimed_guessing' and a.disposition not in ('sent', 'email_only_budget', 'held_with_notice'))],
+  array['pushes:8 emails:24 notices:4 not new:0', 'email_only_budget=4,held_with_notice=1416,sent=20',
+        'notice:sent:false:true:1,notice:sent:false:true:357,notice:sent:false:true:717,notice:sent:false:true:1077', '0'],
+  '0480/103: with the summary off, volume alerts past the day''s 24 emails are held with a notice: one email that more alerts are being held, at most once in 6 hours (4 in the 24 hours), counts only (the alerts held so in the last 24 hours: 1, 357, 717, 1,077); none is both unsent and unreported');
+-- The notice is an alert like the others for its sending: its one retry,
+-- then not_sent; the job cannot claim one of its own.
+create temporary table nt1 as
+  select id, event_key from public.platform_security_alerts where rule = 'alerts_held' order by claimed_at desc limit 1;
+create temporary table nt1_inp as select pg_temp.inp() as a;
+select is(
+  array[(select count(*)::text from nt1, nt1_inp, jsonb_array_elements(pg_temp.arr(nt1_inp.a -> 'retry_due')) e
+          where e ->> 'rule' = 'alerts_held' and e ->> 'event_key' = nt1.event_key),
+        (select pg_temp.claim('alerts_held', '', event_key) ->> 'outcome' from nt1),
+        pg_temp.refused(pg_temp.claim('alerts_held', '', pg_temp.bk(-1))),
+        (select count(*)::text from pg_temp.arr((select a -> 'open_states' from nt1_inp)) x(e), jsonb_array_elements(x.e) y
+          where y ->> 'rule' = 'alerts_held')],
+  array['1', 'retry', 'not_claimable', '0'],
+  '0480/104: a notice with no result is listed for its retry and retried like any alert; a new notice cannot be claimed by the job (the claim makes it); a notice is never an open state');
+-- The record class has its own day of emails (6), apart from the volume
+-- alerts' 24: twenty-four volume emails do not silence record trouble, and
+-- record trouble past its own six is held.
+select pg_temp.fresh();
+select pg_temp.sw(true, true);
+update public.platform_security_alert_state set summary_on = true;
+create temporary table rec_vol as
+  select pg_temp.claim('aimed_guessing', pg_temp.o(g)::text, pg_temp.bk(-1), 'started') as s,
+         pg_temp.claim('aimed_guessing', pg_temp.o(g)::text, pg_temp.bk(-1), 'ended') as e
+    from generate_series(1, 12) g;
+create function pg_temp.record_flaps(p_n integer) returns void language plpgsql as $$
+declare
+  i integer;
+begin
+  for i in 1..p_n loop
+    perform pg_temp.claim('record_trouble', '', pg_temp.bk(-10 + i), 'started');
+    perform pg_temp.claim('record_trouble', '', pg_temp.bk(-10 + i), 'ended');
+  end loop;
+end;
+$$;
+select pg_temp.record_flaps(4);
+create temporary table vol25 as select pg_temp.claim('aimed_guessing', pg_temp.o(13)::text, pg_temp.bk(-1)) as a;
+select is(
+  array[pg_temp.sent_of('aimed_guessing'), array_to_string(pg_temp.rows_of('record_trouble'), ' '),
+        (select (a ->> 'disposition') from vol25)],
+  array['pushes:8 emails:24 rows:25',
+        'started:email_only_budget:false:true:false ended:sent:false:true:false started:email_only_budget:false:true:false ended:sent:false:true:false '
+        || 'started:email_only_budget:false:true:false ended:sent:false:true:false started:held_for_summary:false:false:false ended:held_for_summary:false:false:false',
+        'held_for_summary'],
+  '0480/105: record trouble has its own 6 emails a day: after 24 volume emails it still goes by email, its seventh and eighth are held for the summary, and the 25th volume alert is held too (24 volume emails, 25 rows)');
+
 -- Email is a serious flag's floor only: a volume alert with push alone and
 -- the day's 8 pushes spent is recorded only (email alerts are off).
 select pg_temp.fresh();
@@ -1553,9 +1657,11 @@ select pg_temp.claim('aimed_guessing', pg_temp.o(g)::text, pg_temp.bk(-2)) from 
 select is(
   (select array_agg(a.disposition || ':' || a.push_planned || ':' || a.email_planned || ':' || coalesce(to_jsonb(a) ->> 'email_floor', '-')
                     order by a.subject)
-     from public.platform_security_alerts a),
-  array_fill('sent:true:false:-'::text, array[8]) || array['record_only:false:false:-'],
-  '0480/103: email is a serious flag''s floor only: with push alone and the day''s 8 pushes spent, the ninth volume alert is recorded only (no email with email alerts off)');
+     from public.platform_security_alerts a where a.rule = 'aimed_guessing')
+  || array[(select string_agg(a.disposition || ':' || a.push_planned || ':' || a.email_planned, ',')
+              from public.platform_security_alerts a where a.rule = 'alerts_held')],
+  array_fill('sent:true:false:-'::text, array[8]) || array['held_with_notice:false:false:-', 'sent:true:false'],
+  '0480/106: email is a serious flag''s floor only: with push alone and the day''s 8 pushes spent, the ninth volume alert sends no email (email alerts are off) but is held with a notice, which goes by push (the summary is off)');
 
 -- ── 11. A scan that lasts 12 hours claims at most 4 pushes (M6) ─────────────
 -- Seventy-two runs, one every 10 minutes for 12 hours, as a job would claim
@@ -1616,7 +1722,7 @@ select is(
            from public.platform_security_alerts where rule = 'aimed_guessing')],
   array[(select 'pushes:4 emails:24 rows:' || n from flap_spike), 'true',
         'pushes:3 emails:3 rows:3', 'started:true,reminder:true,reminder:true'],
-  '0480/104: a scan that lasts 12 hours claims at most 4 pushes: a scan that stops and starts on every other run pushes 4 times (and emails 24 times, the rest held for the summary), and a steady one 3 times (its start, the 1-hour and 6-hour reminders; the 24-hour one not due), one row each however often it is claimed');
+  '0480/107: a scan that lasts 12 hours claims at most 4 pushes: a scan that stops and starts on every other run pushes 4 times (and emails 24 times, the rest held for the summary), and a steady one 3 times (its start, the 1-hour and 6-hour reminders; the 24-hour one not due), one row each however often it is claimed');
 
 -- ── 12. The claim: states ───────────────────────────────────────────────────
 select pg_temp.fresh();
@@ -1635,16 +1741,16 @@ select is(
         pg_temp.claim('spike', '', pg_temp.bk(-20)) ->> 'outcome']::text[],
   array['no_open_state', 'no_open_state', 'new',
         jsonb_build_object('outcome', 'refused', 'refused', 'already_open', 'disposition', null, 'push', false,
-                           'email', false, 'attempt', null, 'open_key', pg_temp.bk(-30))::text,
+                           'email', false, 'attempt', null, 'open_key', pg_temp.bk(-30), 'notice', null)::text,
         'reminder_not_due', 'new', 'no_open_state', 'new', 'state_ended', 'duplicate', 'refused', 'new'],
-  '0480/105: a state: no reminder or end before it starts; one open at a time for a rule and subject (another start is already_open and names the open one); a reminder only once its step has passed (5 hours in, the 6-hour one is not due) and only of the open state; after its end no reminder (state_ended), its end again is a duplicate, its start again is refused (state_ended), and a later start is a new state');
+  '0480/108: a state: no reminder or end before it starts; one open at a time for a rule and subject (another start is already_open and names the open one); a reminder only once its step has passed (5 hours in, the 6-hour one is not due) and only of the open state; after its end no reminder (state_ended), its end again is a duplicate, its start again is refused (state_ended), and a later start is a new state');
 select is(
   (select array_agg(phase || ':' || event_key || ':' || (state_ended_at is not null)::text
                     order by claimed_at, split_part(event_key, '+', 1), case phase when 'started' then 0 when 'reminder' then 1 else 2 end)
      from public.platform_security_alerts),
   array['started:' || pg_temp.bk(-30) || ':true', 'reminder:' || pg_temp.bk(-30) || '+1h:false',
         'ended:' || pg_temp.bk(-30) || ':false', 'started:' || pg_temp.bk(-20) || ':false'],
-  '0480/106: the end marks its started row ended; the later state is open');
+  '0480/109: the end marks its started row ended; the later state is open');
 -- A condition that ends and comes back (Q15): a start with the ended
 -- state's key is told so in a word of its own (not answered like an alert
 -- already sent), and the job's next key alerts again, exactly once.
@@ -1664,9 +1770,9 @@ select is(
            pg_temp.sent_of('spike')],
   array['new', 'new',
         jsonb_build_object('outcome', 'refused', 'refused', 'state_ended', 'disposition', null, 'push', false, 'email', false,
-                           'attempt', null, 'open_key', null)::text,
+                           'attempt', null, 'open_key', null, 'notice', null)::text,
         'new', 'duplicate', 'state_ended', 'already_open', pg_temp.bk(-5), 'pushes:2 emails:3 rows:3'],
-  '0480/107: a condition that ended and comes back: a start with the ended state''s key is refused state_ended (so the job uses a newer key), the newer key opens one new state and alerts once (its repeat a duplicate), and the old key stays refused');
+  '0480/110: a condition that ended and comes back: a start with the ended state''s key is refused state_ended (so the job uses a newer key), the newer key opens one new state and alerts once (its repeat a duplicate), and the old key stays refused');
 -- A state that started 25 hours ago (written by the owner, as a run a day
 -- ago would have): every reminder is due.
 select pg_temp.fresh();
@@ -1680,7 +1786,7 @@ select is(
         pg_temp.refused(pg_temp.claim('record_trouble', '', pg_temp.bk(-150))),
         pg_temp.refused(pg_temp.claim('record_trouble', '', pg_temp.bk(-151)))],
   array['new', 'new', 'new', 'new', 'state_ended', 'key_out_of_window'],
-  '0480/108: a state older than the read''s window still takes its reminders and its end; its own key cannot start it again (state_ended), and no other key so old can start one');
+  '0480/111: a state older than the read''s window still takes its reminders and its end; its own key cannot start it again (state_ended), and no other key so old can start one');
 
 -- ── 13. The claim: the planned check ────────────────────────────────────────
 select pg_temp.fresh();
@@ -1694,7 +1800,7 @@ select is(
         array_to_string(pg_temp.rows_of('serious_flag'), ' ')],
   array['started:held_planned_check:false:false:false', 'started:held_planned_check:false:false:false',
         'started:sent:true:true:true'],
-  '0480/109: during a planned check volume and record alerts are recorded as held (nothing sent, no slot used); a serious flag is never held');
+  '0480/112: during a planned check volume and record alerts are recorded as held (nothing sent, no slot used); a serious flag is never held');
 select pg_temp.claim('spike', '', pg_temp.bk(-3), 'ended');
 update public.platform_security_alert_state set planned_check_until = now() - interval '1 second';
 select pg_temp.claim('aimed_guessing', pg_temp.o(1)::text, pg_temp.bk(-3), 'ended');
@@ -1705,7 +1811,7 @@ select is(
   array['started:held_planned_check:false:false:false ended:held_planned_check:false:false:false',
         'started:held_planned_check:false:false:false ended:held_planned_check:false:false:false',
         'started:sent:true:true:true'],
-  '0480/110: the end of a held state is held, during the check or after it ended; once the check has ended, a new alert is sent');
+  '0480/113: the end of a held state is held, during the check or after it ended; once the check has ended, a new alert is sent');
 select pg_temp.fresh();
 select pg_temp.sw(true, true);
 update public.platform_security_alert_state set planned_check_until = now() + interval '20 minutes';
@@ -1717,7 +1823,7 @@ select pg_temp.claim('spike', '', pg_temp.bk(-40), 'ended');
 select is(
   pg_temp.rows_of('spike'),
   array['started:held_planned_check:false:false:false', 'reminder:sent:true:true:true', 'ended:sent:false:true:false'],
-  '0480/111: a state that outlasts the check is not hidden by it: its reminder is the first notice, and its end is sent');
+  '0480/114: a state that outlasts the check is not hidden by it: its reminder is the first notice, and its end is sent');
 
 -- ── 14. The result ──────────────────────────────────────────────────────────
 select pg_temp.fresh();
@@ -1748,7 +1854,7 @@ select is(
   array['not_an_alert', 'not_an_alert', 'not_a_result', 'not_a_result', 'not_a_result', 'not_a_result', 'not_a_result',
         'not_a_result', 'not_a_result', 'not_a_result', 'not_this_attempt', 'not_this_attempt', 'not_its_channels',
         'not_its_channels', 'not_its_channels', '0'],
-  '0480/112: a result is refused for no alert, a result not of counts of the known codes (0 to 100 each), another attempt, or a channel the alert was not handed out for (and for none it was); nothing refused is written');
+  '0480/115: a result is refused for no alert, a result not of counts of the known codes (0 to 100 each), another attempt, or a channel the alert was not handed out for (and for none it was); nothing refused is written');
 select is(
   array[pg_temp.res(pg_temp.q('q1'), 1, '{"sent": 1, "no_account": 1, "no_phone": 0, "failed": 0, "timeout": 0, "skipped": 0}',
                     '{"sent": 2, "failed": 0, "timeout": 0, "skipped": 0}'),
@@ -1756,13 +1862,13 @@ select is(
         pg_temp.res(pg_temp.q('q1'), 1, '{"sent": 1}', '{"sent": 1}')],
   array['{"recorded": true, "refused": null}'::jsonb, '{"recorded": true, "refused": null}'::jsonb,
         '{"recorded": false, "refused": "already_recorded"}'::jsonb],
-  '0480/113: a result for each channel handed out is recorded once; a second is refused');
+  '0480/116: a result for each channel handed out is recorded once; a second is refused');
 select is(
   (select array_agg(coalesce(push_result::text, '-') || ' ' || email_result::text || ' ' || (resulted_at = now())::text order by event_key)
      from public.platform_security_alerts),
   array['- {"timeout": 1} true',
         '{"sent": 1, "failed": 0, "skipped": 0, "timeout": 0, "no_phone": 0, "no_account": 1} {"sent": 2, "failed": 0, "skipped": 0, "timeout": 0} true'],
-  '0480/114: and stored as counts of result codes, never an address');
+  '0480/117: and stored as counts of result codes, never an address');
 -- A retried alert takes the second attempt's result, not the first's.
 -- Its retry hands out what the first claim planned (push only), though
 -- email has been turned on since.
@@ -1777,7 +1883,7 @@ select is(
         (select pg_temp.res((a ->> 'id')::uuid, 1, '{"sent": 1}') ->> 'refused' from q3),
         (select pg_temp.res((a ->> 'id')::uuid, 2, '{"sent": 1}') ->> 'recorded' from q3)],
   array['retry push:true email:false', 'not_this_attempt', 'true'],
-  '0480/115: a retry hands out the channels the first claim planned, whatever the switches say now; then the first attempt''s result is refused and the second''s recorded');
+  '0480/118: a retry hands out the channels the first claim planned, whatever the switches say now; then the first attempt''s result is refused and the second''s recorded');
 -- A serious flag sent by push alone whose push reached no one is owed its
 -- email, whatever the email switch says: its result is refused until the
 -- email's result comes with it, and the row says why the email went. A
@@ -1807,7 +1913,7 @@ select is(
         'serious_flag:sent:true:true:push_failed:{"no_phone": 2}:{"sent": 2}',
         'spike:sent:true:false:-:{"failed": 1}:-',
         'push_failed'],
-  '0480/116: a serious flag sent by push alone whose push reached no one is owed its email though email alerts are off: the push result alone is refused (email_floor_due), the two together are recorded and the row (and the console) says push_failed; a push that reached someone, or a volume alert, owes nothing');
+  '0480/119: a serious flag sent by push alone whose push reached no one is owed its email though email alerts are off: the push result alone is refused (email_floor_due), the two together are recorded and the row (and the console) says push_failed; a push that reached someone, or a volume alert, owes nothing');
 
 -- ── 15. The heartbeat ───────────────────────────────────────────────────────
 select pg_temp.fresh();
@@ -1817,13 +1923,13 @@ select is(
   array['{"step": null, "refused": "not_a_step"}'::jsonb, '{"step": null, "refused": "not_a_step"}'::jsonb,
         '{"step": "finish", "refused": "not_a_finish"}'::jsonb, '{"step": "finish", "refused": "not_a_finish"}'::jsonb,
         '{"step": "finish", "refused": "not_a_finish"}'::jsonb],
-  '0480/117: a step that is not start or finish, and a finish without its run and outcome, are refused');
+  '0480/120: a step that is not start or finish, and a finish without its run and outcome, are refused');
 create temporary table hb1 as select pg_temp.hb('start') as a;
 select is(
   (select a - 'run_id' from hb1),
   '{"step": "start", "refused": null, "previous": {"started_at": null, "finished_at": null, "ok": null}, "last_ok_at": null,
     "missed_runs": 0, "failures_in_a_row": 0, "report_now": false, "marked_not_sent": 0}'::jsonb,
-  '0480/118: the first run ever: nothing before it, nothing missed');
+  '0480/121: the first run ever: nothing before it, nothing missed');
 select is(
   array[pg_temp.hb('finish', gen_random_uuid(), true),
         (select pg_temp.hb('finish', (a ->> 'run_id')::uuid, true) from hb1),
@@ -1831,13 +1937,13 @@ select is(
   array['{"step": "finish", "refused": "not_the_latest_run"}'::jsonb,
         '{"step": "finish", "refused": null, "failures_in_a_row": 0, "report_now": false}'::jsonb,
         '{"step": "finish", "refused": "already_finished"}'::jsonb],
-  '0480/119: only the latest run finishes, once');
+  '0480/122: only the latest run finishes, once');
 select is(
   (select array[last_run_started_at = now(), last_run_finished_at = now(), last_run_ok, last_ok_at = now(),
                 last_run_id = (select (a ->> 'run_id')::uuid from hb1)]
      from public.platform_security_alert_state),
   array[true, true, true, true, true],
-  '0480/120: the state holds the run: started, finished, ok, the last good run');
+  '0480/123: the state holds the run: started, finished, ok, the last good run');
 -- The time of the last failing notice moved back, as its owner (never an
 -- error: a state without the column is left as it is).
 create function pg_temp.report_aged(p interval) returns void language plpgsql as $$
@@ -1870,7 +1976,7 @@ select is(
         pg_temp.start_after(interval '25 minutes', false) ->> 'report_now',
         pg_temp.start_after(interval '400 days', true) ->> 'failures_in_a_row'],
   array['0', '0', '1', '3', '1', '3', 'true', '57599'],
-  '0480/121: missed runs are counted from the time since the last start, in whole 10-minute ticks, and a run that never finished is one more failure; three in a row are reported');
+  '0480/124: missed runs are counted from the time since the last start, in whole 10-minute ticks, and a run that never finished is one more failure; three in a row are reported');
 -- Reported once; a good run resets it; failing finishes count too. From a
 -- clean start whose first run finished well.
 select pg_temp.fresh();
@@ -1892,12 +1998,12 @@ select is(
         pg_temp.run(false), pg_temp.run(false), pg_temp.run(false)],
   array['false/false:1', 'false/false:2', 'false/true:3', 'false/false:4', 'false/false:0', 'false/false:1', 'false/false:2',
         'false/false:3'],
-  '0480/122: three failed runs in a row are reported once, not again at the fourth; a good run resets the count, and three more within 6 hours of the last notice are not reported');
+  '0480/125: three failed runs in a row are reported once, not again at the fourth; a good run resets the count, and three more within 6 hours of the last notice are not reported');
 select pg_temp.report_aged(interval '6 hours');
 select is(
   array[pg_temp.run(false), pg_temp.run(false)],
   array['true/false:4', 'false/false:5'],
-  '0480/123: once 6 hours have passed since the last notice, failures still going on are reported (once, at the next start)');
+  '0480/126: once 6 hours have passed since the last notice, failures still going on are reported (once, at the next start)');
 -- Failures that come and go: three failed runs and a good one, 36 times
 -- over (24 hours of 10-minute runs); the last notice's time is moved 40
 -- minutes back after each, as its owner, to stand for the time passing.
@@ -1924,7 +2030,7 @@ select pg_temp.run(true);
 select is(
   pg_temp.flaky(36),
   4,
-  '0480/124: three failed runs and a good one, 36 times over (24 hours of 10-minute runs), ask for the failing notice 4 times: at most once in 6 hours');
+  '0480/127: three failed runs and a good one, 36 times over (24 hours of 10-minute runs), ask for the failing notice 4 times: at most once in 6 hours');
 -- The claims nobody finished.
 select pg_temp.fresh();
 select pg_temp.raw(jsonb_build_object('rule', 'spike', 'event_key', pg_temp.bk(-1), 'disposition', 'sent', 'email_planned', true,
@@ -1944,14 +2050,14 @@ select is(
   array[(select a ->> 'marked_not_sent' from sweep1),
         (select string_agg(disposition, ',' order by event_key desc) from public.platform_security_alerts)],
   array['2', 'not_sent,sent,not_sent,sent,record_only,sent'],
-  '0480/125: a run''s start marks not_sent the claims handed out twice with no result 5 minutes after the second, and those never handed out again 30 minutes after the first; nothing else');
+  '0480/128: a run''s start marks not_sent the claims handed out twice with no result 5 minutes after the second, and those never handed out again 30 minutes after the first; nothing else');
 select pg_temp.raw(jsonb_build_object('rule', 'spike', 'event_key', pg_temp.bk(-7), 'disposition', 'sent', 'email_planned', true,
                                       'attempts', 2, 'claimed_at', now() - interval '6 minutes'));
 select is(
   (select array_agg((e ->> 'event_key') order by e ->> 'event_key')
      from jsonb_array_elements(pg_temp.arr(pg_temp.inp() -> 'retry_due')) e),
   array[pg_temp.bk(-4)],
-  '0480/126: the inputs list the claim due its one retry (first handed out 5 minutes ago or more, no result), never one handed out twice');
+  '0480/129: the inputs list the claim due its one retry (first handed out 5 minutes ago or more, no result), never one handed out twice');
 -- A run that could not check fully (its read shortened or truncated) says
 -- so in its finish; the console shows it until the next run starts.
 select pg_temp.fresh();
@@ -1968,7 +2074,7 @@ select is(
         (select coalesce(a ->> 'refused', a ->> 'raised', 'taken') from part2_f),
         (select to_jsonb(s) ->> 'last_run_partial' from public.platform_security_alert_state s)],
   array['taken', 'true', 'null', 'taken', 'false'],
-  '0480/127: a finish can say the run could not check fully (the console shows it); the next start clears it, and a finish that does not say is a full check');
+  '0480/130: a finish can say the run could not check fully (the console shows it); the next start clears it, and a finish that does not say is a full check');
 
 -- ── 16. A switch, a threshold or a planned check ────────────────────────────
 select pg_temp.fresh();
@@ -2012,26 +2118,75 @@ select is(
   array['no_actor', 'not_a_name', 'not_a_name', 'not_a_name', 'not_a_value', 'not_a_value', 'not_a_value', 'not_a_value',
         'not_a_value', 'not_a_value', 'not_a_value', 'not_a_value', 'out_of_range', 'out_of_range', 'unknown_actor',
         'unknown_actor', 'unchanged', 'changed_by_someone_else', '0', 'false'],
-  '0480/128: a set is refused with no actor, a name not of the thirteen, a value not of its kind, out of its range (a planned check of more than 30 minutes, guessing minutes not in tens), an actor that is not an account or is deleted, the value it already has, or when the value is no longer what the console saw; nothing refused is written');
+  '0480/131: a set is refused with no actor, a name not of the fourteen, a value not of its kind, out of its range (a planned check of more than 30 minutes, guessing minutes not in tens), an actor that is not an account or is deleted, the value it already has, or when the value is no longer what the console saw; nothing refused is written');
 select is(
   (select array_agg(pg_temp.setv(pg_temp.u(1), r.k, to_jsonb((r.v ->> 0)::int - 1)) ->> 'refused'
                     || '/' || coalesce(pg_temp.setv(pg_temp.u(1), r.k, to_jsonb((r.v ->> 1)::int + 1)) ->> 'refused', '-')
                     order by r.k)
      from jsonb_each('{"aimed_guessing_events": [5, 100000], "aimed_guessing_minutes": [10, 120], "record_trouble_rows": [1, 100000],
-                       "serious_pushes_per_hour": [1, 60], "spike_event_floor": [10, 1000000], "spike_learning_days": [1, 90],
-                       "spike_source_floor": [2, 100000], "subject_pushes_per_day": [1, 24], "volume_pushes_per_day": [0, 100]}') r(k, v)),
+                       "serious_pushes_per_hour": [1, 60], "serious_reason_pushes_per_day": [1, 24], "spike_event_floor": [10, 1000000],
+                       "spike_learning_days": [1, 90], "spike_source_floor": [2, 100000], "subject_pushes_per_day": [1, 24],
+                       "volume_pushes_per_day": [0, 100]}') r(k, v)),
   array['out_of_range/out_of_range', 'out_of_range/out_of_range', 'out_of_range/out_of_range', 'out_of_range/out_of_range',
         'out_of_range/out_of_range', 'out_of_range/out_of_range', 'out_of_range/out_of_range', 'out_of_range/out_of_range',
-        'not_a_value/out_of_range'],
-  '0480/129: every threshold refuses one below its least and one above its most (serious pushes never 0; volume pushes may be 0, and -1 is not a whole number)');
+        'out_of_range/out_of_range', 'not_a_value/out_of_range'],
+  '0480/132: every threshold refuses one below its least and one above its most (serious pushes, of the hour and of one reason a day, never 0; volume pushes may be 0, and -1 is not a whole number)');
 select is(
   (select array_agg(coalesce(pg_temp.setv(pg_temp.u(1), r.k, r.v -> 1) ->> 'refused', 'changed') || '/'
                     || coalesce(pg_temp.setv(pg_temp.u(1), r.k, r.v -> 0) ->> 'refused', 'changed') order by r.k)
      from jsonb_each('{"aimed_guessing_events": [5, 100000], "aimed_guessing_minutes": [10, 120], "record_trouble_rows": [1, 100000],
-                       "serious_pushes_per_hour": [1, 60], "spike_event_floor": [10, 1000000], "spike_learning_days": [1, 90],
-                       "spike_source_floor": [2, 100000], "subject_pushes_per_day": [1, 24], "volume_pushes_per_day": [0, 100]}') r(k, v)),
-  array_fill('changed/changed'::text, array[9]),
-  '0480/130: and takes its most, then its least (no default is either''s most, so each is a change)');
+                       "serious_pushes_per_hour": [1, 60], "serious_reason_pushes_per_day": [1, 24], "spike_event_floor": [10, 1000000],
+                       "spike_learning_days": [1, 90], "spike_source_floor": [2, 100000], "subject_pushes_per_day": [1, 24],
+                       "volume_pushes_per_day": [0, 100]}') r(k, v)),
+  array_fill('changed/changed'::text, array[10]),
+  '0480/133: and takes its most, then its least (no default is either''s most, so each is a change)');
+-- Serious flags have their own cap for one reason a day
+-- (serious_reason_pushes_per_day), apart from the volume alerts' cap for
+-- one rule and subject (subject_pushes_per_day).
+select pg_temp.fresh();
+select pg_temp.sw(false, true);
+create temporary table sep_set as
+  select array[coalesce(pg_temp.setv(pg_temp.u(1), 'serious_reason_pushes_per_day', '2') ->> 'refused', 'changed'),
+               coalesce(pg_temp.setv(pg_temp.u(1), 'subject_pushes_per_day', '1') ->> 'refused', 'changed')] as a;
+select is(
+  (select a from sep_set) || array[pg_temp.flood(4)],
+  array['changed', 'changed', 'new:sent:true:false then new:sent:true:false x1, new:email_only_budget:false:true x2'],
+  '0480/134: a serious reason''s pushes a day follow serious_reason_pushes_per_day (2 here), not the volume alerts'' subject_pushes_per_day (1 here); past it, by email');
+-- At the lowest thresholds the console allows, a flood of one serious
+-- reason still sends every new flag: the first by push when push is on,
+-- every other by email (the floor) whatever the email switch says; only
+-- both switches off sends nothing.
+select pg_temp.fresh();
+create temporary table least_set as
+  select array_agg(r.k || ':' || coalesce(pg_temp.setv(pg_temp.u(1), r.k, r.v -> 0) ->> 'refused', 'changed') order by r.k) as a
+    from jsonb_each('{"aimed_guessing_events": [5, 100000], "aimed_guessing_minutes": [10, 120], "record_trouble_rows": [1, 100000],
+                      "serious_pushes_per_hour": [1, 60], "serious_reason_pushes_per_day": [1, 24], "spike_event_floor": [10, 1000000],
+                      "spike_learning_days": [1, 90], "spike_source_floor": [2, 100000], "subject_pushes_per_day": [1, 24],
+                      "volume_pushes_per_day": [0, 100]}') r(k, v);
+select pg_temp.sw(false, true);
+create temporary table least_flood as select 1 as n, pg_temp.flood(24) as a;
+insert into least_flood
+  select 2, (select count(*)::text from public.platform_security_alerts where email_floor = 'push_budget_spent');
+delete from public.platform_security_alerts;
+select pg_temp.sw(true, true);
+insert into least_flood select 3, pg_temp.flood(24);
+delete from public.platform_security_alerts;
+select pg_temp.sw(true, false);
+insert into least_flood select 4, pg_temp.flood(24);
+delete from public.platform_security_alerts;
+select pg_temp.sw(false, false);
+insert into least_flood select 5, pg_temp.flood(2);
+select is(
+  (select a from least_set) || (select array_agg(a order by n) from least_flood),
+  array['aimed_guessing_events:changed', 'aimed_guessing_minutes:changed', 'record_trouble_rows:unchanged',
+        'serious_pushes_per_hour:changed', 'serious_reason_pushes_per_day:changed', 'spike_event_floor:changed',
+        'spike_learning_days:changed', 'spike_source_floor:changed', 'subject_pushes_per_day:changed',
+        'volume_pushes_per_day:changed',
+        'new:sent:true:false then new:email_only_budget:false:true x23', '23',
+        'new:sent:true:true then new:email_only_budget:false:true x23',
+        'new:sent:false:true then new:sent:false:true x23',
+        'new:record_only:false:false then new:record_only:false:false x1'],
+  '0480/135: with every threshold at its least (serious pushes 1 an hour and 1 a day for one reason) a flood of one serious reason for 24 hours still sends every new flag: with push alone, the first by push and the other 23 by email although email alerts are off (push_budget_spent); with both, push and email then email; with email alone, all by email; only both off records it only');
 select pg_temp.fresh();
 create temporary table s1 as select pg_temp.setv(pg_temp.u(1), 'push_on', 'true') as a;
 create temporary table s2 as select pg_temp.setv(pg_temp.u(2), 'spike_event_floor', '75', '50') as a;
@@ -2043,12 +2198,12 @@ select is(
         jsonb_build_object('changed', true, 'refused', null, 'name', 'spike_event_floor', 'old_value', 50, 'new_value', 75, 'changed_at', now()),
         jsonb_build_object('changed', true, 'refused', null, 'name', 'planned_check', 'old_value', null, 'changed_at', now()),
         jsonb_build_object('changed', true, 'refused', null, 'name', 'push_on', 'old_value', true, 'new_value', false, 'changed_at', now())],
-  '0480/131: a switch on and off again (compare-and-set as the console saw it), a threshold and a planned check each answer what changed from what to what');
+  '0480/136: a switch on and off again (compare-and-set as the console saw it), a threshold and a planned check each answer what changed from what to what');
 select is(
   (select array[push_on::text, thresholds ->> 'spike_event_floor', (planned_check_until = now() + interval '30 minutes')::text]
      from public.platform_security_alert_state),
   array['false', '75', 'true'],
-  '0480/132: and the state holds the new values (a planned check ends 30 minutes from now)');
+  '0480/137: and the state holds the new values (a planned check ends 30 minutes from now)');
 select is(
   (select array_agg(actor_user_id::text || ' ' || name || ' ' || coalesce(old_value::text, '-') || ' ' || coalesce(new_value::text, '-')
                     order by name, old_value::text nulls first)
@@ -2056,19 +2211,19 @@ select is(
   array[pg_temp.u(1) || ' planned_check - ' || to_jsonb(now() + interval '30 minutes')::text,
         pg_temp.u(1) || ' push_on false true', pg_temp.u(1) || ' push_on true false',
         pg_temp.u(2) || ' spike_event_floor 50 75'],
-  '0480/133: each change wrote its change row in the same call: who, which setting, from what to what');
+  '0480/138: each change wrote its change row in the same call: who, which setting, from what to what');
 create temporary table end_check as select pg_temp.setv(pg_temp.u(1), 'planned_check', '0') as a;
 select is(
   array[(select a ->> 'new_value' from end_check),
         (select (planned_check_until = now())::text from public.platform_security_alert_state),
         pg_temp.setv(pg_temp.u(1), 'planned_check', '0') ->> 'refused'],
   array[null, 'true', 'unchanged'],
-  '0480/134: a planned check of 0 ends it (the state keeps when, for the gap before the next), and ending none is unchanged');
+  '0480/139: a planned check of 0 ends it (the state keeps when, for the gap before the next), and ending none is unchanged');
 update public.platform_security_alert_state set planned_check_until = now() - interval '1 second';
 select is(
   pg_temp.setv(pg_temp.u(1), 'planned_check', '0', 'null') ->> 'refused',
   'unchanged',
-  '0480/135: a planned check that has ended counts as none');
+  '0480/140: a planned check that has ended counts as none');
 -- Planned checks: none while one is on or within 30 minutes of the last
 -- one's end, at most 4 in a day; ending one is always taken. Time passing
 -- is made by moving the check's end and its change rows back, as their
@@ -2119,7 +2274,7 @@ select is(
   pg_temp.checks(),
   array['changed', 'planned_check_too_soon', 'planned_check_too_soon', 'planned_check_too_soon', 'changed', 'changed',
         'planned_check_too_soon', 'changed', 'changed', 'changed', 'changed', 'planned_checks_used_up', 'unchanged', 'changed'],
-  '0480/136: a planned check is refused while one is on and within 30 minutes of the last one''s end (on its own or ended early), and past 4 in a day; ending one is always taken');
+  '0480/141: a planned check is refused while one is on and within 30 minutes of the last one''s end (on its own or ended early), and past 4 in a day; ending one is always taken');
 -- Pressed back to back, 29 minutes apart, for a day: at most 4 are taken,
 -- so volume and record alerts cannot be held all day; record trouble during
 -- the 49th press is sent.
@@ -2145,7 +2300,7 @@ select pg_temp.sw(true, true);
 select is(
   pg_temp.chain(),
   '4 of 48 taken; record trouble during the 49th: sent',
-  '0480/137: planned checks cannot be chained for a day: of 48 pressed 29 minutes apart 4 are taken, and record trouble during the 49th press is sent');
+  '0480/142: planned checks cannot be chained for a day: of 48 pressed 29 minutes apart 4 are taken, and record trouble during the 49th press is sent');
 
 -- ── 17. The console's read ──────────────────────────────────────────────────
 select pg_temp.fresh();
@@ -2166,26 +2321,26 @@ select is(
         '{baseline,email_on,heartbeat,planned_check_until,push_on,record_only,summary_on,thresholds}',
         '{failure_reported_at,failures_in_a_row,last_ok_at,last_run_finished_at,last_run_ok,last_run_partial,last_run_started_at}',
         '{computed_at,event_high,from,shortened,source_high,to}',
-        '{"volume_pushes_last_day": 1, "volume_emails_last_day": 1, "serious_pushes_last_hour": 1, "serious_pushes_last_day_by_reason": {"sign_in_not_me": 1}}'::jsonb::text],
-  '0480/138: the list has exactly its documented keys, the state without the run token, and the push slots and emails used (serious pushes of the day by reason)');
+        '{"volume_pushes_last_day": 1, "volume_emails_last_day": 1, "record_emails_last_day": 0, "serious_pushes_last_hour": 1, "serious_pushes_last_day_by_reason": {"sign_in_not_me": 1}}'::jsonb::text],
+  '0480/143: the list has exactly its documented keys, the state without the run token, and the push slots and emails used (serious pushes of the day by reason)');
 select is(
   (select array[(a::text like '%' || (select last_run_id::text from public.platform_security_alert_state) || '%')::text,
                 (a -> 'state' ->> 'summary_on'), (a -> 'state' ->> 'record_only')]
      from l1),
   array['false', 'true', 'false'],
-  '0480/139: the run token is nowhere in it; the switches are');
+  '0480/144: the run token is nowhere in it; the switches are');
 select is(
   (select array_agg((e ->> 'rule') || ':' || coalesce(e ->> 'organization_name', '-') || ':' || (e ->> 'awaiting_result') || ':'
                     || (e ->> 'overdue') || ':' || (e -> 'counts')::text order by o)
      from l1, jsonb_array_elements(pg_temp.arr(a -> 'alerts')) with ordinality x(e, o)),
   array['serious_flag:-:true:false:{"events": 2}', 'aimed_guessing:' || left('Example ' || repeat('Long Name ', 30), 200) || ':true:true:{}'],
-  '0480/140: the alerts newest first, an organization''s name (the longest a name can be, 200 characters) for aimed guessing, whether each awaits its result and is overdue (5 minutes)');
+  '0480/145: the alerts newest first, an organization''s name (the longest a name can be, 200 characters) for aimed guessing, whether each awaits its result and is overdue (5 minutes)');
 select is(
   (select array[(a -> 'changes' -> 0 ->> 'name'), (a -> 'changes' -> 0 ->> 'actor_user_id'), (a -> 'changes' -> 1 ->> 'name'),
                 (a -> 'changes' -> 1 ->> 'actor_user_id'), pg_temp.alen(a -> 'changes')::text]
      from l1),
   array['summary_on', pg_temp.u(1)::text, 'push_on', pg_temp.u(2)::text, '2'],
-  '0480/141: and the change history newest first, who and what');
+  '0480/146: and the change history newest first, who and what');
 select pg_temp.claim('aimed_guessing', pg_temp.o(g)::text, pg_temp.bk(-1)) from generate_series(1, 210) g;
 select pg_temp.setv(pg_temp.u(1), 'summary_on', to_jsonb(g % 2 = 0)) from generate_series(1, 3) g;
 select is(
@@ -2193,12 +2348,12 @@ select is(
         pg_temp.alen(pg_temp.lst(500) -> 'alerts'), pg_temp.alen(pg_temp.lst(null, 2) -> 'changes'),
         pg_temp.alen(pg_temp.lst(null, 500) -> 'changes')],
   array[50, 1, 1, 200, 2, 5],
-  '0480/142: 50 alerts unless asked, at least 1 and at most 200; the changes the same way');
+  '0480/147: 50 alerts unless asked, at least 1 and at most 200; the changes the same way');
 select is(
   array[pg_temp.lst(200) ->> 'alerts_truncated', pg_temp.lst(212) ->> 'alerts_truncated', pg_temp.lst(null, 3) ->> 'changes_truncated',
         pg_temp.lst(null, 5) ->> 'changes_truncated'],
   array['true', 'true', 'true', 'false'],
-  '0480/143: and say when there are more');
+  '0480/148: and say when there are more');
 -- A switch turned off and a threshold silenced, then 200 harmless toggles:
 -- who did each and when is still in the read.
 create function pg_temp.toggles(p_n integer) returns void language plpgsql as $$
@@ -2231,7 +2386,7 @@ select is(
   array['200', 'true', '0',
         'aimed_guessing_events:' || pg_temp.u(2) || ':20>100000,email_on:' || pg_temp.u(2) || ':true>false,summary_on:' || pg_temp.u(1) || ':true>false',
         '3'],
-  '0480/144: the latest change of every setting is always in the read, however many came after it: a channel turned off and a threshold silenced, then 200 toggles, still show who did each');
+  '0480/149: the latest change of every setting is always in the read, however many came after it: a channel turned off and a threshold silenced, then 200 toggles, still show who did each');
 
 -- ── 18. The baseline ────────────────────────────────────────────────────────
 savepoint baseline;
@@ -2261,20 +2416,20 @@ select is(
   jsonb_build_object('computed', true, 'refused', null, 'event_high', 100, 'source_high', 2,
                      'from', pg_temp.b(-1008), 'to', pg_temp.b(0), 'asked_from', pg_temp.b(-1008), 'shortened', false,
                      'buckets', 1008),
-  '0480/145: the baseline: the 99th percentile of the week''s 1008 whole buckets, empty ones included: 100 events and 2 sources (blocked and flagged, no tally, no allowed event or source, not the bucket running now, not the one before the week)');
+  '0480/150: the baseline: the 99th percentile of the week''s 1008 whole buckets, empty ones included: 100 events and 2 sources (blocked and flagged, no tally, no allowed event or source, not the bucket running now, not the one before the week)');
 select is(
   (select array[baseline_event_high, baseline_source_high]::text[] || array[(baseline_computed_at = now())::text,
                 baseline_shortened::text, (baseline_from = pg_temp.b(-1008))::text]
      from public.platform_security_alert_state),
   array['100', '2', 'true', 'false', 'true'],
-  '0480/146: and stored in the state row');
+  '0480/151: and stored in the state row');
 select is(
   array[pg_temp.inp() -> 'baseline' ->> 'event_mark', pg_temp.inp() -> 'baseline' ->> 'source_mark',
         pg_temp.base() ->> 'refused'],
   array['100', '10', 'computed_recently'],
-  '0480/147: the inputs give its marks with their floors (100 events over a floor of 50; 2 sources under a floor of 10); a second baseline within 6 hours is refused');
+  '0480/152: the inputs give its marks with their floors (100 events over a floor of 50; 2 sources under a floor of 10); a second baseline within 6 hours is refused');
 update public.platform_security_alert_state set baseline_computed_at = now() - interval '6 hours 1 second';
-select is(pg_temp.base() ->> 'computed', 'true', '0480/148: one 6 hours old is computed again');
+select is(pg_temp.base() ->> 'computed', 'true', '0480/153: one 6 hours old is computed again');
 rollback to savepoint baseline;
 
 -- ── 19. Retention ───────────────────────────────────────────────────────────
@@ -2296,11 +2451,11 @@ select is(
   array[(select a from purge1), (select a from purge_left), (select a from purge2), pg_temp.purge()],
   array['{"deleted": 5000}'::jsonb, jsonb_build_object('left', 1, 'oldest_left', pg_temp.bk(-1)),
         '{"deleted": 1}'::jsonb, '{"deleted": 0}'::jsonb],
-  '0480/149: the purge deletes alerts claimed more than 400 days ago, the oldest first, 5,000 a call, until none is left');
+  '0480/154: the purge deletes alerts claimed more than 400 days ago, the oldest first, 5,000 a call, until none is left');
 select is(
   (select array[count(*), (select count(*) from public.platform_security_alert_changes)]::text[] from public.platform_security_alerts),
   array['2', '1'],
-  '0480/150: one claimed exactly 400 days ago and a younger one stay, and the change history is kept');
+  '0480/155: one claimed exactly 400 days ago and a younger one stay, and the change history is kept');
 
 -- ── 20. Who gets a push ─────────────────────────────────────────────────────
 -- u1 confirmed; u2 confirmed, written in capitals; u3 not confirmed; u4
@@ -2312,34 +2467,34 @@ select is(
                     'e.admin@example.test', 'f.admin@example.test', 'g.admin@example.test', 'h.admin@example.test',
                     'i.admin@example.test', 'j.admin@example.test', 'k.admin@example.test']),
   '1,2,5',
-  '0480/151: the accounts whose confirmed sign-in email is on the list, left out: not confirmed, banned in Auth, deleted in Auth, disabled by the console (user_profiles.disabled_at), a deleted profile, no profile, an SSO or an anonymous account');
+  '0480/156: the accounts whose confirmed sign-in email is on the list, left out: not confirmed, banned in Auth, deleted in Auth, disabled by the console (user_profiles.disabled_at), a deleted profile, no profile, an SSO or an anonymous account');
 select is(
   array[pg_temp.ids(array['  A.ADMIN@Example.Test ']), pg_temp.ids(array['B.ADMIN@EXAMPLE.TEST', 'b.admin@example.test']),
         pg_temp.ids(array['a.admin@example.test', 'a.admin@example.test'])],
   array['1', '2', '1'],
-  '0480/152: in any case and trimmed, each account once');
+  '0480/157: in any case and trimmed, each account once');
 select is(
   array[pg_temp.ids(null), pg_temp.ids('{}'), pg_temp.ids(array[null, '', 'a.admin', '@example.test', 'a.admin@', 'a b@example.test',
                                                              'a@b@example.test', repeat('a', 320) || '@example.test']),
         pg_temp.ids(array['other@example.test'])],
   array['none', 'none', 'none', 'none'],
-  '0480/153: none for no list, an empty one, entries that are not addresses, or no match; never raises');
+  '0480/158: none for no list, an empty one, entries that are not addresses, or no match; never raises');
 select is(
   array[pg_temp.ids((select array_agg('nobody' || g || '@example.test') from generate_series(1, 19) g) || array['a.admin@example.test']),
         pg_temp.ids((select array_agg('nobody' || g || '@example.test') from generate_series(1, 20) g) || array['a.admin@example.test'])],
   array['1', 'none'],
-  '0480/154: at most 20 addresses are read: the 20th is, the 21st is not');
+  '0480/159: at most 20 addresses are read: the 20th is, the 21st is not');
 update auth.users set email_confirmed_at = null where id = pg_temp.u(1);
 select is(
   pg_temp.ids(array['a.admin@example.test']),
   'none',
-  '0480/155: the sign-in email Auth confirmed decides, not the profile''s copy of it (unconfirmed, the account is left out)');
+  '0480/160: the sign-in email Auth confirmed decides, not the profile''s copy of it (unconfirmed, the account is left out)');
 select is(
   (select array[prosrc ~ 'auth\.users', prosrc ~ 'email_confirmed_at', prosrc ~ 'disabled_at', prosrc ~ 'banned_until',
                 prosrc !~ 'p\.email']
      from pg_proc where oid = 'public.platform_admin_user_ids(text[])'::regprocedure),
   array[true, true, true, true, true],
-  '0480/156: the body reads auth.users and its confirmation, the console''s disable flag and Auth''s ban, and never the profile''s email');
+  '0480/161: the body reads auth.users and its confirmation, the console''s disable flag and Auth''s ban, and never the profile''s email');
 
 -- ── 21. The answers keep their shape ────────────────────────────────────────
 select pg_temp.fresh();
@@ -2348,15 +2503,15 @@ select is(
         pg_temp.keys_of(pg_temp.claim('spike', '', pg_temp.bk(-3)))::text,
         pg_temp.keys_of(pg_temp.claim('nothing', '', pg_temp.bk(-3)))::text,
         pg_temp.keys_of(pg_temp.claim('spike', '', pg_temp.bk(-2)))::text],
-  array_fill('{attempt,disposition,email,id,open_key,outcome,push,refused}'::text, array[4]),
-  '0480/157: a claim always answers the same eight keys (new, duplicate, refused, already_open)');
+  array_fill('{attempt,disposition,email,id,notice,open_key,outcome,push,refused}'::text, array[4]),
+  '0480/162: a claim always answers the same nine keys (new, duplicate, refused, already_open)');
 select is(
   array[pg_temp.keys_of(pg_temp.res(null, 1))::text, pg_temp.keys_of(pg_temp.hb('start'))::text,
         pg_temp.keys_of(pg_temp.setv(null, 'x', 'true'))::text, pg_temp.keys_of(pg_temp.base())::text],
   array['{recorded,refused}', '{failures_in_a_row,last_ok_at,marked_not_sent,missed_runs,previous,refused,report_now,run_id,step}',
         '{changed,changed_at,name,new_value,old_value,refused}',
         '{asked_from,buckets,computed,computed_at,event_high,from,refused,shortened,source_high,to}'],
-  '0480/158: the result, the heartbeat''s start, the set and the baseline answer their documented keys');
+  '0480/163: the result, the heartbeat''s start, the set and the baseline answer their documented keys');
 -- The latest run's finish with no outcome, in a statement of its own (a
 -- start in the same statement would make that run not the latest).
 create temporary table odd_calls as
@@ -2372,7 +2527,7 @@ select is(
     where coalesce(z.r1, z.r2, z.r3) is not null)
   + (select count(*)::int from odd_calls, unnest(odd_calls.a) x(a) where x.a ? 'raised'),
   0,
-  '0480/159: no argument makes the result, the heartbeat or the set raise (a finish of the latest run with no outcome among them)');
+  '0480/164: no argument makes the result, the heartbeat or the set raise (a finish of the latest run with no outcome among them)');
 
 -- ── 22. Comments ────────────────────────────────────────────────────────────
 select ok(
@@ -2380,14 +2535,14 @@ select ok(
      from pg_class c
     where c.oid in ('public.platform_security_alert_state'::regclass, 'public.platform_security_alerts'::regclass,
                     'public.platform_security_alert_changes'::regclass)),
-  '0480/160: each table says no API role reads or writes it directly');
+  '0480/165: each table says no API role reads or writes it directly');
 select ok(
   (select bool_and(obj_description(p.oid, 'pg_proc') like '%service_role only%') from pg_proc p where pg_temp.is_ours(p.oid)),
-  '0480/161: each function says it is service_role only');
+  '0480/166: each function says it is service_role only');
 select ok(
   (select obj_description('public.platform_security_alerts'::regclass, 'pg_class') like '%never from the run''s clock%'
           and obj_description('public.platform_security_alerts'::regclass, 'pg_class') like '%never an address%'),
-  '0480/162: the alerts table says its key comes from the events and it holds no address');
+  '0480/167: the alerts table says its key comes from the events and it holds no address');
 
 select * from finish();
 rollback;

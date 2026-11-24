@@ -1139,11 +1139,15 @@ PGTAP_TESTS=(
   # run's clock), hands an alert with no result out once more after 5
   # minutes and then marks it not_sent; a serious flag's retry is never lost
   # (not swept for 10 hours, taken after its hour left the window); serious
-  # flags have their own 6 pushes an hour and 4 a day for one reason, then go
-  # by email even with email alerts off (the row says why), and by push and
-  # email as far as the switches go; volume and record alerts 8 pushes a day
-  # together and 4 for one rule and subject, 24 emails a day together, then
-  # held for the summary; a start with an ended state's key is refused; a
+  # flags have their own 6 pushes an hour and 4 a day for one reason (each a
+  # threshold that is never 0), then go by email even with email alerts off
+  # (the row says why; so at the least thresholds every new flag still
+  # sends), and by push and email as far as the switches go; volume and
+  # record alerts 8 pushes a day together and 4 for one rule and subject, 24
+  # volume emails and 6 of record trouble a day, each its own, then held for
+  # the summary when it is on, else held with one notice in 6 hours that
+  # alerts are held (none unsent and unreported); a start with an ended
+  # state's key is refused; a
   # planned check holds volume and record alerts and never a serious flag,
   # and is refused while one is on, within 30 minutes of the last and past 4
   # a day; with both switches off an alert is still recorded. Every refusal

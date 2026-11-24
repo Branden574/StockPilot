@@ -15,7 +15,9 @@
 -- taken on a table that exists.)
 --   Words used below.
 --     A rule: serious_flag (class serious), aimed_guessing and spike (class
---       volume), record_trouble (class record).
+--       volume), record_trouble (class record), and alerts_held (class
+--       notice: the notice that alerts are being held, made by the claim
+--       itself, never by the job).
 --     An alert: one (rule, subject, event_key, phase). subject is an
 --       organization id for aimed_guessing and '' for every other rule.
 --       event_key comes from the EVENTS, never from the clock of the run
@@ -41,7 +43,7 @@
 --   2. public.platform_security_alerts: one row per alert claimed, with its
 --      class, counts (numbers and reason codes only), disposition
 --      (record_only, sent, held_planned_check, email_only_budget,
---      held_for_summary, not_sent), the channels it was handed out for,
+--      held_for_summary, held_with_notice, not_sent), the channels it was handed out for,
 --      whether it used a slot of its class's push budget, why a serious
 --      flag's email went although email alerts were off (email_floor), each
 --      channel's result as counts of result codes (never an address or an
@@ -70,12 +72,16 @@
 --        answered by its row, whatever the age of its key); is a state
 --        already open, or has this start's state ended; is a reminder due;
 --        is the class's push budget free (serious: 6 an hour, and 4 a day for
---        one reason; volume and record together: 8 a day, and 4 a day for one
---        rule and subject); is a planned check on; which switches are on.
---        Email is a serious flag's floor: past its push budget it goes by
---        email even when email alerts are off, and the row says so; nothing
---        is sent only when both switches are off. Volume and record emails:
---        24 a day together, then held for the daily summary. Inserts the
+--        one reason, each its own threshold and never below 1; volume and
+--        record together: 8 a day, and 4 a day for one rule and subject); is
+--        a planned check on; which switches are on. Email is a serious
+--        flag's floor: past its push budget it goes by email even when email
+--        alerts are off, and the row says so; nothing is sent only when both
+--        switches are off. Emails: 24 a day for volume alerts and 6 for
+--        record trouble, each its own; past them an alert is held for the
+--        daily summary when the summary is on, and otherwise held with a
+--        notice (one alert that more alerts are being held, at most once in
+--        6 hours, counts only), so none is both unsent and unreported. Inserts the
 --        alert, also when nothing is sent, and answers what to send. A claim
 --        that had no result 5 minutes later is handed out once more; a second
 --        time it is marked not_sent.
@@ -267,6 +273,7 @@ create table public.platform_security_alert_state (
     "aimed_guessing_minutes": 30,
     "record_trouble_rows": 1,
     "serious_pushes_per_hour": 6,
+    "serious_reason_pushes_per_day": 4,
     "spike_event_floor": 50,
     "spike_learning_days": 14,
     "spike_source_floor": 10,
@@ -304,15 +311,17 @@ create table public.platform_security_alert_state (
   -- When the failing notice was last asked for (at most once in 6 hours).
   failure_reported_at   timestamptz,
   constraint platform_security_alert_state_one_row check (id),
-  -- Exactly the nine names, each a whole number from 0 to 1,000,000.
+  -- Exactly the ten names, each a whole number from 0 to 1,000,000.
   constraint platform_security_alert_state_thresholds check (
     pg_catalog.jsonb_typeof(thresholds) = 'object'
     and thresholds ?& array['aimed_guessing_events', 'aimed_guessing_minutes', 'record_trouble_rows',
-                            'serious_pushes_per_hour', 'spike_event_floor', 'spike_learning_days',
-                            'spike_source_floor', 'subject_pushes_per_day', 'volume_pushes_per_day']
+                            'serious_pushes_per_hour', 'serious_reason_pushes_per_day', 'spike_event_floor',
+                            'spike_learning_days', 'spike_source_floor', 'subject_pushes_per_day',
+                            'volume_pushes_per_day']
     and (thresholds - array['aimed_guessing_events', 'aimed_guessing_minutes', 'record_trouble_rows',
-                            'serious_pushes_per_hour', 'spike_event_floor', 'spike_learning_days',
-                            'spike_source_floor', 'subject_pushes_per_day', 'volume_pushes_per_day']) = '{}'::jsonb
+                            'serious_pushes_per_hour', 'serious_reason_pushes_per_day', 'spike_event_floor',
+                            'spike_learning_days', 'spike_source_floor', 'subject_pushes_per_day',
+                            'volume_pushes_per_day']) = '{}'::jsonb
     and not pg_catalog.jsonb_path_exists(thresholds,
           '$.* ? (@.type() != "number" || @ < 0 || @ > 1000000 || @.floor() != @)')),
   constraint platform_security_alert_state_baseline check (
@@ -378,15 +387,17 @@ create table public.platform_security_alerts (
   -- On a started row of a volume or record rule: when its state ended.
   state_ended_at  timestamptz,
   constraint platform_security_alerts_rule
-    check (rule in ('serious_flag', 'aimed_guessing', 'spike', 'record_trouble')),
+    check (rule in ('serious_flag', 'aimed_guessing', 'spike', 'record_trouble', 'alerts_held')),
   constraint platform_security_alerts_class
-    check (class = case rule when 'serious_flag' then 'serious' when 'record_trouble' then 'record' else 'volume' end),
+    check (class = case rule when 'serious_flag' then 'serious' when 'record_trouble' then 'record'
+                             when 'alerts_held' then 'notice' else 'volume' end),
   constraint platform_security_alerts_subject
     check (case when rule = 'aimed_guessing'
                 then subject ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
                 else subject = '' end),
+  -- A serious flag and a notice are started only: neither is a state.
   constraint platform_security_alerts_phase
-    check (phase in ('started', 'reminder', 'ended') and (rule <> 'serious_flag' or phase = 'started')),
+    check (phase in ('started', 'reminder', 'ended') and (rule not in ('serious_flag', 'alerts_held') or phase = 'started')),
   constraint platform_security_alerts_event_key
     check (case when rule = 'serious_flag'
                 then event_key ~ '^[a-z][a-z0-9_]{0,47}[|][0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:00Z$'
@@ -397,10 +408,11 @@ create table public.platform_security_alerts (
     check (pg_catalog.jsonb_typeof(counts) = 'object' and pg_catalog.octet_length(counts::text) <= 4000),
   constraint platform_security_alerts_disposition
     check (disposition in ('record_only', 'sent', 'held_planned_check', 'email_only_budget', 'held_for_summary',
-                           'not_sent')),
+                           'held_with_notice', 'not_sent')),
   -- What each disposition hands out: sent at least one channel;
   -- email_only_budget email and never push; not_sent what it was handed out
-  -- for; record_only, held_planned_check and held_for_summary nothing.
+  -- for; record_only, held_planned_check, held_for_summary and
+  -- held_with_notice nothing.
   constraint platform_security_alerts_planned
     check (case disposition
              when 'sent' then push_planned or email_planned
@@ -433,7 +445,7 @@ create table public.platform_security_alerts (
   constraint platform_security_alerts_attempts
     check (attempts between 1 and 2),
   constraint platform_security_alerts_state_ended
-    check (state_ended_at is null or (phase = 'started' and rule <> 'serious_flag')),
+    check (state_ended_at is null or (phase = 'started' and rule in ('aimed_guessing', 'spike', 'record_trouble'))),
   -- One row per alert: the idempotency lock of two overlapping runs.
   constraint platform_security_alerts_alert_key unique (rule, subject, event_key, phase)
 );
@@ -449,10 +461,10 @@ create index platform_security_alerts_awaiting_idx
 -- The open states (few): a claim's check and the job's read.
 create index platform_security_alerts_open_idx
   on public.platform_security_alerts (rule, subject)
-  where phase = 'started' and rule <> 'serious_flag' and state_ended_at is null;
+  where phase = 'started' and rule in ('aimed_guessing', 'spike', 'record_trouble') and state_ended_at is null;
 
 comment on table public.platform_security_alerts is
-  'Security alerts claimed by the alert job: one row per (rule, subject, event_key, phase), the key from the events, never from the run''s clock. disposition: sent, email_only_budget, record_only, held_planned_check, held_for_summary or not_sent; email_floor says why a serious flag''s email went although email alerts were off. counts holds numbers and reason codes only; push_result and email_result hold counts of result codes, never an address or an account. No API role reads or writes it directly: platform_security_alert_claim, _result, _heartbeat, _purge, _inputs and _list are the way in. Rows claimed more than 400 days ago are removed by platform_security_alert_purge().';
+  'Security alerts claimed by the alert job: one row per (rule, subject, event_key, phase), the key from the events, never from the run''s clock. rule alerts_held (class notice) is the claim''s own notice that alerts are being held. disposition: sent, email_only_budget, record_only, held_planned_check, held_for_summary, held_with_notice or not_sent; email_floor says why a serious flag''s email went although email alerts were off. counts holds numbers and reason codes only; push_result and email_result hold counts of result codes, never an address or an account. No API role reads or writes it directly: platform_security_alert_claim, _result, _heartbeat, _purge, _inputs and _list are the way in. Rows claimed more than 400 days ago are removed by platform_security_alert_purge().';
 
 alter table public.platform_security_alerts enable row level security;
 revoke all on table public.platform_security_alerts from public, anon, authenticated, service_role;
@@ -470,8 +482,8 @@ create table public.platform_security_alert_changes (
   constraint platform_security_alert_changes_name
     check (name in ('email_on', 'push_on', 'summary_on', 'planned_check',
                     'aimed_guessing_events', 'aimed_guessing_minutes', 'record_trouble_rows',
-                    'serious_pushes_per_hour', 'spike_event_floor', 'spike_learning_days',
-                    'spike_source_floor', 'subject_pushes_per_day', 'volume_pushes_per_day')),
+                    'serious_pushes_per_hour', 'serious_reason_pushes_per_day', 'spike_event_floor',
+                    'spike_learning_days', 'spike_source_floor', 'subject_pushes_per_day', 'volume_pushes_per_day')),
   -- A switch from one boolean to the other; a planned check from an end
   -- time (or none) to another; a threshold from one number to another.
   constraint platform_security_alert_changes_values
@@ -635,7 +647,7 @@ begin
     select a.rule, a.subject, a.event_key, a.claimed_at, a.disposition,
            pg_catalog.row_number() over (order by a.claimed_at, a.rule, a.subject) as rn
       from public.platform_security_alerts a
-     where a.phase = 'started' and a.rule <> 'serious_flag' and a.state_ended_at is null
+     where a.phase = 'started' and a.rule in ('aimed_guessing', 'spike', 'record_trouble') and a.state_ended_at is null
   ),
   retry_due as (
     select a.class = 'serious' as serious, a.rule, a.subject, a.event_key, a.phase, a.claimed_at,
@@ -747,7 +759,7 @@ revoke all on function public.platform_security_alert_inputs() from public, anon
 grant execute on function public.platform_security_alert_inputs() to service_role;
 
 comment on function public.platform_security_alert_inputs() is
-  'What the security alert job reads. Of public.security_events, the rows whose minute starts at or after the first whole 10-minute bucket within the last 8 hours and before a minute after now, at most 400,000 (else read from the earliest later whole minute that keeps it so: shortened), counted by _security_map_units (0478): serious (per reason and UTC hour, across organizations, with its event_key; and the flood rows whose outcome is flagged), aimed (the four guessing reasons per organization and 10-minute bucket, the 100 busiest organizations), buckets (every 10-minute bucket of the window read: counted blocked and flagged events, distinct sources as a count, flood rows of over_minute_cap and over_buffer_cap). Of the alerts: open_states (at most 500); the alerts due their one retry, serious_retry_due (serious flags, at most 100) and retry_due (the others, at most 100), each with its own _truncated. The thresholds, the baseline marks with their floors, the switches, planned_check_until while on, oldest_event_at. Never a source hash, a path, an address or a row key. Never raises for the record''s contents: no_state and too_many_events_in_one_minute are answered as refused. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
+  'What the security alert job reads. Of public.security_events, the rows whose minute starts at or after the first whole 10-minute bucket within the last 8 hours and before a minute after now, at most 400,000 (else read from the earliest later whole minute that keeps it so: shortened), counted by _security_map_units (0478): serious (per reason and UTC hour, across organizations, with its event_key; and the flood rows whose outcome is flagged), aimed (the four guessing reasons per organization and 10-minute bucket, the 100 busiest organizations), buckets (every 10-minute bucket of the window read: counted blocked and flagged events, distinct sources as a count, flood rows of over_minute_cap and over_buffer_cap). Of the alerts: open_states (at most 500); the alerts due their one retry, serious_retry_due (serious flags, at most 100) and retry_due (the others, the notices that alerts are held among them, at most 100), each with its own _truncated. The thresholds, the baseline marks with their floors, the switches, planned_check_until while on, oldest_event_at. Never a source hash, a path, an address or a row key. Never raises for the record''s contents: no_state and too_many_events_in_one_minute are answered as refused. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
 -- ── 5. The claim ─────────────────────────────────────────────────────────────
 create function public.platform_security_alert_claim(
@@ -784,9 +796,13 @@ declare
   c_serious_window  constant interval    := '1 hour';
   c_volume_window   constant interval    := '24 hours';
   c_day             constant interval    := '24 hours';
-  -- Volume and record emails a day, together; past it they are held for the
-  -- daily summary. A serious flag's email is never held.
+  -- Emails a day: volume alerts, and record trouble, each its own (a flood of
+  -- one never silences the other). Past it an alert is held: for the daily
+  -- summary when it is on, else with a notice that alerts are being held, at
+  -- most once in 6 hours. A serious flag's email is never held.
   c_volume_emails_per_day constant integer := 24;
+  c_record_emails_per_day constant integer := 6;
+  c_notice_gap      constant interval    := '6 hours';
   -- The shape of counts.
   c_counts_chars    constant integer     := 4000;
   c_counts_keys     constant integer     := 40;
@@ -794,7 +810,7 @@ declare
   v_now        timestamptz := pg_catalog.now();
   v_answer     jsonb := pg_catalog.jsonb_build_object('outcome', 'refused', 'refused', null, 'id', null,
                                                       'disposition', null, 'push', false, 'email', false,
-                                                      'attempt', null, 'open_key', null);
+                                                      'attempt', null, 'open_key', null, 'notice', null);
   v_class      text;
   v_subject    text;
   v_m          text[];
@@ -816,6 +832,7 @@ declare
   v_push       boolean;
   v_email      boolean;
   v_floor      text;
+  v_notice     public.platform_security_alerts;
 begin
   -- The grant is the gate: service_role only. This second lock names no
   -- gate: the role setting names the caller inside this body too (0413).
@@ -825,13 +842,16 @@ begin
 
   -- ── The arguments. Each is tested before it is used; none makes this
   -- raise. A refusal names the argument's kind, never its value.
-  if p_rule is null or p_rule not in ('serious_flag', 'aimed_guessing', 'spike', 'record_trouble') then
+  -- alerts_held is the notice this function makes; the job only takes its
+  -- retry (a new one is refused not_claimable below).
+  if p_rule is null or p_rule not in ('serious_flag', 'aimed_guessing', 'spike', 'record_trouble', 'alerts_held') then
     return v_answer || pg_catalog.jsonb_build_object('refused', 'not_a_rule');
   end if;
-  v_class := case p_rule when 'serious_flag' then 'serious' when 'record_trouble' then 'record' else 'volume' end;
+  v_class := case p_rule when 'serious_flag' then 'serious' when 'record_trouble' then 'record'
+                         when 'alerts_held' then 'notice' else 'volume' end;
 
   if p_phase is null or p_phase not in ('started', 'reminder', 'ended')
-     or (p_rule = 'serious_flag' and p_phase <> 'started') then
+     or (p_rule in ('serious_flag', 'alerts_held') and p_phase <> 'started') then
     return v_answer || pg_catalog.jsonb_build_object('refused', 'not_a_phase');
   end if;
 
@@ -969,7 +989,7 @@ begin
     -- A start with the key of a state that has ended is the condition back,
     -- not the alert already sent: refused in a word of its own, so the job
     -- opens the new state with a newer key.
-    if v_row.phase = 'started' and v_row.rule <> 'serious_flag' and v_row.state_ended_at is not null then
+    if v_row.phase = 'started' and v_row.class in ('volume', 'record') and v_row.state_ended_at is not null then
       return v_answer || pg_catalog.jsonb_build_object(
         'refused', 'state_ended',
         'open_key', (select a.event_key from public.platform_security_alerts a
@@ -981,13 +1001,17 @@ begin
     return v_answer || pg_catalog.jsonb_build_object(
       'outcome', 'duplicate', 'id', v_row.id, 'disposition', v_row.disposition, 'attempt', v_row.attempts);
   end if;
+  -- A notice is made here, never claimed new by the job.
+  if v_class = 'notice' then
+    return v_answer || pg_catalog.jsonb_build_object('refused', 'not_claimable');
+  end if;
   if v_out_of_window then
     return v_answer || pg_catalog.jsonb_build_object('refused', 'key_out_of_window');
   end if;
 
   -- ── A state: one open at a time for a rule and subject; a reminder or an
   -- end only of the open one; a reminder only once its step has passed.
-  if p_rule <> 'serious_flag' then
+  if v_class in ('volume', 'record') then
     select a.* into v_open
       from public.platform_security_alerts a
      where a.rule = p_rule and a.subject = v_subject and a.phase = 'started'
@@ -1035,9 +1059,10 @@ begin
     -- The push budgets, counted over the alerts that used a slot, switch on
     -- or off. Serious: its own, per hour, and per day for one reason (its
     -- key is the reason and the event's hour, so a reason that lasts is a
-    -- new alert every hour); no volume or record alert can spend it. Volume
-    -- and record: one per day for both, and one per day for one rule and
-    -- subject. An end never pushes.
+    -- new alert every hour), folded across organizations, each its own
+    -- threshold (never below 1); no volume or record alert can spend it.
+    -- Volume and record: one per day for both, and one per day for one rule
+    -- and subject. An end never pushes; a notice uses no slot.
     if p_phase = 'ended' then
       v_room := false;
     elsif v_class = 'serious' then
@@ -1048,7 +1073,7 @@ begin
                       where a.rule = 'serious_flag' and a.push_counted
                         and pg_catalog.split_part(a.event_key, '|', 1) = v_m[1]
                         and a.claimed_at > v_now - c_day)
-                    < (v_state.thresholds ->> 'subject_pushes_per_day')::integer;
+                    < (v_state.thresholds ->> 'serious_reason_pushes_per_day')::integer;
     else
       v_room := (select pg_catalog.count(*) from public.platform_security_alerts a
                   where a.class in ('volume', 'record') and a.push_counted and a.claimed_at > v_now - c_volume_window)
@@ -1061,8 +1086,8 @@ begin
     -- The channels. Push: when it is on and there is a slot. Email: when it
     -- is on; for a serious flag also when push is on and has no slot (email
     -- is a serious flag's floor, never refused: the row says why it went);
-    -- for volume and record only while the day has fewer than 24 of their
-    -- emails, then they are held for the daily summary.
+    -- for volume alerts only while the day has fewer than 24 of their
+    -- emails, for record trouble fewer than 6 of its own.
     v_push := v_state.push_on and v_room;
     if v_class = 'serious' then
       v_email := v_state.email_on or (v_state.push_on and not v_room);
@@ -1070,17 +1095,18 @@ begin
     else
       v_email := v_state.email_on
                  and (select pg_catalog.count(*) from public.platform_security_alerts a
-                       where a.class in ('volume', 'record') and a.email_planned and a.claimed_at > v_now - c_day)
-                     < c_volume_emails_per_day;
+                       where a.class = v_class and a.email_planned and a.claimed_at > v_now - c_day)
+                     < case v_class when 'record' then c_record_emails_per_day else c_volume_emails_per_day end;
     end if;
     -- Sent, on the channels above; email_only_budget when push was on and
-    -- had no slot (an end never pushes: it is simply sent). Nothing to send:
-    -- held for the summary when email is on (its day's emails spent), else
-    -- recorded only.
+    -- had no slot (an end never pushes: it is simply sent). Nothing to send
+    -- although a switch that would carry it is on (its budgets spent): held,
+    -- for the daily summary when it is on, else with a notice (below).
+    -- Both switches off, or push alone and an end: recorded only.
     if v_push or v_email then
       v_disp := case when not v_push and v_state.push_on and p_phase <> 'ended' then 'email_only_budget' else 'sent' end;
-    elsif v_state.email_on then
-      v_disp := 'held_for_summary';
+    elsif v_state.email_on or (v_state.push_on and p_phase <> 'ended') then
+      v_disp := case when v_state.summary_on then 'held_for_summary' else 'held_with_notice' end;
     else
       v_disp := 'record_only';
     end if;
@@ -1105,8 +1131,35 @@ begin
     update public.platform_security_alerts a set state_ended_at = v_now where a.id = v_open.id;
   end if;
 
+  -- An alert held with no summary to list it: one notice that alerts are
+  -- being held (open the console), at most once in 6 hours, by email when
+  -- it is on, else by push; counts only (the alerts held so in the last 24
+  -- hours, this one included). Its own rule and key (this 10-minute bucket),
+  -- no slot of any budget; the job sends it and records its result like any
+  -- alert, and takes its one retry from retry_due.
+  if v_disp = 'held_with_notice'
+     and not exists (select 1 from public.platform_security_alerts a
+                      where a.rule = 'alerts_held' and a.claimed_at > v_now - c_notice_gap) then
+    insert into public.platform_security_alerts as a
+      (rule, class, subject, event_key, phase, counts, disposition, push_planned, email_planned, push_counted,
+       attempts, claimed_at)
+    values
+      ('alerts_held', 'notice', '',
+       pg_catalog.to_char(pg_catalog.date_bin(c_bucket, v_now, c_bucket_origin) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI"Z"'),
+       'started',
+       pg_catalog.jsonb_build_object('held', (select pg_catalog.count(*) from public.platform_security_alerts h
+                                               where h.disposition = 'held_with_notice' and h.claimed_at > v_now - c_day)),
+       'sent', v_state.push_on and not v_state.email_on, v_state.email_on, false, 1, v_now)
+    on conflict on constraint platform_security_alerts_alert_key do nothing
+    returning a.* into v_notice;
+  end if;
+
   return v_answer || pg_catalog.jsonb_build_object(
-    'outcome', 'new', 'id', v_row.id, 'disposition', v_disp, 'push', v_push, 'email', v_email, 'attempt', 1);
+    'outcome', 'new', 'id', v_row.id, 'disposition', v_disp, 'push', v_push, 'email', v_email, 'attempt', 1,
+    'notice', case when v_notice.id is not null
+                   then pg_catalog.jsonb_build_object('id', v_notice.id, 'event_key', v_notice.event_key,
+                                                      'push', v_notice.push_planned, 'email', v_notice.email_planned,
+                                                      'attempt', 1) end);
 end;
 $$;
 
@@ -1114,7 +1167,7 @@ revoke all on function public.platform_security_alert_claim(text, text, text, te
 grant execute on function public.platform_security_alert_claim(text, text, text, text, jsonb) to service_role;
 
 comment on function public.platform_security_alert_claim(text, text, text, text, jsonb) is
-  'Claims one security alert (rule, subject, event_key, phase; counts of numbers and reason codes) under its own advisory lock (4800001; a wait of 2 s ends with 55P03), in one transaction. Answers {outcome, refused, id, disposition, push, email, attempt, open_key}: outcome new (inserted; send on the channels push and email say), retry (claimed 5 minutes ago or more with no result: handed out once more, attempt 2), duplicate (claimed already: send nothing), not_sent (its retry had no result either: marked not_sent), refused (with a fixed word: not_a_rule, not_a_phase, not_a_subject, not_a_key, key_out_of_window, not_counts, no_state, already_open, state_ended, no_open_state, reminder_not_due). A row claimed before is answered by its row whatever the age of its key; a start with the key of a state that has ended is refused state_ended. Serious flags: 6 pushes an hour of their own and 4 a day for one reason (subject_pushes_per_day), then by email, also with email alerts off (email_floor push_budget_spent); a planned check never holds them. Volume and record: 8 pushes a day together and 4 for one rule and subject, then email only; 24 emails a day together, then held_for_summary; an end never pushes; a planned check holds them. Both switches off: record_only, still inserted. Never raises for an argument. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
+  'Claims one security alert (rule, subject, event_key, phase; counts of numbers and reason codes) under its own advisory lock (4800001; a wait of 2 s ends with 55P03), in one transaction. Answers {outcome, refused, id, disposition, push, email, attempt, open_key, notice}: outcome new (inserted; send on the channels push and email say, and the notice when it is not null), retry (claimed 5 minutes ago or more with no result: handed out once more, attempt 2), duplicate (claimed already: send nothing), not_sent (its retry had no result either: marked not_sent), refused (with a fixed word: not_a_rule, not_a_phase, not_a_subject, not_a_key, not_claimable, key_out_of_window, not_counts, no_state, already_open, state_ended, no_open_state, reminder_not_due). A row claimed before is answered by its row whatever the age of its key; a start with the key of a state that has ended is refused state_ended. Serious flags: 6 pushes an hour of their own (serious_pushes_per_hour) and 4 a day for one reason (serious_reason_pushes_per_day), then by email, also with email alerts off (email_floor push_budget_spent); a planned check never holds them. Volume and record: 8 pushes a day together and 4 for one rule and subject, then email only; 24 emails a day for volume and 6 for record trouble, then held: held_for_summary when the summary is on, else held_with_notice, with one alerts_held notice (answered as notice: {id, event_key, push, email, attempt}) at most once in 6 hours; an end never pushes; a planned check holds them. A new alerts_held is refused not_claimable; its retry is taken like any alert''s. Both switches off: record_only, still inserted. Never raises for an argument. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
 -- ── 6. The result ────────────────────────────────────────────────────────────
 create function public.platform_security_alert_result(
@@ -1367,12 +1420,14 @@ as $$
 declare
   -- THE RANGES OF THE THRESHOLDS, [least, most]. Written here and nowhere
   -- else (the table holds them to whole numbers from 0 to 1,000,000).
-  -- aimed_guessing_minutes is also a whole number of 10-minute buckets.
+  -- aimed_guessing_minutes is also a whole number of 10-minute buckets. The
+  -- serious caps are never below 1 (past them a serious flag goes by email).
   c_ranges constant jsonb := '{
     "aimed_guessing_events": [5, 100000],
     "aimed_guessing_minutes": [10, 120],
     "record_trouble_rows": [1, 100000],
     "serious_pushes_per_hour": [1, 60],
+    "serious_reason_pushes_per_day": [1, 24],
     "spike_event_floor": [10, 1000000],
     "spike_learning_days": [1, 90],
     "spike_source_floor": [2, 100000],
@@ -1501,7 +1556,7 @@ revoke all on function public.platform_security_alert_set(uuid, text, jsonb, jso
 grant execute on function public.platform_security_alert_set(uuid, text, jsonb, jsonb) to service_role;
 
 comment on function public.platform_security_alert_set(uuid, text, jsonb, jsonb) is
-  'Changes one security alert setting for the platform console and writes its change row (actor, name, old and new value) in the same transaction, under the claim''s advisory lock (4800001; a wait of 2 s ends with 55P03). p_name: email_on, push_on or summary_on (p_value a boolean); planned_check (whole minutes 0 to 30 from now; 0 ends it and is always taken; a new one is refused planned_check_too_soon while one is on or within 30 minutes of the last one''s end, and planned_checks_used_up when 4 were started in the last 24 hours); or a threshold (a whole number in its range: aimed_guessing_events 5 to 100000, aimed_guessing_minutes 10 to 120 in tens, record_trouble_rows 1 to 100000, serious_pushes_per_hour 1 to 60, spike_event_floor 10 to 1000000, spike_learning_days 1 to 90, spike_source_floor 2 to 100000, subject_pushes_per_day 1 to 24, volume_pushes_per_day 0 to 100). p_expected, when given, must equal the value now. Answers {changed, refused, name, old_value, new_value, changed_at}: refused no_actor, not_a_name, not_a_value, out_of_range, unknown_actor, no_state, changed_by_someone_else, unchanged, planned_check_too_soon or planned_checks_used_up. Never raises for an argument. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
+  'Changes one security alert setting for the platform console and writes its change row (actor, name, old and new value) in the same transaction, under the claim''s advisory lock (4800001; a wait of 2 s ends with 55P03). p_name: email_on, push_on or summary_on (p_value a boolean); planned_check (whole minutes 0 to 30 from now; 0 ends it and is always taken; a new one is refused planned_check_too_soon while one is on or within 30 minutes of the last one''s end, and planned_checks_used_up when 4 were started in the last 24 hours); or a threshold (a whole number in its range: aimed_guessing_events 5 to 100000, aimed_guessing_minutes 10 to 120 in tens, record_trouble_rows 1 to 100000, serious_pushes_per_hour 1 to 60, serious_reason_pushes_per_day 1 to 24, spike_event_floor 10 to 1000000, spike_learning_days 1 to 90, spike_source_floor 2 to 100000, subject_pushes_per_day 1 to 24, volume_pushes_per_day 0 to 100). p_expected, when given, must equal the value now. Answers {changed, refused, name, old_value, new_value, changed_at}: refused no_actor, not_a_name, not_a_value, out_of_range, unknown_actor, no_state, changed_by_someone_else, unchanged, planned_check_too_soon or planned_checks_used_up. Never raises for an argument. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
 -- ── 9. The console's read ────────────────────────────────────────────────────
 create function public.platform_security_alert_list(
@@ -1581,7 +1636,10 @@ begin
                                   where a.class in ('volume', 'record') and a.push_counted
                                     and a.claimed_at > v_now - c_volume_window),
       'volume_emails_last_day', (select pg_catalog.count(*) from public.platform_security_alerts a
-                                  where a.class in ('volume', 'record') and a.email_planned
+                                  where a.class = 'volume' and a.email_planned
+                                    and a.claimed_at > v_now - c_volume_window),
+      'record_emails_last_day', (select pg_catalog.count(*) from public.platform_security_alerts a
+                                  where a.class = 'record' and a.email_planned
                                     and a.claimed_at > v_now - c_volume_window)),
     'alerts',
       coalesce((select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
@@ -1633,7 +1691,7 @@ revoke all on function public.platform_security_alert_list(integer, integer) fro
 grant execute on function public.platform_security_alert_list(integer, integer) to service_role;
 
 comment on function public.platform_security_alert_list(integer, integer) is
-  'For the platform console''s alerts page. Keys: refused (null), generated_at; state (email_on, push_on, summary_on, record_only, planned_check_until while on, thresholds, baseline {event_high, source_high, from, to, shortened, computed_at}, heartbeat {last_run_started_at, last_run_finished_at, last_run_ok, last_run_partial, last_ok_at, failures_in_a_row, failure_reported_at}; never the run token); budget (serious_pushes_last_hour, serious_pushes_last_day_by_reason, volume_pushes_last_day, volume_emails_last_day); alerts, the newest p_limit (default 50, 1 to 200) with rule, class, subject, organization_name (its first 200 characters), event_key, phase, counts, disposition, push_planned, email_planned, push_counted, email_floor, push_result, email_result, attempts, claimed_at, resulted_at, state_ended_at, awaiting_result and overdue (no result 5 minutes after it was handed out); alerts_truncated; changes, the newest p_changes (default 50, 1 to 200); changes_truncated; latest_changes, the latest change of each setting however old (at most thirteen, by name). A missing state row answers refused no_state. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
+  'For the platform console''s alerts page. Keys: refused (null), generated_at; state (email_on, push_on, summary_on, record_only, planned_check_until while on, thresholds, baseline {event_high, source_high, from, to, shortened, computed_at}, heartbeat {last_run_started_at, last_run_finished_at, last_run_ok, last_run_partial, last_ok_at, failures_in_a_row, failure_reported_at}; never the run token); budget (serious_pushes_last_hour, serious_pushes_last_day_by_reason, volume_pushes_last_day, volume_emails_last_day, record_emails_last_day); alerts, the newest p_limit (default 50, 1 to 200) with rule, class, subject, organization_name (its first 200 characters), event_key, phase, counts, disposition, push_planned, email_planned, push_counted, email_floor, push_result, email_result, attempts, claimed_at, resulted_at, state_ended_at, awaiting_result and overdue (no result 5 minutes after it was handed out); alerts_truncated; changes, the newest p_changes (default 50, 1 to 200); changes_truncated; latest_changes, the latest change of each setting however old (at most fourteen, by name). A missing state row answers refused no_state. Read-only. service_role only: the grant is the whole control; called as authenticated or anon it raises 42501.';
 
 -- ── 10. The baseline ─────────────────────────────────────────────────────────
 create function public.platform_security_alert_baseline()

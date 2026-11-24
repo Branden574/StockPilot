@@ -40,6 +40,11 @@
 #      flag listed: no start marks anything not_sent, every read that lists
 #      it lists the volume alerts apart (100, truncated), exactly one session
 #      gets the retry (attempt 2) and none a refusal.
+#  10. The held notice is made once: with email alone on, the summary off and
+#      the day's 24 volume emails spent, twenty guessing alerts for twenty
+#      organizations at once are each held with a notice, and exactly one of
+#      the twenty answers carries the notice (one alerts_held row, by email,
+#      counting the one alert held when it was made).
 #
 # LOCAL stack only (docker container supabase_db_stockpilot by default;
 # CONTAINER=<name> for another local stack, the migration scratch stack is
@@ -48,7 +53,8 @@
 # this script claims carries the counts key race_check_0480, every security
 # events row it writes a dedupe key made from a0480-race-, every events
 # writer call a reason that starts with race_alerts_; all of them are
-# removed at the end. Exit status 0 = every check passed.
+# removed at the end, and so is each notice the script made (by its id).
+# Exit status 0 = every check passed.
 #
 # Usage: bash scripts/db-concurrency/0480_platform_security_alerts_race.sh
 
@@ -107,6 +113,10 @@ case "$SAVED" in
 esac
 cleanup_rows() {
   q "delete from public.platform_security_alerts where counts ? 'race_check_0480'" > /dev/null
+  if [ -s "$TMP/notice_ids" ]; then
+    q "delete from public.platform_security_alerts
+        where rule = 'alerts_held' and id::text in ($(sed "s/.*/'&'/" "$TMP/notice_ids" | paste -sd, -))" > /dev/null
+  fi
   q "delete from public.security_events
       where dedupe_key in (select md5('a0480-race-' || g) from generate_series(1, 20) g)
          or reason like 'race\\_alerts\\_%'" > /dev/null
@@ -402,6 +412,52 @@ if [ "$R9" = "marked=0 volume=100:true bad=0" ] && [ "$N9" = "0" ] && [ "$RT9" =
   ok "9: a serious flag's retry with its hour out of the window beside 101 volume alerts due theirs: twenty runs at once marked nothing not_sent, listed it apart from the volume alerts (100, truncated), one got the retry (attempt 2), $D9 duplicates, $O9 found it already taken"
 else
   bad "9: reads $R9 (expected marked=0 volume=100:true bad=0); new:retry:duplicate:not_sent:refused:other:pushes:emails $T9; row $ROW (expected sent:2:true)"
+fi
+cleanup_rows
+
+# ── 10. The held notice is made once ──────────────────────────────────────
+known_state
+q "update public.platform_security_alert_state set push_on = false, summary_on = false" > /dev/null
+PRIOR="$(q "select count(*) from public.platform_security_alerts where rule = 'alerts_held' and claimed_at > now() - interval '6 hours'")"
+if [ "$PRIOR" != "0" ]; then
+  bad "10: a held notice made in the last 6 hours is already on this stack ($PRIOR), so no new one can be made: not checked"
+else
+  q "insert into public.platform_security_alerts (rule, class, subject, event_key, phase, counts, disposition, email_planned, claimed_at)
+     select 'aimed_guessing', 'volume', 'a0480000-0000-4000-8000-' || lpad(g::text, 12, '0'), '$BUCKET', 'started',
+            '$MARK'::jsonb, 'sent', true, now() - interval '1 hour'
+       from generate_series(101, 124) g" > /dev/null
+  PIDS=()
+  for i in $(seq 1 20); do
+    ORG="$(printf 'a0480000-0000-4000-8000-%012d' "$i")"
+    ( q "$(claim_sql "'aimed_guessing'" "'$ORG'" "$BUCKET")" > "$TMP/10.$i" ) &
+    PIDS+=($!)
+  done
+  for p in "${PIDS[@]}"; do wait "$p"; done
+  T10="$(tally 10)"
+  N10="$(python3 - "$TMP" <<'PY10'
+import glob, json, sys
+notices = []; held = 0
+for f in glob.glob(sys.argv[1] + '/10.*'):
+    try:
+        a = json.loads(open(f).read().strip())
+    except ValueError:
+        continue
+    held += 1 if a.get('disposition') == 'held_with_notice' else 0
+    if isinstance(a.get('notice'), dict):
+        notices.append(a['notice'])
+with open(sys.argv[1] + '/notice_ids', 'a') as out:
+    for n in notices:
+        out.write(n['id'] + '\n')
+print('held=%d notices=%d channels=%s' % (held, len(notices), ','.join('%s/%s' % (n.get('push'), n.get('email')) for n in notices)))
+PY10
+)"
+  ROWS="$(q "select count(*) || ':' || coalesce(string_agg(disposition || '/' || push_planned || '/' || email_planned || '/' || (counts ->> 'held'), ','), '-')
+              from public.platform_security_alerts where rule = 'alerts_held' and claimed_at > now() - interval '6 hours'")"
+  if [ "$T10" = "20:0:0:0:0:0:0:0" ] && [ "$N10" = "held=20 notices=1 channels=False/True" ] && [ "$ROWS" = "1:sent/false/true/1" ]; then
+    ok "10: twenty guessing alerts at once past the day's 24 volume emails, the summary off: all twenty held with a notice, exactly one answer carries it, one notice row (by email, counting 1 held)"
+  else
+    bad "10: new:retry:duplicate:not_sent:refused:other:pushes:emails $T10 (expected 20:0:0:0:0:0:0:0); answers $N10 (expected held=20 notices=1 channels=False/True); notice rows $ROWS (expected 1:sent/false/true/1)"
+  fi
 fi
 cleanup_rows
 
