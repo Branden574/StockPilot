@@ -7,8 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SECURITY_ALERTS_WORDS } from '@stockpilot/core';
 
 /**
- * The platform console's security alerts page (part 5, stage 4a). Security
- * invariant. Pinned: the gate (requirePlatformAdmin) runs first, exactly as
+ * The platform console's security alerts page (part 5, stage 4a).
+ * Security invariant. Pinned: the gate (requirePlatformAdmin) runs first, exactly as
  * the attack map's page, and a refused gate renders nothing and reads
  * nothing; the section is inside <Suspense>, whose fallback says the alerts
  * are being checked, so the header never waits for its read; a title and a

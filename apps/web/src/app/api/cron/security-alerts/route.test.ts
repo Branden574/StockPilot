@@ -445,10 +445,18 @@ const finishes = () =>
 
 describe('the secret', () => {
   it('refuses without CRON_SECRET set, with no secret, and with a wrong one, before any call', async () => {
-    h.env.CRON_SECRET = undefined;
-    expect((await run()).status).toBe(401);
-    h.env.CRON_SECRET = '';
-    expect((await run()).status).toBe(401);
+    // Unset or empty: refused whatever is sent, the words an unset secret would make included.
+    for (const secret of [undefined, '']) {
+      h.env.CRON_SECRET = secret;
+      for (const authorization of [
+        'Bearer cron-secret-for-tests',
+        'Bearer undefined',
+        'Bearer ',
+        'Bearer',
+      ]) {
+        expect((await run(req({ authorization }))).status).toBe(401);
+      }
+    }
     h.env.CRON_SECRET = 'cron-secret-for-tests';
     expect((await run(req({}))).status).toBe(401);
     expect((await run(req({ authorization: 'Bearer not-the-secret' }))).status).toBe(401);

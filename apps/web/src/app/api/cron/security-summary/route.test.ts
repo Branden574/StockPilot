@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ALERT_BASELINE_REFUSALS } from '@stockpilot/core';
 
 /**
- * The daily security summary's job (part 5, stage 4a: RECORD ONLY). Security
- * invariant. Pinned: CRON_SECRET fails closed before any call; it calls
+ * The daily security summary's job (part 5, stage 4a: RECORD ONLY).
+ * Security invariant. Pinned: CRON_SECRET fails closed before any call; it calls
  * platform_security_alert_baseline() and nothing else (no summary, no email,
  * no push: 4b adds those); computed and computed_recently answer 200, any
  * other answer is reported once with its code or word only and answers 500;
@@ -89,10 +89,18 @@ const logLine = () => {
 
 describe('the secret', () => {
   it('refuses without CRON_SECRET set, with no secret, and with a wrong one, before any call', async () => {
-    h.env.CRON_SECRET = undefined;
-    expect((await run()).status).toBe(401);
-    h.env.CRON_SECRET = '';
-    expect((await run()).status).toBe(401);
+    // Unset or empty: refused whatever is sent, the words an unset secret would make included.
+    for (const secret of [undefined, '']) {
+      h.env.CRON_SECRET = secret;
+      for (const authorization of [
+        'Bearer cron-secret-for-tests',
+        'Bearer undefined',
+        'Bearer ',
+        'Bearer',
+      ]) {
+        expect((await run(req({ authorization }))).status).toBe(401);
+      }
+    }
     h.env.CRON_SECRET = 'cron-secret-for-tests';
     expect((await run(req({}))).status).toBe(401);
     expect((await run(req({ authorization: 'Bearer wrong' }))).status).toBe(401);
