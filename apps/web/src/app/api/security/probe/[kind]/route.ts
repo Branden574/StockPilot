@@ -1,5 +1,6 @@
 import { isSecurityProbeKind } from '@stockpilot/core';
 
+import { logProbeMeasurement } from '@/lib/security/probe-measure';
 import { recordSecurityEvent } from '@/server/security/events';
 
 export const runtime = 'nodejs';
@@ -30,6 +31,9 @@ async function answer(req: Request, { params }: ProbeContext): Promise<Response>
       { category: 'exploit', outcome: 'blocked', reason: kind, source: 'web' },
       req.headers,
     );
+    // Measurement only (lib/security/probe-measure.ts): one log line of
+    // booleans, never throws, never changes the answer below.
+    logProbeMeasurement(req, kind);
   }
   return new Response(req.method === 'HEAD' ? null : 'Not found', {
     status: 404,
