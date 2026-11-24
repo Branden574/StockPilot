@@ -106,6 +106,42 @@ describe('NEVER_SAMPLE_PATHS, read from the route tree', () => {
     expect(all.some((r) => r.file === 'r/[token]/page.tsx')).toBe(true);
   });
 
+  it('is exactly this list: changing it is a deliberate change to this test too', () => {
+    expect([...NEVER_SAMPLE_PATHS]).toEqual([
+      '/r',
+      '/m',
+      '/i',
+      '/invite',
+      '/orders/sign',
+      '/returns/request',
+      '/unsubscribe',
+      '/sign-in-alert',
+      '/auth',
+      '/reset',
+      '/api/integrations',
+      '/api/v1',
+      '/api/public',
+      '/ingest',
+    ]);
+    // The brief's own list (review M1): none of these may leave, whatever the
+    // tree walk below finds today (/reset holds no token in its address now).
+    for (const entry of [
+      '/m',
+      '/r',
+      '/i',
+      '/orders/sign',
+      '/returns/request',
+      '/unsubscribe',
+      '/auth',
+      '/reset',
+      '/invite',
+      '/sign-in-alert',
+      '/api/v1',
+    ]) {
+      expect(NEVER_SAMPLE_PATHS, entry).toContain(entry);
+    }
+  });
+
   it('every entry is the start of a route the app has', () => {
     for (const entry of NEVER_SAMPLE_PATHS) {
       const parts = entry.split('/').filter(Boolean);

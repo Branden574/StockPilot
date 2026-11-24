@@ -32,7 +32,7 @@ import type { ProbeKind, ProbeRule } from './probe-paths';
  * The paths under which nothing is sampled: each one can carry a capability
  * token or key in its path or its query, read from the app's route tree
  * (probe-sample.test.ts walks src/app and fails on a route with a token-like
- * part that is under none of them). A path is under an entry when its
+ * part that is under none of them, and pins this list as it is). A path is under an entry when its
  * segments begin with the entry's (case aside, after repeated slashes and
  * dot segments are resolved, at any step of resolving them, decoded or not).
  */
@@ -48,11 +48,11 @@ export const NEVER_SAMPLE_PATHS = [
   '/unsubscribe', // ?m= (member link), ?e= and ?t= (address and its token)
   '/sign-in-alert', // ?a=, ?i= and ?t= (the alert and its tag)
   '/auth', // auth/callback ?code=, auth/confirm ?token_hash= and ?r=
-  '/reset', // password reset, reset and reset/complete
+  '/reset', // password reset, reset/complete (the brief's; the link's token goes to /auth)
   '/api/integrations', // the accounting connections' sign-in callbacks: ?code= and ?state=
   // Interfaces called with a key.
   '/api/v1', // the phone app and API keys; orders/submissions/[key]
-  '/api/public', // the public API, called with an organization's key; hooks/[id]
+  '/api/public', // the public API: an organization's key (a header today), never sampled
   '/ingest', // the analytics proxy: the project key rides in its query
 ] as const;
 
