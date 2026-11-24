@@ -325,7 +325,7 @@ insert into texts (col, ok, val) values
   ('target', true,  '/example.probe/<id>/.../.env'),
   ('target', true,  '/example.probe/12345/.env'),
   ('target', true,  $t$/example.probe/a b ~!#$%^&*()_+-=[]{}|;',.<>?`"\$t$),
-  ('target', false, '/example.probe/abcdefab-abcd-4abc-8abc-abcdefabcde'),
+  ('target', true,  '/example.probe/abcdefab-abcd-4abc-8abc-abcdefabcde'),
   ('target', true,  '/example.probe/abcdefab.abcd.4abc.8abc.abcdefabcdef'),
   ('sample', false, repeat('a.', 150) || 'a'),
   ('sample', false, 'a@b'),
@@ -340,20 +340,27 @@ insert into texts (col, ok, val) values
   ('sample', true,  'q=<removed>&page=2'),
   ('sample', true,  '?'),
   ('sample', true,  'x=12345'),
-  -- After review S1: an @ percent-encoded, once or more; an IPv4 address; 24
-  -- characters of the base64 and hex alphabet in a row (letters, digits and
-  -- + / _ = -); an id of 32 hex characters with no dashes; and their near
-  -- misses. Then every marker the scrubber writes.
+  -- After review S1: an @ percent-encoded, once or more; an IPv4 address; a
+  -- long value (24 or more letters, digits, + and = in a row; / - and _
+  -- break a run); an id of 32 hex characters with no dashes; and their near
+  -- misses, among them scanner paths the console must show. Then every
+  -- marker the scrubber writes.
   ('target', false, '/example.probe/u%40x'),
   ('target', false, '/example.probe/u%2540x'),
   ('target', false, '/example.probe/192.0.2.44/.env'),
   ('target', false, '/x.' || repeat('a', 24)),
-  ('target', false, '/x.' || repeat('ab/', 8)),
-  ('target', false, '/x.' || repeat('A+b=c_d-', 3)),
+  ('target', false, '/x.' || repeat('A+b=', 6)),
+  ('target', false, '/x.dGhpcyBpcyBhIG1hZGUgdXAgdmFsdWU'),
   ('target', false, '/x.abcdefabcdefabcdefabcdefabcdefab'),
   ('target', false, '/x.ABCDEFABCDEFABCDEFABCDEFABCDEFAB'),
   ('target', true,  '/x.' || repeat('a', 23)),
   ('target', true,  '/x.' || repeat('ab/', 7) || 'ab'),
+  ('target', true,  '/x.' || repeat('ab/', 8)),
+  ('target', true,  '/x.' || repeat('A+b=c_d-', 3)),
+  ('target', true,  '/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php'),
+  ('target', true,  '/wp-content/plugins/sample-plugin/readme.txt'),
+  ('target', true,  '/wp-content/plugins/wp-file-manager/lib/php/connector.minimal.php'),
+  ('target', true,  '/_ignition/execute-solution'),
   ('target', true,  '/example.probe/192.0.2/.env'),
   ('target', true,  '/example.probe/u%41x'),
   ('target', true,  '/example.probe/u%25x40'),
@@ -370,10 +377,14 @@ insert into texts (col, ok, val) values
   ('sample', false, 'u=x%2540y'),
   ('sample', false, 'from=192.0.2.44'),
   ('sample', false, 'q.' || repeat('a', 24)),
-  ('sample', false, 't.' || repeat('Ab+/', 6)),
+  ('sample', false, 't.' || repeat('Ab+=', 6)),
+  ('sample', false, 'v=dGhpcyBpcyBhIG1hZGUgdXAgdmFsdWU='),
   ('sample', false, 't.abcdefabcdefabcdefabcdefabcdefab'),
   ('sample', false, 'id.ABCDEFAB-ABCD-4ABC-8ABC-ABCDEFABCDEF'),
   ('sample', true,  'q.' || repeat('a', 23)),
+  ('sample', true,  't.' || repeat('Ab+/', 6)),
+  ('sample', true,  'XDEBUG_SESSION_START=phpstorm'),
+  ('sample', true,  'redirect_to=/wp-admin/admin-ajax-example-page'),
   ('sample', true,  'v=1.2.3'),
   ('sample', true,  'q=%41'),
   ('sample', true,  'u=<email>&id=<id>&n=<number>&v=<long value>&t=<token>&k=<removed>&ip=<address>'),
@@ -678,12 +689,12 @@ select is(
   (select array_agg(pg_temp.try(format('select pg_temp.raw(%L)', jsonb_build_object(t.col, t.val))) order by t.o)
      from pg_temp.texts t where not t.ok),
   array_fill('23514'::text, array[(select count(*)::int from pg_temp.texts where not ok)]),
-  '0479/40: every target and query string of the refused list is refused: empty, too long, not a path, an @ (plain or percent-encoded), a control, escape, bidirectional, invisible or other non-ASCII character, a run of six digits, an IPv4 address, 24 characters of the base64 alphabet in a row, an id (dashed, in either case, or 32 hex characters)');
+  '0479/40: every target and query string of the refused list is refused: empty, too long, not a path, an @ (plain or percent-encoded), a control, escape, bidirectional, invisible or other non-ASCII character, a run of six digits, an IPv4 address, a long value (24 letters, digits, + or = in a row, base64 among them), an id (dashed, in either case, or 32 hex characters)');
 select is(
   (select array_agg(pg_temp.try(format('select pg_temp.raw(%L)', jsonb_build_object(t.col, t.val))) order by t.o)
      from pg_temp.texts t where t.ok),
   array_fill('ok'::text, array[(select count(*)::int from pg_temp.texts where ok)]),
-  '0479/41: every target and query string of the accepted list is accepted: a bare slash, 200 and 300 characters, (unreadable), every marker the scrubber writes, five digits, three dotted numbers, 23 characters of the base64 alphabet, another percent code, every printable ASCII character but @');
+  '0479/41: every target and query string of the accepted list is accepted: a bare slash, 200 and 300 characters, (unreadable), every marker the scrubber writes, five digits, three dotted numbers, 23 letters in a row, runs broken by / - or _ (scanner paths and plugin names), another percent code, every printable ASCII character but @');
 select is(
   array[pg_temp.try($$ select pg_temp.raw('{"sample": ""}') $$),
         pg_temp.try($$ select pg_temp.raw('{"target": "(more than could be listed)"}') $$),
