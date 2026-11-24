@@ -70,6 +70,15 @@ vi.mock('@/server/security/events', () => ({
   flushSecurityEvents: vi.fn(async () => undefined),
 }));
 
+// The same for the samples of what scanners asked for (part 5, stage 3):
+// server/security/event-samples.ts buffers them and flushes ten seconds
+// later. server/security/event-samples.test.ts tests the real one through
+// vi.importActual.
+vi.mock('@/server/security/event-samples', () => ({
+  recordSecurityEventSample: vi.fn(() => undefined),
+  flushSecurityEventSamples: vi.fn(async () => undefined),
+}));
+
 // Most React tests use happy-dom via the environmentMatchGlobs in vitest.config.
 // Only land DOM-flavoured polyfills when a window exists.
 if (typeof window !== 'undefined') {
