@@ -39,13 +39,18 @@ vi.mock('next/link', async () => {
       prefetch,
       children,
       className,
+      ...rest
     }: {
       href: string;
       prefetch?: boolean | null;
       children: React.ReactNode;
       className?: string;
     }) =>
-      React.createElement('a', { href, className, 'data-prefetch': String(prefetch) }, children),
+      React.createElement(
+        'a',
+        { ...rest, href, className, 'data-prefetch': String(prefetch) },
+        children,
+      ),
   };
 });
 vi.mock('@/lib/auth/platform-admin', () => ({
@@ -186,11 +191,17 @@ describe('the gate', () => {
 });
 
 describe('the attack map', () => {
-  it('a plain link to it near the header, never prefetched; the map itself is not on this page', async () => {
+  it('a clear button to it in the header, never prefetched; the map itself is not on this page', async () => {
     await renderPage();
-    const link = screen.getByRole('link', { name: 'Attack map' });
+    // The owner could not find a small text link (2026-11-24): the console's outline
+    // button, as Act as this org on an organization's page, with the button's focus ring.
+    const link = screen.getByRole('link', { name: 'Open attack map' });
     expect(link).toHaveAttribute('href', '/platform/security/map');
     expect(link).toHaveAttribute('data-prefetch', 'false');
+    expect(link).toHaveAttribute('data-glass', 'button');
+    expect(link).toHaveAttribute('data-glass-variant', 'outline');
+    expect(link.className).toContain('focus-visible:ring-2');
+    expect(screen.queryByRole('link', { name: 'Attack map' })).toBeNull();
     // The link is in the header, before the Passkeys section.
     expect(
       link.compareDocumentPosition(screen.getByRole('region', { name: 'Passkeys section' })) &
@@ -242,6 +253,7 @@ describe('the table', () => {
         'Leipzig, DE',
         'Website',
         '12',
+        'Stopped: nothing to doHow to respond',
       ],
       [
         '20 Nov 2026, 10:15 UTC',
@@ -250,6 +262,7 @@ describe('the table', () => {
         'Fresno, US',
         'Website',
         '3',
+        'Stopped: nothing to doHow to respond',
       ],
       [
         '20 Nov 2026, 10:15 UTC',
@@ -258,6 +271,7 @@ describe('the table', () => {
         '—',
         'Website',
         '4,100',
+        'Look todayHow to respond',
       ],
     ]);
     const links = within(table).getAllByRole('link');
@@ -268,6 +282,16 @@ describe('the table', () => {
     // Opening an organization's page writes an audit row, so its link is
     // never prefetched.
     expect(links.map((a) => a.getAttribute('data-prefetch'))).toEqual(['false', 'false']);
+    // Each row's "How to respond" is named for its event, so a list of them can be told apart.
+    expect(
+      within(table)
+        .getAllByRole('button', { name: /^How to respond: / })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual([
+      'How to respond: Request for a settings file',
+      'How to respond: Wrong password at sign-in',
+      'How to respond: More events than could be listed',
+    ]);
   });
 
   it('nothing recorded: the empty words', async () => {
