@@ -1084,6 +1084,39 @@ PGTAP_TESTS=(
   # organization's name is cut at 200 characters, and every time is written in
   # UTC whatever the session's time zone is.
   supabase/tests/0478_platform_security_map.test.sql
+  # What scanners asked for (0479): one table and three functions. The table
+  # has exactly its designed columns (no organization, account, address,
+  # header or hash), its row key computed by the database, two indexes, no
+  # foreign key and no trigger; its category, kind, source and method lists
+  # are held to the letter and are a subset of what the security events
+  # record accepts. anon and authenticated hold nothing on the table or the
+  # functions; service_role SELECT on the table and EXECUTE on the three, and
+  # cannot write a row directly; PUBLIC nothing. No body names a gate word, so
+  # if EXECUTE ever reached authenticated INV-25 would name each function
+  # (shown with the grant made inside a savepoint), and even then the second
+  # lock in each body refuses a signed-in member and a signed-out caller.
+  # Every CHECK refuses a bad row from the table's owner, and the writer
+  # applies the same text rules (printable ASCII only, no @, no run of six
+  # digits, no id, a path or one of two fixed words): every target and query
+  # string the table refuses the writer skips, every one it accepts it
+  # stores. The writer never raises: inputs and elements of many wrong shapes
+  # are skipped and counted, an unusable country, count or time is left empty
+  # or defaulted, only the first 50 elements are read. One row per hour and
+  # content; at most 50 new rows a kind and 300 in all an hour, then one
+  # overflow row a kind that only counts, while an existing row still adds.
+  # The writer and the purge take their own advisory lock, never the security
+  # events'; the read takes none. The purge keeps the events' 90 days, on the
+  # hour either side of the cutoff, oldest first, 5,000 a call. The read's
+  # numbers are worked out by hand for a made-up record: targets, their
+  # method and query string pairs and the overflow counts, most first then the
+  # newest, filtered by kind, category and country, the window's edges, the
+  # limit (10 by default, 50 at most, 5 pairs a target); every refusal is a
+  # fixed word, never raised and never repeating the argument; every time is
+  # in UTC; it writes nothing; a window over the row ceiling (60,000) is read
+  # from a later whole hour and says so, exactly at the ceiling it is read as
+  # asked, and an hour that alone holds more is refused. The two-session
+  # checks are scripts/db-concurrency/0479_security_event_samples_race.sh.
+  supabase/tests/0479_security_event_samples.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
