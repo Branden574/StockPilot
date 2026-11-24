@@ -172,6 +172,12 @@ const readWindow = z
     if (answer.blocked_since_day_start_partial && answer.blocked_since_day_start === null) {
       issue('blocked_since_day_start_partial', 'beside no count');
     }
+    if (
+      answer.blocked_since_day_start_partial &&
+      !answer.floors.includes('blocked_since_day_start')
+    ) {
+      issue('floors', 'a partial day count that is not a floor');
+    }
     // A poll: the live cells only, and no groups by country.
     if (answer.short_window) {
       if (answer.timeline.length > SECURITY_MAP_MAX_POLL_TIMELINE) issue('timeline', 'past a poll');

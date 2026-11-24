@@ -581,6 +581,16 @@ describe("the zod schema and core's plain reader are the same contract", () => {
       mapAnswer({ blocked_since_day_start_partial: true }),
       false,
     ],
+    [
+      'a partial day count not named a floor',
+      mapAnswer({
+        day_start: '2026-11-23T08:00:00+00:00',
+        blocked_since_day_start: 9,
+        blocked_since_day_start_partial: true,
+        floors: [],
+      }),
+      false,
+    ],
     ['a floor by an unknown name', mapAnswer({ floors: ['by_country'] }), false],
     [
       'floors past 40',
@@ -623,6 +633,29 @@ describe("the zod schema and core's plain reader are the same contract", () => {
       true,
     ],
     ['a poll with a replay cell and groups', mapAnswer({ short_window: true }), false],
+    ['a poll with a replay cell', mapAnswer({ short_window: true, by_country: [] }), false],
+    [
+      'a poll with groups by country',
+      mapAnswer({
+        short_window: true,
+        timeline: [
+          {
+            bucket_start: '2026-11-23T21:58:00+00:00',
+            bucket_seconds: 60,
+            country: 'US',
+            category: 'password_guessing',
+            outcome: 'blocked',
+            events: 11,
+          },
+        ],
+      }),
+      false,
+    ],
+    [
+      'a poll that says groups were cut',
+      mapAnswer({ short_window: true, timeline: [], by_country: [], by_country_truncated: true }),
+      false,
+    ],
     [
       'a window without live_from',
       mapAnswer({ window: { from: '2026-11-22T22:00:00+00:00', to: '2026-11-23T22:00:00+00:00' } }),
