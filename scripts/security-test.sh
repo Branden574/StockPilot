@@ -1183,6 +1183,27 @@ WEB_TESTS=(
   # the finalize limiter fails closed, and a recorded photo's files are never
   # rewritten or deleted by a later finalize.
   src/server/services/maintenance-attachments.metadata.test.ts
+  # Every upload path's one check (security tools part 6, stage 6a): the
+  # verdict from the bytes (kind, active content, a hidden file, could not be
+  # checked within the scanner's time and work budgets); one malware / blocked
+  # event per refusal with the organization and no file name, path or byte; a
+  # recorder failure changes no answer; a clean file unchanged; a refused
+  # stored copy removed (kept when another record names it or that look
+  # fails). The registry guard lists every mint, multipart or base64 read,
+  # stored-object read and storage write with the check that covers it (the
+  # phone's direct writes as known gaps of 6c) and pins a producer for each
+  # reason. Blocked activity, an organization's own page, leaves the kind out.
+  src/lib/upload-inspect.test.ts
+  src/server/security/upload-checks.test.ts
+  src/server/security/upload-checks.registry.guard.test.ts
+  src/server/security/upload-checks.capture-paths.test.ts
+  src/server/security/upload-checks.support-paths.test.ts
+  src/server/security/upload-checks.isbn-paths.test.ts
+  src/server/services/item-images.upload-checks.test.ts
+  src/server/services/po-imports.upload-checks.test.ts
+  src/server/services/procedure-videos.upload-checks.test.ts
+  src/app/api/orders/sign/route.test.ts
+  src/server/services/security-events.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts
