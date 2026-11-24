@@ -8,6 +8,7 @@ import {
   SECURITY_EVENT_SAMPLES_FAILED,
   SECURITY_EVENT_SAMPLES_REFUSED,
   SECURITY_EVENT_SAMPLES_WORDS,
+  securityEventSamplesAskFor,
   securityEventSamplesHourOf,
   type SecurityEventSamplesView,
 } from './security-event-samples';
@@ -201,6 +202,62 @@ describe('the hour an entry asks about', () => {
     expect(isSecurityEventSamplesCountry('NL')).toBe(true);
     for (const bad of ['nl', 'NLD', '', null, 1])
       expect(isSecurityEventSamplesCountry(bad)).toBe(false);
+  });
+});
+
+describe('what an entry asks for', () => {
+  const now = Date.parse('2026-11-24T10:15:05Z');
+  it("an entry's kind, the UTC hour of its instant, and its country", () => {
+    expect(
+      securityEventSamplesAskFor(
+        { reason: 'git_dir', at: Date.parse('2026-11-24T09:42:00Z'), country: 'NL' },
+        now,
+      ),
+    ).toEqual({
+      ok: true,
+      ask: { reason: 'git_dir', hour: '2026-11-24T09:00:00.000Z', country: 'NL' },
+    });
+  });
+  it('a card opened from the legend: every kind, the last 24 hours', () => {
+    expect(securityEventSamplesAskFor({ reason: null, at: null, country: null }, now)).toEqual({
+      ok: true,
+      ask: { reason: null, hour: null, country: null },
+    });
+  });
+  it('the hour 7 days back is read; one older is too old, and nothing is asked', () => {
+    expect(
+      securityEventSamplesAskFor(
+        { reason: 'env_file', at: Date.parse('2026-11-17T10:59:59Z'), country: null },
+        now,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(
+      securityEventSamplesAskFor(
+        { reason: 'env_file', at: Date.parse('2026-11-17T09:59:59Z'), country: null },
+        now,
+      ),
+    ).toEqual({ ok: false, why: 'too_old' });
+  });
+  it("an hour after the browser's own is still asked: the server's clock decides", () => {
+    expect(
+      securityEventSamplesAskFor(
+        { reason: 'env_file', at: Date.parse('2026-11-24T11:01:00Z'), country: null },
+        now,
+      ),
+    ).toMatchObject({ ok: true, ask: { hour: '2026-11-24T11:00:00.000Z' } });
+  });
+  it('a kind that is not a probe kind, or no instant, reads nothing', () => {
+    expect(
+      securityEventSamplesAskFor({ reason: 'wrong_password', at: now, country: null }, now),
+    ).toEqual({ ok: false, why: 'not_readable' });
+    expect(
+      securityEventSamplesAskFor({ reason: 'env_file', at: Number.NaN, country: null }, now),
+    ).toEqual({ ok: false, why: 'not_readable' });
+  });
+  it('a country that is not two capitals reads every country', () => {
+    expect(
+      securityEventSamplesAskFor({ reason: 'env_file', at: now, country: 'nl' }, now),
+    ).toMatchObject({ ok: true, ask: { country: null } });
   });
 });
 

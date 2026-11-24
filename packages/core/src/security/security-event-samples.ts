@@ -123,6 +123,46 @@ export function isSecurityEventSamplesCountry(country: unknown): country is stri
   return typeof country === 'string' && /^[A-Z]{2}$/.test(country);
 }
 
+/**
+ * What an entry hands the panel for its "What was asked for": what it shows
+ * already, and nothing else. Never a path or a query string.
+ */
+export interface SecurityEventSamplesEntry {
+  /** The entry's probe kind; null for every kind (a card opened from the map's legend). */
+  reason: string | null;
+  /** The entry's instant (the UTC hour it falls in is read); null for the last 24 hours. */
+  at: number | null;
+  /** The entry's country, when its list names exactly one; null for every country. */
+  country: string | null;
+  /** The zone the entry's list writes its times in; null for the browser's own. */
+  timeZone: string | null;
+}
+
+/**
+ * What the panel reads for an entry: the ask, or why it reads nothing. An
+ * hour more than 7 days back is `too_old` (the read's longest window); a kind
+ * that is not a probe kind, or an instant that is not one, is `not_readable`
+ * ("could not check"). An hour after the browser's own is still asked: the
+ * server's clock decides. A country that is not two capitals reads every
+ * country.
+ */
+export function securityEventSamplesAskFor(
+  entry: Pick<SecurityEventSamplesEntry, 'reason' | 'at' | 'country'>,
+  now: number,
+): { ok: true; ask: SecurityEventSamplesAsk } | { ok: false; why: 'too_old' | 'not_readable' } {
+  const reason = entry.reason;
+  if (reason !== null && !isSecurityProbeKind(reason)) return { ok: false, why: 'not_readable' };
+  const country = isSecurityEventSamplesCountry(entry.country) ? entry.country : null;
+  if (entry.at === null) return { ok: true, ask: { reason, hour: null, country } };
+  const hour = securityEventSamplesHourOf(entry.at);
+  if (hour === null) return { ok: false, why: 'not_readable' };
+  const current = Math.floor(now / HOUR_MS) * HOUR_MS;
+  if (current - Date.parse(hour) > SECURITY_EVENT_SAMPLES_MAX_AGE_HOURS * HOUR_MS) {
+    return { ok: false, why: 'too_old' };
+  }
+  return { ok: true, ask: { reason, hour, country } };
+}
+
 /* ─────────────── the browser's reader of the action's answer ─────────────── */
 
 type Bag = Record<string, unknown>;
@@ -237,6 +277,7 @@ export const SECURITY_EVENT_SAMPLES_WORDS = {
   refused:
     'Not shown: the console needs you signed in with your second step. Reload the page and sign in again.',
   none: 'No sample was kept for this entry.',
+  tooOld: 'What was asked for is read for the last 7 days only, and this entry is older.',
   noneWhy:
     'A sample is kept only for a request that matched a scanner rule, and only since samples began to be kept.',
   /** The fixed line under every list. */
