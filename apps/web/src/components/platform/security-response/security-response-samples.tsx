@@ -3,6 +3,7 @@
 import * as React from 'react';
 
 import { SECURITY_PAGES_CLOCK, ZonedWords } from '@/components/platform/zoned-time';
+import { isControlFlow } from '@/lib/control-flow';
 import { formatMomentInZone } from '@/lib/platform/dates';
 import { readSecurityEventSamplesAction } from '@/server/actions/platform/security-event-samples';
 
@@ -57,17 +58,21 @@ function countryWords(code: string): string {
 
 /** One read for one mount: a second run of the effect (React's development check) reuses it. */
 function useSamples(ask: SecurityEventSamplesAsk | null): SecurityEventSamplesResult | null {
-  const pending = React.useRef<Promise<SecurityEventSamplesResult> | null>(null);
+  const pending = React.useRef<Promise<SecurityEventSamplesResult | null> | null>(null);
   const [result, setResult] = React.useState<SecurityEventSamplesResult | null>(null);
   React.useEffect(() => {
     if (ask === null) return;
     pending.current ??= readSecurityEventSamplesAction(ask).then(
       (raw) => readSecurityEventSamplesResult(raw),
-      () => SECURITY_EVENT_SAMPLES_FAILED,
+      (e: unknown) => {
+        // A redirect (the session ended): the router is already moving; show nothing.
+        if (isControlFlow(e)) return null;
+        return SECURITY_EVENT_SAMPLES_FAILED;
+      },
     );
     let live = true;
     void pending.current.then((r) => {
-      if (live) setResult(r);
+      if (live && r !== null) setResult(r);
     });
     return () => {
       live = false;

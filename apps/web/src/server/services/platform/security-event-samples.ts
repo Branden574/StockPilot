@@ -20,6 +20,7 @@ import {
   type SecurityEventSamplesAsk,
   type SecurityEventSamplesResult,
   type SecurityEventSamplesView,
+  withEntryBudget,
 } from '@stockpilot/core';
 
 /**
@@ -122,7 +123,16 @@ const refusedWindow = z
   })
   .strict();
 
-export const platformSecurityEventSamplesSchema = z.union([readWindow, refusedWindow]);
+/**
+ * The whole answer. A list inside a list (paths, then each path's pairs), so
+ * it sits behind an entry budget (zod-array-bounds.guard.test.ts): the largest
+ * answer the contract allows holds about 310 list entries and as many objects,
+ * so 2,000 refuses only an answer this build does not know.
+ */
+export const platformSecurityEventSamplesSchema = withEntryBudget(
+  z.union([readWindow, refusedWindow]),
+  2_000,
+);
 
 /* ─────────────────────────────── the read ─────────────────────────────── */
 
@@ -177,7 +187,8 @@ export async function readPlatformSecurityEventSamples(
     const args = securityEventSamplesArgs(ask, now);
     if (args === null) return SECURITY_EVENT_SAMPLES_FAILED;
     const { data, error } = (await createAdminClient()
-      .rpc(FN, args)
+      // The name as a literal: the guards read every .rpc( call by its name.
+      .rpc('platform_security_event_samples', args)
       .abortSignal(AbortSignal.timeout(SECURITY_EVENT_SAMPLES_READ_BUDGET_MS))) as {
       data: unknown;
       error: { message: string; code?: string } | null;

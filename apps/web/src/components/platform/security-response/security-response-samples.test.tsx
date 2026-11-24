@@ -229,6 +229,19 @@ describe('what it shows', () => {
     expect(section().querySelector('[data-sample-target]')).toBeNull();
   });
 
+  it('a redirect (the session ended) shows no error: the router is already moving', async () => {
+    const redirect = Object.assign(new Error('NEXT_REDIRECT'), {
+      digest: 'NEXT_REDIRECT;replace;/signin;307;',
+    });
+    h.action.mockRejectedValueOnce(redirect);
+    render(<SecurityResponseSamples entry={ENTRY} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(section().textContent).not.toContain(W.couldNotCheck);
+    expect(section().textContent).toContain(W.loading);
+  });
+
   it('a call that fails outright is could not check', async () => {
     h.action.mockRejectedValueOnce(new Error('made-up failure'));
     render(<SecurityResponseSamples entry={ENTRY} />);
