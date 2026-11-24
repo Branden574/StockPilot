@@ -9,6 +9,7 @@ import {
   SECURITY_MAP_READ_LIMIT_MS,
   SECURITY_MAP_REPLAY_STEP_MS,
   SECURITY_MAP_WORDS,
+  SECURITY_RESPONSE_WORDS,
   securityEventCategoryLabel,
   securityEventSourceLabel,
   securityMapViewOf,
@@ -256,6 +257,16 @@ const liveAnswer = () =>
   });
 /** A read of the last ten minutes with nothing in them: the play turns to the replay. */
 const quietAnswer = () => answer({ ...liveAnswer(), timeline: [], feed: [] });
+/**
+ * A whole window that counted the live play's cell already: beside it,
+ * liveAnswer() brings no new events, so the totals are not behind.
+ */
+const COUNTED_LIVE = {
+  timeline: [
+    ...answer().timeline,
+    cell('2026-11-23T21:59:00+00:00', 60, 'CN', 'exploit', 'blocked', 4),
+  ],
+};
 
 /* ─────────────────────────────── the browser ─────────────────────────────── */
 
@@ -304,36 +315,50 @@ async function advance(ms: number) {
   });
 }
 
-function mount(poll: (input: unknown) => Promise<unknown>, initial: unknown = wholeRead()) {
+/**
+ * The island as the page hands it: the viewer's chosen zone is UTC unless a
+ * test says otherwise (null: none chosen, the browser's zone then).
+ */
+function mount(
+  poll: (input: unknown) => Promise<unknown>,
+  initial: unknown = wholeRead(),
+  timeZone: string | null = 'UTC',
+) {
   const spy = vi.fn(poll);
-  const view = render(<SecurityMapClient initial={initial} poll={spy} />);
+  const view = render(<SecurityMapClient initial={initial} poll={spy} timeZone={timeZone} />);
   return { spy, ...view };
 }
 
 const lastGlobe = () => h.globeProps[h.globeProps.length - 1]!;
 const today = () =>
-  screen.getByText('Blocked since midnight, your time').parentElement!.querySelector('dd')!
-    .textContent;
+  screen.getByText(/^Blocked since midnight, /).parentElement!.querySelector('dd')!.textContent;
 const chooseFlat = () =>
   fireEvent.click(screen.getByRole('button', { name: SECURITY_MAP_WORDS.flat }));
 
 /* ────────────────────────────────── tests ────────────────────────────────── */
 
+/** A feed entry's disclosure by its words: never the entry's "How to respond", whose name ends with them. */
+const FEED_ENTRY_SETTINGS = /^(?!How to respond).*Request for a settings file/;
+
 describe('the reads', () => {
   it("right after it opens the island reads the whole window once more, with the viewer's day start (Q22); then the last ten minutes every 30 seconds, and the whole window 5 minutes on", async () => {
+    // The polls bring no event the whole window had not counted: the rhythm is the plain one.
     const { spy } = mount(async (input) =>
-      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
+      (input as { scope: string }).scope === 'whole'
+        ? dayRead(COUNTED_LIVE)(input)
+        : recentRead(liveAnswer()),
     );
     await advance(0);
     // At once: the server's read could not carry the viewer's midnight.
     expect(spy.mock.calls.map((c) => c[0])).toEqual([
-      { scope: 'whole', dayStart: localDayStart(new Date()) },
+      { scope: 'whole', dayStart: localDayStart(new Date(), 'UTC') },
     ]);
     const first = spy.mock.calls[0]![0] as { dayStart: string };
-    expect(new Date(first.dayStart).getHours()).toBe(0);
+    // Midnight in the zone the times are in (UTC here).
+    expect(new Date(first.dayStart).getUTCHours()).toBe(0);
     await advance(30_000);
     expect(spy.mock.calls.map((c) => c[0])).toEqual([
-      { scope: 'whole', dayStart: localDayStart(new Date()) },
+      { scope: 'whole', dayStart: localDayStart(new Date(), 'UTC') },
       { scope: 'recent', dayStart: null },
     ]);
     // Each read is scheduled when the one before it has landed.
@@ -368,9 +393,11 @@ describe('the reads', () => {
 
   it("the whole window is read again at the viewer's midnight, with the new day, between the 30-second reads", async () => {
     // Opened at 23:52:50: the island reads the whole window at once, and again at 23:57:50.
-    vi.setSystemTime(new Date(2026, 10, 23, 23, 52, 50));
+    vi.setSystemTime(new Date(Date.UTC(2026, 10, 23, 23, 52, 50)));
     const { spy } = mount(async (input) =>
-      (input as { scope: string }).scope === 'whole' ? dayRead()(input) : recentRead(liveAnswer()),
+      (input as { scope: string }).scope === 'whole'
+        ? dayRead(COUNTED_LIVE)(input)
+        : recentRead(liveAnswer()),
     );
     await advance(0);
     for (let i = 0; i < 14; i += 1) await advance(30_000);
@@ -388,15 +415,15 @@ describe('the reads', () => {
       'recent',
       'whole',
     ]);
-    expect(new Date(calls[0]!.dayStart!).getDate()).toBe(23);
-    expect(new Date(calls[10]!.dayStart!).getDate()).toBe(23);
+    expect(new Date(calls[0]!.dayStart!).getUTCDate()).toBe(23);
+    expect(new Date(calls[10]!.dayStart!).getUTCDate()).toBe(23);
     const next = new Date(calls[15]!.dayStart!);
-    expect([next.getDate(), next.getHours(), next.getMinutes()]).toEqual([24, 0, 0]);
+    expect([next.getUTCDate(), next.getUTCHours(), next.getUTCMinutes()]).toEqual([24, 0, 0]);
     expect(today()).toBe('9');
   });
 
   it("past midnight, before the new day is read, the day's counter says 'Not counted yet', never the old day's number", async () => {
-    vi.setSystemTime(new Date(2026, 10, 23, 23, 59, 30));
+    vi.setSystemTime(new Date(Date.UTC(2026, 10, 23, 23, 59, 30)));
     let wholeReads = 0;
     mount(async (input) => {
       if ((input as { scope: string }).scope !== 'whole') return recentRead(liveAnswer());
@@ -407,8 +434,12 @@ describe('the reads', () => {
     await advance(0);
     expect(wholeReads).toBe(1);
     expect(today()).toBe('9');
-    // The read at midnight fails.
+    // Midnight: a read of the last ten minutes lands, the day has turned, nothing counts the new one yet.
     await advance(30_000);
+    expect(wholeReads).toBe(1);
+    expect(today()).toBe('Not counted yet');
+    // The read for the new day, 45 seconds after the last whole read began (review M1), fails.
+    await advance(15_000);
     expect(wholeReads).toBe(2);
     expect(today()).toBe('Not counted yet');
   });
@@ -416,7 +447,7 @@ describe('the reads', () => {
   it('the whole window is read again at once when the replay begins on a read more than a minute old; not again while it goes on', async () => {
     let recentReads = 0;
     const { spy } = mount(async (input) => {
-      if ((input as { scope: string }).scope === 'whole') return dayRead()(input);
+      if ((input as { scope: string }).scope === 'whole') return dayRead(COUNTED_LIVE)(input);
       recentReads += 1;
       return recentRead(recentReads <= 2 ? liveAnswer() : quietAnswer());
     });
@@ -532,7 +563,7 @@ describe('the reads', () => {
     expect(screen.queryByTestId('security-map-stop')).toBeNull();
     await advance(1);
     expect(screen.getByTestId('security-map-stop').textContent).toMatch(
-      /^Not updating since \d\d:\d\d, your time\. The map is stopped and shows what was read then\.$/,
+      /^Not updating since \d{1,2}:\d\d [AP]M UTC\. The map is stopped and shows what was read then\.$/,
     );
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
@@ -568,7 +599,7 @@ describe('the reads', () => {
     expect(scopes.filter((scope) => scope === 'recent').length).toBeGreaterThan(15);
     expect(
       screen.getByText(
-        /^Totals and table as of \d\d:\d\d, your time\. The newest count could not be read/,
+        /^Totals and table as of \d{1,2}:\d\d [AP]M UTC\. The newest count could not be read/,
       ),
     ).toBeInTheDocument();
     // The last ten minutes stay live, against the last good whole read.
@@ -639,11 +670,11 @@ describe('what is never drawn or listed', () => {
       'bots',
     ]);
     const text = document.body.textContent ?? '';
-    expect(text).not.toContain(securityEventCategoryLabel('phishing'));
-    expect(text).not.toContain(securityEventCategoryLabel('malware'));
+    // Their names: the category labelled "Sign-in alert" since lab walk 3 (F1) is drawn as sign-in alerts.
+    expect(text).not.toMatch(/phishing|malware/i);
     expect(
       screen.getByText(
-        'Not drawn: at least 2 flagged sign-in alerts. They are on the Security page.',
+        'At least 2 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
       ),
     ).toBeInTheDocument();
     // The drawing: no arc of a hidden category, in either view.
@@ -727,7 +758,7 @@ describe('a window the database shortened', () => {
     mount(async () => new Promise(() => {}), wholeRead(shortened()));
     const words = screen.getByTestId('security-map-shortened').textContent ?? '';
     expect(words).toMatch(
-      /^Showing the last 3 hours 52 minutes only, from \d\d:\d\d, your time: there were too many events to count all of the last 24 hours\. Nothing before \d\d:\d\d is in these numbers\.$/,
+      /^Showing the last 3 hours 52 minutes only, from \d{1,2}:\d\d [AP]M UTC: there were too many events to count all of the last 24 hours\. Nothing before \d{1,2}:\d\d [AP]M UTC is in these numbers\.$/,
     );
     expect(screen.getByText('Blocked, last 3 hours 52 minutes')).toBeInTheDocument();
     expect(screen.getByText('Flagged, last 3 hours 52 minutes')).toBeInTheDocument();
@@ -751,7 +782,9 @@ describe('floors: "at least" where the database says, and nowhere else', () => {
     const flagged = screen.getByText('Flagged, last 24 hours').parentElement!;
     expect(flagged.querySelector('dd')!.textContent).toBe('5');
     expect(
-      screen.getByText('Not drawn: 2 flagged sign-in alerts. They are on the Security page.'),
+      screen.getByText(
+        '2 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
+      ),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('at least');
   });
@@ -776,7 +809,7 @@ describe('floors: "at least" where the database says, and nowhere else', () => {
   it('a feed entry whose count is a floor says "at least" in its facts', () => {
     const a = answer({ feed: [feedEntry({ at_least: true, events: 12 })] });
     mount(async () => new Promise(() => {}), wholeRead(a));
-    fireEvent.click(screen.getByRole('button', { name: /Request for a settings file/ }));
+    fireEvent.click(screen.getByRole('button', { name: FEED_ENTRY_SETTINGS }));
     expect(screen.getByText('at least 12')).toBeInTheDocument();
   });
 });
@@ -785,7 +818,7 @@ describe('the flagged list beside the map', () => {
   const list = () => screen.getByTestId('security-map-flagged');
   const entries = () => [...list().querySelectorAll('[data-flagged-entry]')];
 
-  it('lists the newest flagged entries with the hollow mark, what, city and country, time and count; nothing else', () => {
+  it('lists the newest flagged entries with the hollow mark, what, city and country, time, count and organization; nothing else', () => {
     mount(async () => new Promise(() => {}));
     expect(within(list()).getByText(SECURITY_MAP_WORDS.flaggedFeedTitle)).toBeInTheDocument();
     // Every kind is listed: the password-guessing entry, then the flagged sign-in alert.
@@ -793,16 +826,25 @@ describe('the flagged list beside the map', () => {
     const entry = entries()[0]!;
     expect(entry.textContent).toContain('Sign-in alerts held after too many in one day');
     expect(entry.textContent).toContain('Example Borough, United Kingdom');
-    expect(entry.textContent).toContain('21:44 UTC');
+    expect(entry.textContent).toContain('9:44 PM UTC');
     expect(entry.textContent).toContain('at least 4');
     // The same mark a flagged arc starts from: hollow, in its category's colour.
     const mark = entry.querySelector('svg path')!;
     expect(mark.getAttribute('fill')).toBe('none');
     expect(mark.getAttribute('stroke')).toBe(CATEGORY_LOOKS.password_guessing.hex);
-    // Where is city and country only: no organization, no source, no link.
-    expect(list().textContent).not.toContain('Example Hidden Academy');
+    // Its organization, as the feed says it (review M1 reversed by the owner, 2026-11-24); no source.
+    const organizations = () =>
+      entries().map((li) => li.querySelector('[data-flagged-organization]')?.textContent);
+    expect(organizations()).toEqual(['Example Hidden Academy', 'No organization']);
     expect(list().textContent).not.toContain(securityEventSourceLabel('api'));
-    expect(list().querySelector('a, button')).toBeNull();
+    // No link; the only control on an entry is its "How to respond".
+    expect(list().querySelector('a')).toBeNull();
+    for (const li of entries()) {
+      expect(
+        [...li.querySelectorAll('button')].map((b) => b.getAttribute('aria-label')),
+        li.textContent ?? '',
+      ).toEqual([expect.stringMatching(/^How to respond: /)]);
+    }
   });
 
   it('a flagged entry of a kind the map does not draw: its plain name, the grey mark, city and country, time and count; never its kind', () => {
@@ -810,7 +852,7 @@ describe('the flagged list beside the map', () => {
     const entry = entries()[1]!;
     expect(entry.textContent).toContain('Sign-in from a new country');
     expect(entry.textContent).toContain('Example Falls, United States');
-    expect(entry.textContent).toContain('21:40 UTC');
+    expect(entry.textContent).toContain('9:40 PM UTC');
     expect(entry.textContent).toContain('2');
     const mark = entry.querySelector('svg path')!;
     expect(mark.getAttribute('fill')).toBe('none');
@@ -833,22 +875,48 @@ describe('the flagged list beside the map', () => {
     }
   });
 
-  it('the globe, the flat map, the legend and the counters still carry nothing of the hidden kind', () => {
-    mount(async () => new Promise(() => {}));
+  it('the hidden kind is drawn only as a grey sign-in alert: no kind on any arc, the legend and the counters as before', () => {
+    // Owner's decision of 2026-11-24 (reverses "listed, never drawn"): the flagged sign-in
+    // alert of the kept flagged list is drawn, with no category and so no kind's name. It
+    // plays live when its minute is in the last ten minutes (here 21:55, the live play's).
+    const base = answer();
+    const inLive = { ...base.flagged_feed[1]!, minute: '2026-11-23T21:55:00+00:00' };
+    mount(
+      async () => new Promise(() => {}),
+      wholeRead(answer({ flagged_feed: [base.flagged_feed[0]!, inLive] })),
+    );
     expect(entries()[1]!.textContent).toContain('Sign-in from a new country');
-    for (const props of h.globeProps) {
-      const arcs = props.arcs as Array<{ arc: { category: string; country: string } }>;
-      expect(arcs.some((a) => a.arc.category === 'phishing' || a.arc.country === 'US')).toBe(false);
-    }
+    const last = h.globeProps[h.globeProps.length - 1]!;
+    const arcs = last.arcs as Array<{
+      arc: { key: string; category: string | null; country: string };
+    }>;
+    expect(arcs.some((a) => a.arc.category === 'phishing')).toBe(false);
+    const alert = arcs.filter((a) => a.arc.country === 'US');
+    expect(alert.map((a) => [a.arc.key, a.arc.category])).toEqual([['US:alert:flagged', null]]);
     chooseFlat();
-    expect(document.querySelectorAll('[data-arc*="phishing"], [data-arc^="US:"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-arc*="phishing"]')).toHaveLength(0);
+    const flat = [...document.querySelectorAll('[data-arc^="US:"]')];
+    expect(flat.map((g) => [g.getAttribute('data-look'), g.getAttribute('data-outcome')])).toEqual([
+      ['sign-in-alert', 'flagged'],
+    ]);
     const legend = [...document.querySelectorAll('[data-legend]')].map((li) =>
       li.getAttribute('data-legend'),
     );
     expect(legend).toEqual(['password_guessing', 'exploit', 'bots']);
+    expect(document.querySelector('[data-legend-alert]')!.textContent).toContain(
+      SECURITY_MAP_WORDS.legendSignInAlert,
+    );
     expect(
       [...document.querySelectorAll('[data-counter]')].map((c) => c.getAttribute('data-counter')),
     ).toEqual(['blocked_today', 'blocked_window', 'flagged_window']);
+  });
+
+  it('an alert outside the live window is not drawn in the live play (its hour is in the replay)', () => {
+    // The fixture's alert is at 21:40, before the live play's ten minutes from 21:50.
+    mount(async () => new Promise(() => {}));
+    const last = h.globeProps[h.globeProps.length - 1]!;
+    const arcs = last.arcs as Array<{ arc: { country: string } }>;
+    expect(arcs.some((a) => a.arc.country === 'US')).toBe(false);
   });
 
   it('a flagged reason this build does not know: neutral words, never the code', () => {
@@ -944,7 +1012,7 @@ describe('the flagged list beside the map', () => {
     const { spy } = mount(
       async (input) =>
         (input as { scope: string }).scope === 'whole'
-          ? dayRead({ flagged_feed: [inside] })(input)
+          ? dayRead({ flagged_feed: [inside], ...COUNTED_LIVE })(input)
           : recentRead(empty),
       wholeRead(answer({ flagged_feed: [inside] })),
     );
@@ -958,9 +1026,9 @@ describe('the flagged list beside the map', () => {
     ]);
     expect(entries()).toHaveLength(1);
     expect(entries()[0]!.textContent).toContain('Example Borough, United Kingdom');
-    expect(entries()[0]!.textContent).toContain('21:55 UTC');
+    expect(entries()[0]!.textContent).toContain('9:55 PM UTC');
     // The plain feed too: its entry from the whole read is still there.
-    expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })).toHaveLength(1);
   });
 
   it('a poll that pushes entries past the 20 kept: the list says it leaves some out', async () => {
@@ -1008,11 +1076,11 @@ describe('the flagged list beside the map', () => {
     });
     // The server's read, before the island's own lands.
     expect(entries()).toHaveLength(2);
-    expect(screen.getAllByRole('button', { name: /Request for a settings file/ })).toHaveLength(1);
+    expect(screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })).toHaveLength(1);
     await advance(0);
     expect(wholeReads).toBe(1);
     expect(entries()).toHaveLength(0);
-    expect(screen.queryByRole('button', { name: /Request for a settings file/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: FEED_ENTRY_SETTINGS })).toBeNull();
   });
 
   it("a poll's flagged entries are merged in, newest first; the whole read's own all stay", async () => {
@@ -1076,7 +1144,7 @@ describe('when the page stops', () => {
     expect(lastGlobe().timing).toBe('replay');
     await advance(60_000);
     expect(screen.getByTestId('security-map-stop').textContent).toMatch(
-      /^Not updating since \d\d:\d\d, your time\. The map is stopped and shows what was read then\.$/,
+      /^Not updating since \d{1,2}:\d\d [AP]M UTC\. The map is stopped and shows what was read then\.$/,
     );
     expect(lastGlobe().timing).toBe('still');
     expect(lastGlobe().mayTurn).toBe(false);
@@ -1238,7 +1306,7 @@ describe('the stage', () => {
     );
     const pill = () => screen.getByTestId('security-map-pill');
     expect(pill().getAttribute('data-kind')).toBe('replay');
-    expect(pill().textContent).toMatch(/^Replay \d\d:\d\d to \d\d:\d\d$/);
+    expect(pill().textContent).toMatch(/^Replay \d{1,2}:\d\d [AP]M to \d{1,2}:\d\d [AP]M UTC$/);
     expect(pill().getAttribute('aria-hidden')).toBe('true');
     await advance(0);
     await advance(30_000);
@@ -1252,7 +1320,7 @@ describe('the stage', () => {
     await advance(60_000);
     const pill = screen.getByTestId('security-map-pill');
     expect(pill.getAttribute('data-kind')).toBe('not_updating');
-    expect(pill.textContent).toMatch(/^Not updating since \d\d:\d\d$/);
+    expect(pill.textContent).toMatch(/^Not updating since \d{1,2}:\d\d [AP]M UTC$/);
   });
 
   it('the ticker: the newest feed entry the stage draws, never one it does not', async () => {
@@ -1273,7 +1341,7 @@ describe('the stage', () => {
     expect(lastGlobe().timing).toBe('live');
     const ticker = screen.getByTestId('security-map-ticker');
     expect(ticker.textContent).toContain('Example Harbour, China');
-    expect(ticker.textContent).toContain('21:58 UTC');
+    expect(ticker.textContent).toContain('9:58 PM UTC');
     expect(ticker.textContent).not.toContain('Example Town');
     expect(ticker.closest('[aria-hidden="true"]')).not.toBeNull();
   });
@@ -1313,7 +1381,7 @@ describe('the stage', () => {
       expect(button.className).toContain('focus-visible:outline-solid');
       expect(button.className).toContain('focus-visible:outline-offset-2');
     }
-    const entry = screen.getAllByRole('button', { name: /Request for a settings file/ })[0]!;
+    const entry = screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })[0]!;
     expect(entry.className).toContain('focus-visible:outline-solid');
     expect(entry.className).toContain('focus-visible:-outline-offset-2');
   });
@@ -1341,12 +1409,12 @@ describe('the controls and the flagged entries line up', () => {
       wide = layout === 'wide';
       notPhone = layout === 'wide';
       const { unmount } = mount(async () => new Promise(() => {}));
-      // The first entry's count is a floor: "21:44 UTC · at least 4".
+      // The first entry's count is a floor: "9:44 PM UTC · at least 4".
       const entry = screen
         .getByTestId('security-map-flagged')
         .querySelector('[data-flagged-entry]')!;
       const timeAndCount = [...entry.querySelectorAll('span')].find((el) =>
-        /^\d\d:\d\d UTC · at least 4$/.test(el.textContent ?? ''),
+        /^\d{1,2}:\d\d [AP]M UTC · at least 4$/.test(el.textContent ?? ''),
       );
       expect(timeAndCount, layout).toBeDefined();
       expect(timeAndCount!.className.split(' '), layout).toContain('whitespace-nowrap');
@@ -1427,9 +1495,13 @@ describe('lab walk 2', () => {
     notPhone = true;
     mount(async () => new Promise(() => {}));
     expect(screen.getByTestId('security-map-legend-counts').textContent).toBe(
-      SECURITY_MAP_WORDS.legendCounts,
+      'Numbers on the globe: events in this play',
     );
-    expect(SECURITY_MAP_WORDS.legendCounts).toContain('events in this play');
+    // On the flat map, the same sentence names the map.
+    fireEvent.click(screen.getByRole('button', { name: 'Flat map' }));
+    expect(screen.getByTestId('security-map-legend-counts').textContent).toBe(
+      'Numbers on the map: events in this play',
+    );
   });
 
   it('a country label reads over the brightest land: its backdrop at least 88% opaque, its text at least 7:1 (F5), with a leader line on its side (F4)', () => {
@@ -1535,7 +1607,7 @@ describe('long lists', () => {
 
   it(`the feed shows its first ${FEED_VISIBLE}, fading out, and "Show all N" shows the rest and back`, () => {
     mount(async () => new Promise(() => {}), wholeRead(answer({ feed: many(11) })));
-    const entries = () => screen.getAllByRole('button', { name: /Request for a settings file/ });
+    const entries = () => screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS });
     expect(entries()).toHaveLength(FEED_VISIBLE);
     const more = screen.getByRole('button', { name: SECURITY_MAP_WORDS.showAll(11) });
     expect(more).toHaveAttribute('aria-expanded', 'false');
@@ -1584,7 +1656,7 @@ describe('the marks on a light page', () => {
 describe('the feed', () => {
   it('an organization name that looks like markup is plain text', () => {
     mount(async () => wholeRead());
-    fireEvent.click(screen.getAllByRole('button', { name: /Request for a settings file/ })[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })[0]!);
     expect(screen.getByText(MARKUP_NAME, { exact: false })).toBeInTheDocument();
     expect(document.querySelector('img')).toBeNull();
     expect(document.body.innerHTML).toContain('&lt;img src=x onerror=alert(1)&gt;');
@@ -1592,7 +1664,7 @@ describe('the feed', () => {
 
   it('an entry is a disclosure: aria-expanded, and its facts shown only when open', () => {
     mount(async () => wholeRead());
-    const button = screen.getAllByRole('button', { name: /Request for a settings file/ })[0]!;
+    const button = screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })[0]!;
     const details = document.getElementById(button.getAttribute('aria-controls')!)!;
     expect(button).toHaveAttribute('aria-expanded', 'false');
     expect(details.hidden).toBe(true);
@@ -1606,7 +1678,12 @@ describe('the feed', () => {
 
   it('is not a live region: an update is never announced; the stop words are the one status region on the page', () => {
     mount(async () => wholeRead());
-    expect(document.querySelector('[aria-live]')).toBeNull();
+    // The one other polite line: "Counting again" beside the counters (lab walk 3, F2), empty now.
+    const live = [...document.querySelectorAll('[aria-live]')];
+    expect(live.map((el) => el.getAttribute('data-testid'))).toEqual([
+      'security-map-counters-recounting',
+    ]);
+    expect(live[0]!.textContent).toBe('');
     expect(document.querySelectorAll('[role="status"], [role="alert"], [role="log"]')).toHaveLength(
       1,
     );
@@ -1615,5 +1692,571 @@ describe('the feed', () => {
     // Nothing is moving that has stopped: the region is there, and says nothing.
     expect(region.textContent).toBe('');
     expect(region.contains(screen.getByText(SECURITY_MAP_WORDS.feedTitle))).toBe(false);
+  });
+});
+
+/* ───────────────────────────── how to respond ───────────────────────────── */
+
+/**
+ * Presses a "How to respond" and waits for the panel, whose code loads on the
+ * first press (next/dynamic): it is a dialog over the page, not a route.
+ */
+async function openCard(button: HTMLElement) {
+  fireEvent.click(button);
+  for (let i = 0; i < 10 && !screen.queryByRole('dialog'); i += 1) {
+    await act(async () => {
+      await import('../security-response/security-response-panel');
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+  return screen.getByRole('dialog');
+}
+const contextOf = (panel: HTMLElement) =>
+  [...(within(panel).queryByTestId('security-response-context')?.querySelectorAll('dt') ?? [])].map(
+    (dt) => [dt.textContent, dt.nextElementSibling?.textContent],
+  );
+const respond = (what: string) => screen.getByRole('button', { name: `How to respond: ${what}` });
+/** The link on the organization's name under "Opened from", or null. */
+const organizationLinkOf = (panel: HTMLElement): HTMLAnchorElement | null => {
+  const dt = [...panel.querySelectorAll('dt')].find((d) => d.textContent === 'Organization');
+  return dt?.nextElementSibling?.querySelector('a') ?? null;
+};
+
+describe('how to respond, from the map', () => {
+  it("a plain feed entry: its control beside it, with the card's level; the panel shows the entry's own kind, place, time and organization, as plain text", async () => {
+    mount(async () => wholeRead());
+    const button = respond('Request for a settings file');
+    const control = button.closest('[data-slot="security-response-control"]') as HTMLElement;
+    expect(within(control).getByTestId('security-response-level').textContent).toBe(
+      'Stopped: nothing to do',
+    );
+    // The entry's own disclosure is a separate button: the control is not inside it.
+    const disclosure = screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })[0]!;
+    expect(disclosure.contains(button)).toBe(false);
+    const panel = await openCard(button);
+    expect(panel).toHaveAttribute('data-card', 'probe-scan');
+    expect(contextOf(panel)).toEqual([
+      ['Kind', 'Exploit attempts'],
+      ['Where', 'Example Town, Germany'],
+      ['When', '9:58 PM UTC'],
+      ['Organization', MARKUP_NAME],
+    ]);
+    expect(panel.querySelector('img')).toBeNull();
+  });
+
+  it('a flagged entry of a shown kind: its kind, place, time and organization, the name a link to its console page', async () => {
+    mount(async () => wholeRead());
+    const what = 'Sign-in alerts held after too many in one day';
+    const control = respond(what).closest('[data-slot="security-response-control"]') as HTMLElement;
+    expect(within(control).getByTestId('security-response-level').textContent).toBe('Look today');
+    const panel = await openCard(respond(what));
+    expect(panel).toHaveAttribute('data-card', 'sign-in-alerts-held');
+    expect(contextOf(panel)).toEqual([
+      ['Kind', 'Password guessing'],
+      ['Where', 'Example Borough, United Kingdom'],
+      ['When', '9:44 PM UTC'],
+      ['Organization', 'Example Hidden Academy'],
+    ]);
+    expect(organizationLinkOf(panel)).toHaveAttribute('href', `/platform/orgs/${ORG}`);
+  });
+
+  it("an Act now entry of one organization: its steps' console pages are real links with that organization filled in", async () => {
+    const passkey = (over: Record<string, unknown>) => ({
+      ...answer().flagged_feed[0]!,
+      reason: 'passkey_unexplained_sign_in',
+      ...over,
+    });
+    mount(
+      async () => new Promise(() => {}),
+      wholeRead(
+        answer({
+          flagged_feed: [
+            passkey({ minute: '2026-11-23T21:44:00+00:00' }),
+            passkey({
+              minute: '2026-11-23T21:43:00+00:00',
+              organization_id: null,
+              organization_name: null,
+              organizations: 3,
+            }),
+            passkey({
+              minute: '2026-11-23T21:42:00+00:00',
+              organization_id: null,
+              organization_name: null,
+              organizations: 0,
+            }),
+          ],
+        }),
+      ),
+    );
+    const buttons = screen.getAllByRole('button', {
+      name: 'How to respond: Passkey step passed without a passkey (found by the hourly check)',
+    });
+    expect(buttons).toHaveLength(3);
+    const flaggedEntries = [
+      ...screen.getByTestId('security-map-flagged').querySelectorAll('[data-flagged-entry]'),
+    ];
+    expect(
+      flaggedEntries.map((li) => li.querySelector('[data-flagged-organization]')?.textContent),
+    ).toEqual(['Example Hidden Academy', 'In 3 organizations', 'No organization']);
+    const orgHrefs = (panel: HTMLElement) =>
+      within(panel)
+        .queryAllByRole('link')
+        .map((a) => a.getAttribute('href') ?? '')
+        .filter((h) => h.includes('/platform/orgs/'));
+    // One organization: every console page that needs it is a link with its id.
+    let panel = await openCard(buttons[0]!);
+    expect(panel).toHaveAttribute('data-card', 'passkey-unexplained-sign-in');
+    expect(orgHrefs(panel)).toContain(`/platform/orgs/${ORG}?tab=users`);
+    for (const href of orgHrefs(panel)) expect(href).toMatch(new RegExp(`^/platform/orgs/${ORG}`));
+    expect(panel.textContent).not.toContain('<organization id>');
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    // Several: no link to any organization, the routes as text, and the panel says how many.
+    panel = await openCard(buttons[1]!);
+    expect(contextOf(panel)).toContainEqual(['Organization', '3 organizations']);
+    expect(orgHrefs(panel)).toEqual([]);
+    expect(organizationLinkOf(panel)).toBeNull();
+    expect(panel.textContent).toContain('/platform/orgs/<organization id>?tab=users');
+    expect(within(panel).getByTestId('security-response-several-organizations').textContent).toBe(
+      SECURITY_RESPONSE_WORDS.severalOrganizations(3),
+    );
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    // None: "No organization", and no broken link anywhere.
+    panel = await openCard(buttons[2]!);
+    expect(contextOf(panel)).toContainEqual(['Organization', 'No organization']);
+    expect(organizationLinkOf(panel)).toBeNull();
+    expect(within(panel).queryByTestId('security-response-several-organizations')).toBeNull();
+    for (const a of within(panel).queryAllByRole('link')) {
+      expect(a.getAttribute('href')).not.toMatch(
+        /\/platform\/orgs\/|null|undefined|organization id|%3C/,
+      );
+    }
+  });
+
+  it('a flagged sign-in alert of a kind the map does not show: its card, and its kind never named, on the control or in the panel', async () => {
+    mount(async () => wholeRead());
+    const what = 'Sign-in from a new country';
+    const button = respond(what);
+    expect(button.closest('li')!.textContent).not.toMatch(/phishing|malware/i);
+    const panel = await openCard(button);
+    expect(panel).toHaveAttribute('data-card', 'sign-in-new-country');
+    expect(contextOf(panel)).toEqual([
+      ['Where', 'Example Falls, United States'],
+      ['When', '9:40 PM UTC'],
+      ['Organization', 'No organization'],
+    ]);
+    expect(organizationLinkOf(panel)).toBeNull();
+    expect(panel.textContent).not.toMatch(/phishing|malware/i);
+  });
+
+  it("each kind of the legend opens its general card, with no badge; the grey sign-in alert item opens its kind's card, by the legend's words", async () => {
+    mount(async () => wholeRead());
+    const kinds = [...document.querySelectorAll('[data-legend]')] as HTMLElement[];
+    expect(kinds.map((li) => li.getAttribute('data-legend'))).toEqual([
+      'password_guessing',
+      'exploit',
+      'bots',
+    ]);
+    const general: Record<string, string> = {
+      password_guessing: 'repeated-wrong-guesses',
+      exploit: 'probe-scan',
+      bots: 'public-forms-paused',
+    };
+    for (const li of kinds) {
+      const category = li.getAttribute('data-legend')!;
+      const label = securityEventCategoryLabel(category as 'exploit');
+      const button = within(li).getByRole('button', { name: `How to respond: ${label}` });
+      expect(within(li).queryByTestId('security-response-level')).toBeNull();
+      const panel = await openCard(button);
+      expect(panel, category).toHaveAttribute('data-card', general[category]);
+      expect(contextOf(panel)).toEqual([['Kind', label]]);
+      fireEvent.keyDown(panel, { key: 'Escape' });
+      await advance(0);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    }
+    const alert = document.querySelector('[data-legend-alert]') as HTMLElement;
+    const panel = await openCard(
+      within(alert).getByRole('button', {
+        name: `How to respond: ${SECURITY_MAP_WORDS.legendSignInAlert}`,
+      }),
+    );
+    expect(panel).toHaveAttribute('data-card', 'sign-in-new-country');
+    expect(panel.textContent).not.toMatch(/phishing|malware/i);
+  });
+
+  it('Escape closes the panel and focus goes back to the control that opened it', async () => {
+    mount(async () => wholeRead());
+    const button = respond('Request for a settings file');
+    button.focus();
+    const panel = await openCard(button);
+    expect(panel.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(button);
+  });
+});
+
+describe('the flagged list, Act now first in "Show all"', () => {
+  const flagged = (minute: string, reason: string, city: string) =>
+    feedEntry({
+      minute,
+      category: 'password_guessing',
+      outcome: 'flagged',
+      reason,
+      country: 'US',
+      city,
+      events: 1,
+    });
+  // Newest first; the one a member said was not them is the oldest.
+  const eight = [
+    ...Array.from({ length: 7 }, (_, i) =>
+      flagged(
+        `2026-11-23T21:${String(50 - i).padStart(2, '0')}:00+00:00`,
+        'wrong_password',
+        `Example ${i}`,
+      ),
+    ),
+    flagged('2026-11-23T21:30:00+00:00', 'sign_in_not_me', 'Example Last'),
+  ];
+  const cities = () =>
+    [...screen.getByTestId('security-map-flagged').querySelectorAll('[data-flagged-entry]')].map(
+      (li) => /Example (\d|Last)/.exec(li.textContent ?? '')?.[0],
+    );
+
+  it('the short list keeps the newest first; "Show all" puts the Act now entries first, the rest in their order', async () => {
+    const totals = answer().totals;
+    totals.password_guessing.flagged = 8;
+    const a = answer({ flagged_feed: eight, totals, flagged_window: 8 });
+    mount(async () => wholeRead(a), wholeRead(a));
+    expect(cities()).toEqual(Array.from({ length: FLAGGED_VISIBLE }, (_, i) => `Example ${i}`));
+    fireEvent.click(
+      within(screen.getByTestId('security-map-flagged')).getByTestId('security-map-show-all'),
+    );
+    expect(cities()).toEqual([
+      'Example Last',
+      ...Array.from({ length: 7 }, (_, i) => `Example ${i}`),
+    ]);
+    const first = screen
+      .getByTestId('security-map-flagged')
+      .querySelector('[data-flagged-entry]') as HTMLElement;
+    expect(within(first).getByTestId('security-response-level').textContent).toBe('Act now');
+  });
+
+  it('a list short enough to need no "Show all" is in its own order, Act now or not', async () => {
+    const few = [eight[0]!, eight[1]!, eight[7]!];
+    const a = answer({ flagged_feed: few });
+    mount(async () => wholeRead(a), wholeRead(a));
+    expect(cities()).toEqual(['Example 0', 'Example 1', 'Example Last']);
+  });
+});
+
+/* ───────────────────── new events past the totals ───────────────────── */
+
+/**
+ * Answers whose window ends at the clock, as the database gives them. A
+ * stream: every read carries the minute's entry with one event more than the
+ * read before, and a whole read counts what it carries.
+ */
+function clockAnswer(
+  scope: 'whole' | 'recent',
+  over: Partial<SecurityMapAnswer> = {},
+): SecurityMapAnswer {
+  const now = Date.now();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const liveFrom = iso(now - 10 * 60_000);
+  const from = scope === 'whole' ? iso(now - 24 * 3_600_000) : liveFrom;
+  return answer({
+    window: { from, to: iso(now), live_from: liveFrom, asked_from: from },
+    short_window: scope === 'recent',
+    generated_at: iso(now),
+    timeline: [],
+    by_country: [],
+    feed: [],
+    flagged_feed: [],
+    ...over,
+  });
+}
+const minuteOf = (ms: number) => new Date(Math.floor(ms / 60_000) * 60_000).toISOString();
+
+function streamPoll({ quiet = false }: { quiet?: boolean } = {}) {
+  let events = 1;
+  const wholeAt: number[] = [];
+  const poll = async (input: unknown) => {
+    const scope = (input as { scope: 'whole' | 'recent' }).scope;
+    if (!quiet) events += 1;
+    // Quiet: the one entry of 21:58, which every whole read has counted.
+    const entry = quiet
+      ? feedEntry({ events: 12 })
+      : feedEntry({ minute: minuteOf(Date.now()), events });
+    if (scope === 'whole') {
+      wholeAt.push(Date.now());
+      return dayRead(clockAnswer('whole', { feed: [entry] }))(input);
+    }
+    return recentRead(clockAnswer('recent', { feed: [entry] }));
+  };
+  return { poll, wholeAt };
+}
+const scopesOf = (spy: ReturnType<typeof vi.fn>) =>
+  spy.mock.calls.map((c) => (c[0] as { scope: string }).scope);
+
+describe("new events past the totals (the coordinator's change, 2026-11-24)", () => {
+  it('a poll that brings an entry newer than the totals has the whole window read early, 45 seconds after the last whole read began', async () => {
+    const { poll } = streamPoll();
+    const { spy } = mount(poll);
+    await advance(0);
+    await advance(30_000);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent']);
+    await advance(14_000);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent']);
+    await advance(1_000);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent', 'whole']);
+  });
+
+  it('polls that bring nothing newer leave the rhythm as it was: the whole window 5 minutes on', async () => {
+    const { poll } = streamPoll({ quiet: true });
+    const { spy } = mount(poll);
+    await advance(0);
+    for (let i = 0; i < 10; i += 1) await advance(30_000);
+    expect(scopesOf(spy)).toEqual(['whole', ...Array.from({ length: 9 }, () => 'recent'), 'whole']);
+    expect(screen.queryByTestId('security-map-recounting')).toBeNull();
+  });
+
+  it('under a stream of new events, at most one whole read starts per 45 seconds: at most 7 in 5 minutes', async () => {
+    const { poll, wholeAt } = streamPoll();
+    const { spy } = mount(poll);
+    await advance(0);
+    for (let i = 0; i < 60; i += 1) await advance(5_000);
+    expect(wholeAt.length).toBeLessThanOrEqual(7);
+    expect(wholeAt.length).toBeGreaterThanOrEqual(6);
+    for (let i = 1; i < wholeAt.length; i += 1) {
+      expect(wholeAt[i]! - wholeAt[i - 1]!).toBeGreaterThanOrEqual(45_000);
+    }
+    // The reads of the last ten minutes go on between them, one at a time.
+    expect(scopesOf(spy).filter((s) => s === 'recent').length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('a hidden tab reads nothing, however new the events; the overdue read goes when it comes back', async () => {
+    const { poll } = streamPoll();
+    const { spy } = mount(poll);
+    await advance(0);
+    await advance(30_000);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent']);
+    visibility = 'hidden';
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await advance(5 * 60_000);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent']);
+    visibility = 'visible';
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    // The read overdue longest goes first (the last ten minutes), then the whole window, at once.
+    await advance(0);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent', 'recent']);
+    await advance(0);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent', 'recent', 'whole']);
+  });
+
+  it('beside a feed newer than the totals, the page never says "nothing": it says they are being counted again, under the stage too (not a live region), and the counters keep their numbers', async () => {
+    const nothing = (scope: 'whole' | 'recent') =>
+      clockAnswer(scope, {
+        totals: zeros(),
+        blocked_window: 0,
+        flagged_window: 0,
+        floors: [],
+      });
+    let wholeReads = 0;
+    const { spy } = mount(async (input) => {
+      const scope = (input as { scope: 'whole' | 'recent' }).scope;
+      if (scope === 'whole') {
+        wholeReads += 1;
+        if (wholeReads === 1) return dayRead(nothing('whole'))(input);
+        // The early read counts the new entry.
+        const counted = feedEntry({ minute: '2026-11-23T22:00:00+00:00', events: 3 });
+        const totals = zeros();
+        totals.exploit.blocked = 3;
+        return dayRead(
+          clockAnswer('whole', {
+            totals,
+            blocked_window: 3,
+            flagged_window: 0,
+            floors: [],
+            feed: [counted],
+            by_country: [{ country: 'DE', category: 'exploit', outcome: 'blocked', events: 3 }],
+          }),
+        )(input);
+      }
+      return recentRead({
+        ...nothing('recent'),
+        feed: [feedEntry({ minute: '2026-11-23T22:00:00+00:00', events: 3 })],
+      });
+    });
+    await advance(0);
+    expect(screen.getByText(/^Nothing was blocked or flagged in the/)).toBeTruthy();
+    const counters = () =>
+      [...document.querySelectorAll('[data-counter]')].map((c) => c.textContent);
+    const before = counters();
+    await advance(30_000);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent']);
+    // The feed lists the new entry; nothing beside it says there was nothing.
+    expect(screen.getAllByRole('button', { name: FEED_ENTRY_SETTINGS })).toHaveLength(1);
+    expect(screen.queryByText(/^Nothing was blocked or flagged/)).toBeNull();
+    expect(document.body.textContent).not.toContain('Nothing was blocked or flagged');
+    const recount = screen.getByTestId('security-map-recounting');
+    expect(recount.textContent).toBe(SECURITY_MAP_WORDS.recounting);
+    // Not announced from here: the line beside the counters is the live one (lab walk 3, F2).
+    expect(
+      recount.closest('[aria-live], [role="status"], [role="alert"], [role="log"]'),
+    ).toBeNull();
+    expect(screen.getByTestId('security-map-table-empty').textContent).toBe(
+      SECURITY_MAP_WORDS.tableRecounting,
+    );
+    expect(screen.getByTestId('security-map-table-empty').textContent).not.toBe(
+      SECURITY_MAP_WORDS.feedEmpty,
+    );
+    expect(counters()).toEqual(before);
+    // The early whole read lands and counts it: the words go.
+    await advance(15_000);
+    expect(scopesOf(spy)).toEqual(['whole', 'recent', 'whole']);
+    expect(screen.queryByTestId('security-map-recounting')).toBeNull();
+    expect(screen.queryByText(/^Nothing was blocked or flagged/)).toBeNull();
+  });
+
+  it('beside the counters as well: a polite line, there from the start and empty, says they are being counted again until the whole read lands (lab walk 3, F2)', async () => {
+    const { poll } = streamPoll();
+    mount(poll);
+    await advance(0);
+    const line = screen.getByTestId('security-map-counters-recounting');
+    expect(line).toHaveAttribute('aria-live', 'polite');
+    expect(line.textContent).toBe('');
+    // Right under the counters, its height kept while empty: the stage does not move when it fills.
+    expect(line.previousElementSibling?.querySelector('[data-counter]')).not.toBeNull();
+    expect(line.className.split(/\s+/)).toEqual(expect.arrayContaining(['min-h-8', 'sm:min-h-4']));
+    // A poll brings an entry newer than the totals: this line and the one under the stage say so.
+    await advance(30_000);
+    expect(screen.getByTestId('security-map-counters-recounting')).toBe(line);
+    expect(line.textContent).toBe(SECURITY_MAP_WORDS.countersRecounting);
+    expect(screen.getByTestId('security-map-recounting').textContent).toBe(
+      SECURITY_MAP_WORDS.recounting,
+    );
+    // Exactly one live region carries the news, so a screen reader hears it once: this line.
+    const regions = [
+      ...document.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]'),
+    ];
+    expect(regions.filter((r) => /counted again|Counting again/.test(r.textContent ?? ''))).toEqual(
+      [line],
+    );
+    // The early whole read lands and counts it: empty again, and still there.
+    await advance(15_000);
+    expect(line.isConnected).toBe(true);
+    expect(line.textContent).toBe('');
+  });
+});
+
+/* ───────────────────────────── the viewer's zone ───────────────────────────── */
+
+describe("the viewer's zone (owner request, 2026-11-24)", () => {
+  const realResolved = Intl.DateTimeFormat.prototype.resolvedOptions;
+  /** The browser's own zone, as Intl reports it. */
+  const browserZone = (zone: string) =>
+    vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions').mockImplementation(function (
+      this: Intl.DateTimeFormat,
+    ) {
+      return { ...realResolved.call(this), timeZone: zone };
+    });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const feedTime = () =>
+    screen
+      .getAllByRole('button', { name: FEED_ENTRY_SETTINGS })[0]!
+      .querySelector('time') as HTMLElement;
+  const firstDayStart = (spy: ReturnType<typeof vi.fn>) =>
+    (spy.mock.calls[0]![0] as { dayStart: string }).dayStart;
+
+  it("Pacific chosen: every time on the map in Pacific, named, with its exact UTC; the day starts at Pacific's midnight", async () => {
+    // The browser is elsewhere: the chosen zone wins.
+    browserZone('Asia/Tokyo');
+    const { spy } = mount(async (input) => dayRead()(input), wholeRead(), 'America/Los_Angeles');
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('1:58 PM PST');
+    expect(feedTime()).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
+    expect(feedTime().querySelector('.sr-only')?.textContent).toBe(' (23 Nov 2026, 21:58 UTC)');
+    const flagged = screen.getByTestId('security-map-flagged').querySelector('time')!;
+    expect(flagged.firstChild?.textContent).toBe('1:44 PM PST');
+    expect(flagged).toHaveAttribute('title', '23 Nov 2026, 21:44 UTC');
+    expect(screen.getByTestId('security-map-feed-times').textContent).toBe(
+      'Times in Pacific Standard Time (America/Los_Angeles).',
+    );
+    expect(screen.getByTestId('security-map-flagged').textContent).toContain(
+      'Times in Pacific Standard Time (America/Los_Angeles).',
+    );
+    expect(document.body.textContent).not.toContain('Times in UTC');
+    // The day: Pacific's midnight is sent, and the label names the zone.
+    expect(firstDayStart(spy)).toBe('2026-11-23T08:00:00.000Z');
+    expect(screen.getByText('Blocked since midnight, PST')).toBeTruthy();
+    const asOf = screen.getByText(/^Totals and table as of /);
+    expect(asOf.textContent).toMatch(/^Totals and table as of 2:00 PM PST\. /);
+    expect(asOf).toHaveAttribute('title', '23 Nov 2026, 22:00 UTC');
+  });
+
+  it('a zone east of UTC: its own clock, and its own midnight, a day earlier in UTC', async () => {
+    const { spy } = mount(async (input) => dayRead()(input), wholeRead(), 'Europe/Berlin');
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('10:58 PM GMT+1');
+    expect(firstDayStart(spy)).toBe('2026-11-22T23:00:00.000Z');
+    expect(screen.getByText('Blocked since midnight, GMT+1')).toBeTruthy();
+  });
+
+  it("none chosen: the browser's zone, for the times and the day alike", async () => {
+    browserZone('Asia/Tokyo');
+    const { spy } = mount(async (input) => dayRead()(input), wholeRead(), null);
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('6:58 AM GMT+9');
+    // 07:00 on the 24th in Tokyo: its day began at 15:00 UTC on the 23rd.
+    expect(firstDayStart(spy)).toBe('2026-11-23T15:00:00.000Z');
+    expect(screen.getByText('Blocked since midnight, GMT+9')).toBeTruthy();
+  });
+
+  it("a zone the runtime does not know is no choice: the browser's zone then", async () => {
+    browserZone('Asia/Tokyo');
+    mount(async (input) => dayRead()(input), wholeRead(), 'America/Nowhere');
+    await advance(0);
+    expect(feedTime().firstChild?.textContent).toBe('6:58 AM GMT+9');
+  });
+
+  it("the next midnight is the chosen zone's: the whole window is read again then", async () => {
+    // 23:52:50 in Pacific on the 23rd; Pacific's midnight is 08:00 UTC on the 24th.
+    vi.setSystemTime(new Date('2026-11-24T07:52:50Z'));
+    browserZone('UTC');
+    const { spy } = mount(
+      async (input) =>
+        (input as { scope: string }).scope === 'whole'
+          ? dayRead(COUNTED_LIVE)(input)
+          : recentRead(liveAnswer()),
+      wholeRead(),
+      'America/Los_Angeles',
+    );
+    await advance(0);
+    for (let i = 0; i < 14; i += 1) await advance(30_000);
+    await advance(10_000);
+    const calls = spy.mock.calls.map((c) => c[0] as { scope: string; dayStart: string | null });
+    const wholes = calls.filter((c) => c.scope === 'whole');
+    expect(wholes[0]!.dayStart).toBe('2026-11-23T08:00:00.000Z');
+    expect(wholes[wholes.length - 1]!.dayStart).toBe('2026-11-24T08:00:00.000Z');
+  });
+
+  it("the card opened from an entry says its time in the viewer's zone, with the exact UTC", async () => {
+    mount(async () => wholeRead(), wholeRead(), 'America/Los_Angeles');
+    const panel = await openCard(respond('Request for a settings file'));
+    const when = [
+      ...within(panel).getByTestId('security-response-context').querySelectorAll('dt'),
+    ].find((dt) => dt.textContent === 'When')!.nextElementSibling!;
+    expect(when.firstChild?.textContent).toBe('1:58 PM PST');
+    expect(when).toHaveAttribute('title', '23 Nov 2026, 21:58 UTC');
+    expect(when.querySelector('.sr-only')?.textContent).toBe(' (23 Nov 2026, 21:58 UTC)');
   });
 });

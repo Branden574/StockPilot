@@ -42,6 +42,7 @@ import {
   securityMapArcWidth,
   securityMapAsOfWords,
   securityMapClock,
+  SECURITY_MAP_CLOCK,
   SECURITY_MAP_AT_LEAST,
   securityMapCountWords,
   securityMapPillWords,
@@ -58,6 +59,8 @@ import {
   securityMapLegend,
   securityMapLegendHelp,
   securityMapMergeFeed,
+  securityMapNewerThanTotals,
+  securityMapSignInAlertArcs,
   securityMapModeWords,
   securityMapNextPollDelay,
   securityMapNextWholeDelay,
@@ -1039,7 +1042,7 @@ describe('securityMapViewOf: what leaves the server', () => {
       expect(v.flaggedFeed.length).toBeGreaterThan(0);
       for (const row of v.live) expect(row).toHaveLength(4);
       for (const row of v.feed) expect(row).toHaveLength(13);
-      for (const row of v.flaggedFeed) expect(row).toHaveLength(8);
+      for (const row of v.flaggedFeed) expect(row).toHaveLength(11);
       // No object anywhere but the view and its whole part: nothing can ride along inside a row.
       const objects: string[] = [];
       const walk = (value: unknown, at: string): void => {
@@ -1067,7 +1070,7 @@ describe('securityMapViewOf: what leaves the server', () => {
     }
   });
 
-  it('the flagged feed: every kind, the hidden ones too, flagged only, each with its own "at least", and only what the list draws', () => {
+  it('the flagged feed: every kind, the hidden ones too, flagged only, each with its own "at least", its organization as the feed has it, and only what the list draws', () => {
     const [pt, gb] = busy().flagged_feed!;
     expect(view.flaggedFeed).toEqual([
       [
@@ -1079,6 +1082,10 @@ describe('securityMapViewOf: what leaves the server', () => {
         'sign_in_new_country',
         'PT',
         'Example Harbour',
+        // One sign-in recorded in three organizations: no id, no name, the count.
+        null,
+        null,
+        3,
       ],
       [
         securityMapEntryKey(gb!),
@@ -1089,13 +1096,18 @@ describe('securityMapViewOf: what leaves the server', () => {
         'sign_in_alerts_held',
         'GB',
         'Example Borough',
+        'a0478000-0000-4000-8000-000000000001',
+        'Example Academy',
+        1,
       ],
     ]);
-    // No organization and no source: the list draws neither, so neither leaves the server in it.
+    // The organization travels (review M1 reversed by the owner, 2026-11-24: "its fine showing
+    // org names so I know"); the source still does not, nor a hidden kind's name.
     const sent = JSON.stringify(view.flaggedFeed);
-    expect(sent).not.toContain('a0478000-0000-4000-8000-000000000001');
-    expect(sent).not.toContain('Example Academy');
+    expect(sent).toContain('a0478000-0000-4000-8000-000000000001');
+    expect(sent).toContain('Example Academy');
     expect(sent).not.toContain('"web"');
+    expect(sent).not.toMatch(/phishing/i);
     // The plain feed draws them: there they stay.
     expect(view.feed[1]?.slice(10)).toEqual([
       'a0478000-0000-4000-8000-000000000001',
@@ -1231,6 +1243,9 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       'sign_in_new_country',
       'PT',
       null,
+      'a0478000-0000-4000-8000-000000000001',
+      'Example Academy',
+      1,
     ];
     // In the flagged feed a hidden kind is read, with no category: the flagged sign-in alerts are listed.
     expect(readSecurityMapView({ ...view, flaggedFeed: [hiddenFlagged] })).not.toBeNull();
@@ -1241,7 +1256,10 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       ],
       ['a kind that is not one', [...hiddenFlagged.slice(0, 4), 9, ...hiddenFlagged.slice(5)]],
       ['a source beside it', [...hiddenFlagged, 'web']],
-      ['an organization beside it', [...hiddenFlagged, 'a0478000-0000-4000-8000-000000000001']],
+      ['no organization parts', hiddenFlagged.slice(0, 8)],
+      ['an organization id that is no id', [...hiddenFlagged.slice(0, 8), 'x', null, 1]],
+      ['an organization name too long', [...hiddenFlagged.slice(0, 9), 'x'.repeat(201), 1]],
+      ['an organization count that is no count', [...hiddenFlagged.slice(0, 10), -1]],
       ['an outcome in it', [...hiddenFlagged.slice(0, 4), 1, ...hiddenFlagged.slice(4)]],
       ['a key that is not a key', ['<b>', ...hiddenFlagged.slice(1)]],
       ['a key too long to be one', ['a'.repeat(12), ...hiddenFlagged.slice(1)]],
@@ -1837,10 +1855,10 @@ describe('the words', () => {
       window_shortened: true,
     });
     expect(securityMapShortenedWords(cut, 'UTC')).toBe(
-      'Showing the last 3 hours 52 minutes only, from 18:08, your time: there were too many events to count all of the last 24 hours. Nothing before 18:08 is in these numbers.',
+      'Showing the last 3 hours 52 minutes only, from 6:08 PM UTC: there were too many events to count all of the last 24 hours. Nothing before 6:08 PM UTC is in these numbers.',
     );
-    expect(securityMapCounters(cut, true).map((c) => c.label)).toEqual([
-      'Blocked since midnight, your time',
+    expect(securityMapCounters(cut, true, { timeZone: 'UTC' }).map((c) => c.label)).toEqual([
+      'Blocked since midnight, UTC',
       'Blocked, last 3 hours 52 minutes',
       'Flagged, last 3 hours 52 minutes',
     ]);
@@ -1860,9 +1878,9 @@ describe('the words', () => {
     });
     expect(securityMapCounters(partial, true, { timeZone: 'UTC' })[0]).toEqual({
       id: 'blocked_today',
-      label: 'Blocked since midnight, your time',
+      label: 'Blocked since midnight, UTC',
       value: 'at least 40',
-      note: 'Counted from 18:08, your time: there were too many events to count the whole day.',
+      note: 'Counted from 6:08 PM UTC: there were too many events to count the whole day.',
     });
     // Partial alone is enough for "at least", even where the floor's name was left out.
     const partialOnly = { ...partial, whole: { ...partial.whole, floors: [] } };
@@ -1900,8 +1918,8 @@ describe('the words', () => {
       day_start: '2026-11-23T08:00:00+00:00',
       blocked_since_day_start: 61,
     });
-    expect(securityMapCounters(view, true)).toEqual([
-      { id: 'blocked_today', label: 'Blocked since midnight, your time', value: '61', note: null },
+    expect(securityMapCounters(view, true, { timeZone: 'UTC' })).toEqual([
+      { id: 'blocked_today', label: 'Blocked since midnight, UTC', value: '61', note: null },
       { id: 'blocked_window', label: 'Blocked, last 24 hours', value: '193', note: null },
       {
         id: 'flagged_window',
@@ -1951,6 +1969,14 @@ describe('the words', () => {
       '00:03',
     );
     expect(securityMapClock('never', 'UTC')).toBe('--:--');
+    // The 12-hour option of the same formatter (the map's own clock, SECURITY_MAP_CLOCK).
+    expect(SECURITY_MAP_CLOCK).toBe('12h');
+    expect(securityMapClock('2026-11-23T21:58:00+00:00', 'UTC', '12h')).toBe('9:58 PM');
+    expect(securityMapClock(Date.parse('2026-11-23T08:03:00Z'), 'America/Los_Angeles', '12h')).toBe(
+      '12:03 AM',
+    );
+    expect(securityMapClock('2026-11-23T20:00:00Z', 'America/Los_Angeles', '12h')).toBe('12:00 PM');
+    expect(securityMapClock('never', 'UTC', '12h')).toBe('--:--');
   });
 
   it('the mode in words: live, the replay with its hour, and nothing to play', () => {
@@ -1963,7 +1989,7 @@ describe('the words', () => {
     const q = whole(quiet);
     const replay = planSecurityMapPlayback(q, null);
     expect(securityMapModeWords(replay, q, 0, 'UTC')).toBe(
-      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Now showing 03:00 to 04:00, your time. Hours with nothing to draw are skipped.',
+      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Now showing 3:00 AM to 4:00 AM UTC. Hours with nothing to draw are skipped.',
     );
     // Events of the last ten minutes the live play cannot draw: said, never "nothing".
     const api = whole({
@@ -1971,7 +1997,7 @@ describe('the words', () => {
       feed: [entry({ minute: '2026-11-23T21:56:00+00:00', source: 'api', country: null })],
     });
     expect(securityMapModeWords(planSecurityMapPlayback(api, null), api, 0, 'UTC')).toBe(
-      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Events of the last 10 minutes without a place, or from the phone app and the API, are counted in the numbers, but the live play does not draw them. Now showing 03:00 to 04:00, your time. Hours with nothing to draw are skipped.',
+      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Events of the last 10 minutes without a place, or from the phone app and the API, are counted in the numbers, but the live play does not draw them. Now showing 3:00 AM to 4:00 AM UTC. Hours with nothing to draw are skipped.',
     );
     for (const words of [
       securityMapModeWords(replay, q, 0),
@@ -1980,10 +2006,10 @@ describe('the words', () => {
       expect(words).not.toMatch(/nothing in the last 10 minutes/i);
     }
     expect(securityMapModeWords(replay, q, 1, 'America/Los_Angeles')).toContain(
-      'Now showing 13:00 to 14:00, your time.',
+      'Now showing 1:00 PM to 2:00 PM PST.',
     );
     // A step past the end is the last one, never an invented hour.
-    expect(securityMapModeWords(replay, q, 99, 'UTC')).toContain('Now showing 21:00 to 22:00');
+    expect(securityMapModeWords(replay, q, 99, 'UTC')).toContain('Now showing 9:00 PM to 10:00 PM');
     const e = whole();
     expect(securityMapModeWords(planSecurityMapPlayback(e, null), e, 0)).toBe(
       'Nothing to play: no event of the last 24 hours has a place on the map.',
@@ -2009,15 +2035,15 @@ describe('the words', () => {
     const replay = planSecurityMapPlayback(whole(quiet), null);
     expect(securityMapPillWords(replay, null, health, 0, 'UTC')).toEqual({
       kind: 'replay',
-      text: 'Replay 03:00 to 04:00',
+      text: 'Replay 3:00 AM to 4:00 AM UTC',
     });
     // A step past the end is the last one, never an invented hour.
     expect(securityMapPillWords(replay, null, health, 99, 'UTC').text).toMatch(
-      /^Replay 21:00 to 22:00$/,
+      /^Replay 9:00 PM to 10:00 PM UTC$/,
     );
     expect(securityMapPillWords(live, 'not_updating', health, 0, 'UTC')).toEqual({
       kind: 'not_updating',
-      text: 'Not updating since 12:03',
+      text: 'Not updating since 12:03 PM UTC',
     });
     expect(
       securityMapPillWords(live, 'not_updating', { ...health, lastGoodAt: null }, 0, 'UTC').text,
@@ -2042,7 +2068,11 @@ describe('the words', () => {
     expect(SECURITY_MAP_WORDS.showFewer).toBe('Show fewer');
     expect(SECURITY_MAP_WORDS.legendBlocked).toBe('Blocked');
     expect(SECURITY_MAP_WORDS.legendFlagged).toBe('Flagged, not blocked');
-    expect(SECURITY_MAP_WORDS.legendCounts).toBe('Numbers on the globe: events in this play');
+    // One sentence for both views, naming the one on screen.
+    expect(SECURITY_MAP_WORDS.legendCounts('globe')).toBe(
+      'Numbers on the globe: events in this play',
+    );
+    expect(SECURITY_MAP_WORDS.legendCounts('flat')).toBe('Numbers on the map: events in this play');
     // Reduced motion draws the globe still: the flat map's old reason is gone (review round 2, N7).
     expect('globeReducedMotion' in SECURITY_MAP_WORDS).toBe(false);
   });
@@ -2075,7 +2105,7 @@ describe('the words', () => {
     const at = Date.parse('2026-11-23T12:03:20Z');
     const health = { failures: 2, lastGoodAt: at, refused: false };
     expect(securityMapStopWords('not_updating', health, 'UTC')).toBe(
-      'Not updating since 12:03, your time. The map is stopped and shows what was read then.',
+      'Not updating since 12:03 PM UTC. The map is stopped and shows what was read then.',
     );
     expect(securityMapStopWords('not_updating', { ...health, lastGoodAt: null })).toBe(
       'Not updating. Nothing could be read, so the map is stopped.',
@@ -2109,7 +2139,7 @@ describe('the words', () => {
     expect(securityMapNotes(whole())).toEqual([]);
     const notes = securityMapNotes(whole(busy()), 'UTC');
     expect(notes).toEqual([
-      'Not drawn: at least 3 flagged sign-in alerts. They are on the Security page.',
+      'At least 3 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
       'Not on the map: 36 events have no country. They are in the totals.',
       '36 events in a flood: place not listed.',
       '2 events were allowed. Allowed events are counted here and never drawn.',
@@ -2119,7 +2149,9 @@ describe('the words', () => {
     ]);
     // With no floor, no "at least" and no line about floors.
     const exact = securityMapNotes(whole({ ...busy(), floors: [] }), 'UTC');
-    expect(exact[0]).toBe('Not drawn: 3 flagged sign-in alerts. They are on the Security page.');
+    expect(exact[0]).toBe(
+      '3 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
+    );
     expect(exact.some((line) => line.includes('fewest sign-ins'))).toBe(false);
   });
 
@@ -2172,7 +2204,9 @@ describe('the words', () => {
       }),
       'UTC',
     );
-    expect(one).toContain('Not drawn: 1 flagged sign-in alert. It is on the Security page.');
+    expect(one).toContain(
+      '1 flagged sign-in alert is not in the numbers by kind. It is drawn with a grey mark, from the flagged list, and it is on the Security page.',
+    );
     expect(one).toContain('Not on the map: 1 event has no country. It is in the totals.');
     expect(one).toContain('1 event in a flood: place not listed.');
     expect(one).toContain('1 event was allowed. Allowed events are counted here and never drawn.');
@@ -2220,13 +2254,19 @@ describe('the words', () => {
     ]);
   });
 
-  it('a hidden kind that is not a flagged sign-in alert is counted as "other"', () => {
+  it('a hidden kind that is not a flagged sign-in alert is not drawn, in a line of its own', () => {
     const notes = securityMapNotes(
       whole({ totals: counts({ phishing: { flagged: 2, blocked: 1 }, malware: { blocked: 4 } }) }),
     );
-    expect(notes[0]).toBe(
-      'Not drawn: 2 flagged sign-in alerts and 5 other events of a kind this map does not show. They are on the Security page.',
+    expect(notes.slice(0, 2)).toEqual([
+      '2 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
+      'Not drawn: 5 events of a kind this map does not show. They are on the Security page.',
+    ]);
+    const single = securityMapNotes(whole({ totals: counts({ malware: { blocked: 1 } }) }));
+    expect(single[0]).toBe(
+      'Not drawn: 1 event of a kind this map does not show. It is on the Security page.',
     );
+    for (const line of [...notes, ...single]) expect(line).not.toMatch(/phishing|malware/i);
   });
 
   it('the empty states', () => {
@@ -2261,14 +2301,14 @@ describe('the words', () => {
 
   it('when the totals were read', () => {
     expect(securityMapAsOfWords(whole(), 'UTC')).toBe(
-      'Totals and table as of 22:00, your time. They are counted again every 5 minutes; the live play and the feed every 30 seconds.',
+      'Totals and table as of 10:00 PM UTC. They are counted again every 5 minutes; the live play and the feed every 30 seconds.',
     );
     expect(securityMapAsOfWords(null)).toBe(
       "The day's picture is incomplete: the totals and the table could not be read. They are tried again within 10 minutes.",
     );
     // The newest whole read failed: the totals are those read before, and the page says so.
     expect(securityMapAsOfWords(whole(), 'UTC', true)).toBe(
-      'Totals and table as of 22:00, your time. The newest count could not be read, so these may be out of date; it is tried again within 10 minutes. The live play and the feed are read every 30 seconds.',
+      'Totals and table as of 10:00 PM UTC. The newest count could not be read, so these may be out of date; it is tried again within 10 minutes. The live play and the feed are read every 30 seconds.',
     );
   });
 
@@ -2279,7 +2319,8 @@ describe('the words', () => {
     const view = whole(busy());
     const [first, held] = view.feed.map(securityMapFeedWords);
     expect(first).toMatchObject({
-      time: '21:58 UTC',
+      time: '9:58 PM UTC',
+      at: Date.parse('2026-11-23T21:58:00+00:00'),
       categoryLabel: 'Password guessing',
       outcomeLabel: 'Blocked',
       reason: 'wrong_password',
@@ -2336,23 +2377,32 @@ describe('the words', () => {
     );
   });
 
-  it('a flagged entry: time, place, count and its plain name, and nothing else', () => {
+  it('a flagged entry: time, place, count, its plain name and its organization, and nothing else', () => {
     const view = whole(busy());
     const [pt, gb] = view.flaggedFeed.map(securityMapFlaggedWords);
     expect(pt).toEqual({
       key: securityMapEntryKey(busy().flagged_feed![0]!),
-      time: '21:59 UTC',
+      time: '9:59 PM UTC',
+      at: Date.parse('2026-11-23T21:59:00+00:00'),
       category: null,
       what: 'Sign-in from a new country',
       country: 'PT',
       city: 'Example Harbour',
       flood: false,
       count: 'at least 1',
+      organizationId: null,
+      organizationName: null,
+      organizations: 3,
+      organizationWords: '3 organizations',
     });
     expect(gb).toMatchObject({
       category: 'password_guessing',
       what: 'Sign-in alerts held after too many in one day',
       count: 'at least 4',
+      organizationId: 'a0478000-0000-4000-8000-000000000001',
+      organizationName: 'Example Academy',
+      organizations: 1,
+      organizationWords: null,
     });
     const flood = securityMapFlaggedWords([
       'k1',
@@ -2363,7 +2413,11 @@ describe('the words', () => {
       'over_minute_cap',
       'US',
       'Example Falls',
+      null,
+      null,
+      0,
     ]);
+    expect(flood.organizationWords).toBe('No organization');
     expect(flood).toMatchObject({ flood: true, country: null, city: null, count: '7' });
     expect(
       securityMapFlaggedWords([
@@ -2375,6 +2429,9 @@ describe('the words', () => {
         'sign_in_from_the_moon',
         null,
         null,
+        null,
+        null,
+        0,
       ]).what,
     ).toBe(SECURITY_MAP_FLAGGED_UNKNOWN_REASON);
   });
@@ -2528,5 +2585,227 @@ describe("the size of what leaves the server, at the database's caps", () => {
     const a = worst('\u{1F512}');
     expect(bytes(securityMapViewOf(a, 'whole'))).toBeLessThan(140_000);
     expect(bytes(securityMapViewOf(a, 'recent'))).toBeLessThan(90_000);
+  });
+});
+
+/* ─────────── flagged sign-in alerts on the map (owner's decision, 2026-11-24) ─────────── */
+
+/** A flagged sign-in alert of the hidden kind: it reaches the browser with no category. */
+const ALERT = (over: Partial<SecurityMapFeedEntry> = {}): SecurityMapFeedEntry =>
+  entry({
+    minute: '2026-11-23T21:59:00+00:00',
+    category: 'phishing',
+    outcome: 'flagged',
+    reason: 'sign_in_new_country',
+    country: 'PT',
+    city: 'Example Harbour',
+    events: 2,
+    ...over,
+  });
+
+describe('flagged sign-in alerts are drawn from the kept flagged list', () => {
+  it('one arc per country for the hidden kind only: grey (no category), dashed (flagged), no kind name', () => {
+    const w = whole({
+      flagged_feed: [
+        ALERT(),
+        ALERT({ minute: '2026-11-23T21:40:00+00:00', events: 1, at_least: true }),
+        ALERT({ country: null, city: null }),
+        ALERT({ reason: 'over_minute_cap', country: 'JP', city: null }),
+        FLAGGED,
+      ],
+    });
+    // The view sends the hidden kind with no category, as before: nothing new leaves the server.
+    expect(w.flaggedFeed.filter((r) => r[4] === null)).toHaveLength(4);
+    const arcs = securityMapSignInAlertArcs(w.flaggedFeed);
+    expect(arcs).toEqual([
+      {
+        key: 'PT:alert:flagged',
+        country: 'PT',
+        category: null,
+        outcome: 'flagged',
+        events: 3,
+        width: securityMapArcWidth(3),
+        atLeast: true,
+      },
+    ]);
+    expect(JSON.stringify(arcs)).not.toMatch(/phishing|malware/i);
+  });
+
+  it('an entry with no country, or a count past a cap, yields no arc', () => {
+    const w = whole({ flagged_feed: [ALERT({ country: null, city: null })] });
+    expect(securityMapSignInAlertArcs(w.flaggedFeed)).toEqual([]);
+    const flood = whole({ flagged_feed: [ALERT({ reason: 'over_buffer_cap' })] });
+    expect(securityMapSignInAlertArcs(flood.flaggedFeed)).toEqual([]);
+  });
+
+  it('LIVE: an alert whose minute is in the live window is a live arc beside the live cells', () => {
+    const w = whole({ ...busy(), flagged_feed: [ALERT()] });
+    const plan = planSecurityMapPlayback(w, null, w.flaggedFeed);
+    expect(plan.mode).toBe('live');
+    expect(plan.live.map((a) => [a.key, a.category, a.outcome])).toEqual([
+      ['US:password_guessing:blocked', 'password_guessing', 'blocked'],
+      ['PT:alert:flagged', null, 'flagged'],
+    ]);
+    expect(plan.picture).toEqual(plan.live);
+  });
+
+  it('LIVE on its own: only an alert in the last ten minutes still plays live', () => {
+    const w = whole({ flagged_feed: [ALERT()] });
+    const plan = planSecurityMapPlayback(w, null, w.flaggedFeed);
+    expect(plan.mode).toBe('live');
+    expect(plan.live.map((a) => a.key)).toEqual(['PT:alert:flagged']);
+    // Without the alerts, as before: nothing to draw.
+    expect(planSecurityMapPlayback(w, null).mode).toBe('still');
+  });
+
+  it('REPLAY: an older alert is drawn at its hour, joining that hour or adding one', () => {
+    const quiet = busy();
+    quiet.timeline = quiet.timeline?.filter((c) => c.bucket_seconds === 600);
+    const w = whole({
+      ...quiet,
+      flagged_feed: [
+        ALERT({ minute: '2026-11-23T03:25:00+00:00', country: 'BR', city: 'Example Bay' }),
+        ALERT({ minute: '2026-11-23T05:12:00+00:00', country: 'JP', city: 'Example Port' }),
+      ],
+    });
+    const plan = planSecurityMapPlayback(w, null, w.flaggedFeed);
+    expect(plan.mode).toBe('replay');
+    expect(
+      plan.steps.map((s) => [new Date(s.fromMs).toISOString(), s.arcs.map((a) => a.key)]),
+    ).toEqual([
+      [
+        '2026-11-23T03:00:00.000Z',
+        ['DE:exploit:blocked', 'GB:password_guessing:flagged', 'BR:alert:flagged'],
+      ],
+      ['2026-11-23T05:00:00.000Z', ['JP:alert:flagged']],
+      ['2026-11-23T21:00:00.000Z', ['US:password_guessing:blocked']],
+    ]);
+    // The still picture (reduced motion, a pause) has them too.
+    expect(plan.picture.map((a) => a.key)).toContain('JP:alert:flagged');
+    expect(plan.picture.map((a) => a.key)).toContain('BR:alert:flagged');
+  });
+
+  it('the 40-arc cap holds for the two together, and the plan says it cut', () => {
+    // Forty made-up two-letter countries, five blocked events each, in the live window.
+    const cells = Array.from({ length: SECURITY_MAP_MAX_ARCS }, (_, i) =>
+      cell(
+        '2026-11-23T21:58:00+00:00',
+        60,
+        `${String.fromCharCode(65 + Math.floor(i / 26))}${String.fromCharCode(65 + (i % 26))}`,
+        'exploit',
+        'blocked',
+        5,
+      ),
+    );
+    const small = whole({ timeline: cells, flagged_feed: [ALERT({ events: 1 })] });
+    const left = planSecurityMapPlayback(small, null, small.flaggedFeed);
+    expect(left.live).toHaveLength(SECURITY_MAP_MAX_ARCS);
+    expect(left.live.some((a) => a.category === null)).toBe(false);
+    expect(left.cut).toBe(true);
+    const big = whole({ timeline: cells, flagged_feed: [ALERT({ events: 9 })] });
+    const taken = planSecurityMapPlayback(big, null, big.flaggedFeed);
+    expect(taken.live).toHaveLength(SECURITY_MAP_MAX_ARCS);
+    expect(taken.live[0]?.key).toBe('PT:alert:flagged');
+    expect(taken.cut).toBe(true);
+  });
+
+  it('with no alert the plan is what it was', () => {
+    for (const w of [whole(busy()), whole(), whole({ ...busy(), timeline: [] })]) {
+      expect(planSecurityMapPlayback(w, null, [])).toEqual(planSecurityMapPlayback(w, null));
+    }
+  });
+});
+
+describe("the totals behind the feed (the coordinator's change, 2026-11-24)", () => {
+  const w = whole({ ...busy() });
+
+  it("the whole read's own entries are not newer than its totals", () => {
+    expect(securityMapNewerThanTotals(w, [...w.feed, ...w.flaggedFeed])).toBe(false);
+    expect(securityMapNewerThanTotals(w, [])).toBe(false);
+  });
+
+  it('an entry whose minute starts at or after the end of the window read is newer', () => {
+    const poll = recent({ feed: [entry({ minute: TO })] });
+    expect(securityMapNewerThanTotals(w, poll.feed)).toBe(true);
+    const flagged = recent({ flagged_feed: [ALERT({ minute: '2026-11-23T22:01:00+00:00' })] });
+    expect(securityMapNewerThanTotals(w, flagged.flaggedFeed)).toBe(true);
+  });
+
+  it("the minute at the window's end: newer only with more events than the totals counted", () => {
+    const end = whole({
+      window: {
+        from: FROM,
+        to: '2026-11-23T21:58:30+00:00',
+        live_from: LIVE_FROM,
+        asked_from: FROM,
+      },
+      feed: [entry()],
+    });
+    const same = recent({ feed: [entry()] });
+    expect(securityMapNewerThanTotals(end, same.feed)).toBe(false);
+    const grown = recent({ feed: [entry({ events: 12 })] });
+    expect(securityMapNewerThanTotals(end, grown.feed)).toBe(true);
+    const unknown = recent({ feed: [entry({ reason: 'wrong_code' })] });
+    expect(securityMapNewerThanTotals(end, unknown.feed)).toBe(true);
+  });
+
+  it('an entry of an earlier minute is counted already, whatever its count', () => {
+    const older = recent({ feed: [entry({ minute: '2026-11-23T21:50:00+00:00', events: 99 })] });
+    expect(securityMapNewerThanTotals(w, older.feed)).toBe(false);
+  });
+
+  it('no whole read: nothing to be behind', () => {
+    expect(securityMapNewerThanTotals(null, recent({ feed: [entry({ minute: TO })] }).feed)).toBe(
+      false,
+    );
+  });
+
+  /** A poll half a minute after the whole read: its own ten minutes, ending later. */
+  const later = (timeline: SecurityMapTimelineCell[]) =>
+    recent({
+      window: {
+        from: '2026-11-23T21:50:30+00:00',
+        to: '2026-11-23T22:00:30+00:00',
+        live_from: '2026-11-23T21:50:30+00:00',
+        asked_from: '2026-11-23T21:50:30+00:00',
+      },
+      generated_at: '2026-11-23T22:00:30+00:00',
+      timeline,
+    });
+  const US_LIVE = [
+    cell('2026-11-23T21:58:00+00:00', 60, 'US', 'password_guessing', 'blocked', 4),
+    cell('2026-11-23T21:59:00+00:00', 60, 'US', 'password_guessing', 'blocked', 3),
+  ];
+
+  it("a poll's live cells the whole read had counted are not newer; a larger count, or a new place, is", () => {
+    expect(w.live).toEqual([['US', SECURITY_EVENT_CATEGORIES.indexOf('password_guessing'), 0, 7]]);
+    expect(securityMapNewerThanTotals(w, [], later(US_LIVE))).toBe(false);
+    // An event in the minute after the whole read's end.
+    const grown = [...US_LIVE, cell(TO, 60, 'US', 'password_guessing', 'blocked', 2)];
+    expect(securityMapNewerThanTotals(w, [], later(grown))).toBe(true);
+    const elsewhere = [...US_LIVE, cell(TO, 60, 'DE', 'exploit', 'blocked', 1)];
+    expect(securityMapNewerThanTotals(w, [], later(elsewhere))).toBe(true);
+    // Fewer: the oldest minute has left the poll's ten minutes; nothing new.
+    expect(securityMapNewerThanTotals(w, [], later(US_LIVE.slice(1)))).toBe(false);
+    // A kind the map does not show never reaches the live cells.
+    const hidden = [...US_LIVE, cell(TO, 60, 'PT', 'phishing', 'flagged', 5)];
+    expect(securityMapNewerThanTotals(w, [], later(hidden))).toBe(false);
+  });
+
+  it('live cells count only from a poll that ends after the whole read, and not when its live list was cut', () => {
+    const grown = [...US_LIVE, cell(TO, 60, 'US', 'password_guessing', 'blocked', 2)];
+    const sameEnd = recent({ timeline: grown });
+    expect(securityMapNewerThanTotals(w, [], sameEnd)).toBe(false);
+    const cut = whole({ ...busy(), timeline_truncated: true });
+    expect(cut.liveCut).toBe(true);
+    expect(securityMapNewerThanTotals(cut, [], later(grown))).toBe(false);
+    expect(securityMapNewerThanTotals(null, [], later(grown))).toBe(false);
+  });
+
+  it('while the totals are behind, the page never says "nothing"', () => {
+    const empty = whole();
+    expect(securityMapEmptyWords(empty)).toMatch(/^Nothing was blocked or flagged/);
+    expect(securityMapEmptyWords(empty, true)).toBeNull();
+    expect(SECURITY_MAP_WORDS.recounting).toMatch(/counted again/);
   });
 });

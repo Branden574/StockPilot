@@ -8,12 +8,18 @@ import { SECURITY_MAP_POLL_FAILED } from '@stockpilot/core';
  * Pinned: one read of the whole window, with no day start (only the browser
  * knows its midnight), handed to the island as its first values; a failed
  * read is handed over as a failed read (the island says "Could not check"),
- * never as an empty map; nothing else is read here.
+ * never as an empty map; nothing else is read here but the zone the viewer
+ * chose, handed to the island beside it.
  */
 
 const h = vi.hoisted(() => ({
   read: vi.fn(),
   islandProps: [] as Array<Record<string, unknown>>,
+  zone: null as string | null,
+}));
+
+vi.mock('@/lib/platform/viewer-time-zone', () => ({
+  readPlatformViewerTimeZone: async () => h.zone,
 }));
 
 vi.mock('@/server/services/platform/security-map', () => ({
@@ -33,6 +39,7 @@ const VIEW = { ok: true, view: { v: 1 }, refusedWindow: null };
 beforeEach(() => {
   h.read.mockReset();
   h.islandProps = [];
+  h.zone = null;
 });
 
 describe('the attack map section', () => {
@@ -41,10 +48,17 @@ describe('the attack map section', () => {
     render(await PlatformSecurityMapSection());
     expect(h.read).toHaveBeenCalledTimes(1);
     expect(h.read).toHaveBeenCalledWith({ scope: 'whole', dayStart: null });
-    expect(h.islandProps).toEqual([{ initial: VIEW }]);
+    expect(h.islandProps).toEqual([{ initial: VIEW, timeZone: null }]);
     expect(screen.getByRole('region', { name: 'Attack map' })).toContainElement(
       screen.getByTestId('island'),
     );
+  });
+
+  it('the zone the viewer chose is handed to the island; none is null (the browser decides there)', async () => {
+    h.read.mockResolvedValue(VIEW);
+    h.zone = 'America/Los_Angeles';
+    render(await PlatformSecurityMapSection());
+    expect(h.islandProps).toEqual([{ initial: VIEW, timeZone: 'America/Los_Angeles' }]);
   });
 
   it('a failed read is handed over as a failed read, not as an empty map', async () => {

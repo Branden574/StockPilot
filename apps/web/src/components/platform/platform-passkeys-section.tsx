@@ -3,7 +3,6 @@ import * as React from 'react';
 
 import { DetailSection } from '@/components/patterns/detail-section';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatExactUtc } from '@/lib/platform/last-active';
 import {
   PASSKEY_SETTING_LABEL,
   type PlatformPasskeySetting,
@@ -17,6 +16,7 @@ import {
 import { OrganizationPasskeysTurnOn } from './organization-passkeys-turn-on';
 import { PasskeySwitchControl } from './passkey-switch-control';
 import { PlatformTable } from './platform-table';
+import { ConsoleMoment, consoleZoneNote } from './zoned-time';
 
 const HELP: Record<PlatformPasskeySetting, string> = {
   passkeys_on:
@@ -58,7 +58,12 @@ function PlatformSwitchRow({ setting, on }: { setting: PlatformPasskeySetting; o
  * renders it must have called requirePlatformAdmin() first. A read that
  * fails is said in words and offers no button, never shown as "Off".
  */
-export async function PlatformPasskeysSection() {
+export async function PlatformPasskeysSection({
+  timeZone = null,
+}: {
+  /** The viewer's chosen zone (lib/platform/viewer-time-zone), or null: UTC then. */
+  timeZone?: string | null;
+} = {}) {
   const [state, choices] = await Promise.all([
     readPasskeyConsole(),
     listOrganizationsForPasskeys(),
@@ -113,7 +118,7 @@ export async function PlatformPasskeysSection() {
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Organization</TableHead>
-                <TableHead title="In UTC.">Turned on</TableHead>
+                <TableHead title={consoleZoneNote(timeZone)}>Turned on</TableHead>
                 <TableHead className="text-right">Members with passkeys</TableHead>
                 <TableHead className="text-right">Passkeys</TableHead>
               </TableRow>
@@ -137,7 +142,7 @@ export async function PlatformPasskeysSection() {
                     </Link>
                   </TableCell>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                    {formatExactUtc(o.switchedOnAt) ?? '—'}
+                    <ConsoleMoment at={o.switchedOnAt} timeZone={timeZone} />
                   </TableCell>
                   <TableCell className="text-right font-mono tabular-nums">
                     {o.membersWithPasskeys === null

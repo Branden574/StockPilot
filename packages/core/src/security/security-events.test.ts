@@ -10,6 +10,7 @@ import {
   SECURITY_EVENT_UNKNOWN_REASON_LABEL,
   SECURITY_PROBE_KINDS,
   securityBotReason,
+  securityConsoleCategoryLabel,
   securityEventCategoryLabel,
   securityEventOutcomeLabel,
   securityEventPlaceLabel,
@@ -193,6 +194,24 @@ describe('security events: a value this build does not know still renders', () =
     expect(securityEventCategoryLabel('bots')).toBe('Automated traffic');
     expect(securityEventOutcomeLabel('blocked')).toBe('Blocked');
     expect(securityEventSourceLabel('api')).toBe('API');
+  });
+
+  it('the console names the category whose code is phishing "Sign-in alert"; the shared label, which members read, stays "Phishing" (lab walk 3, F1)', () => {
+    expect(SECURITY_EVENT_CATEGORIES).toContain('phishing');
+    // An organization's own pages and the phone app: unchanged.
+    expect(securityEventCategoryLabel('phishing')).toBe('Phishing');
+    // The platform console: one entry's kind, and the kind as a whole.
+    expect(securityConsoleCategoryLabel('phishing')).toBe('Sign-in alert');
+    expect(securityConsoleCategoryLabel('phishing', 'kind')).toBe('Sign-in alerts');
+    for (const form of ['one', 'kind'] as const) {
+      const words = SECURITY_EVENT_CATEGORIES.map((c) => securityConsoleCategoryLabel(c, form));
+      expect(words, form).not.toContain('Phishing');
+    }
+    // Every other category, and an unknown one, as the shared label says it.
+    for (const c of [...SECURITY_EVENT_CATEGORIES.filter((c) => c !== 'phishing'), 'ransomware']) {
+      expect(securityConsoleCategoryLabel(c), c).toBe(securityEventCategoryLabel(c));
+      expect(securityConsoleCategoryLabel(c, 'kind'), c).toBe(securityEventCategoryLabel(c));
+    }
   });
 });
 

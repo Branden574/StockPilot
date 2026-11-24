@@ -128,7 +128,12 @@ describe('PlatformPasskeysSection', () => {
       'href',
       `/platform/orgs/${ORG_A}`,
     );
-    expect(first).toHaveTextContent(formatExactUtc('2026-11-20T17:05:00Z')!);
+    // Shown on the security pages' 12-hour clock (no zone chosen: UTC); the exact UTC in its title.
+    expect(first).toHaveTextContent('20 Nov 2026, 5:05 PM UTC');
+    expect(first!.querySelector('time')).toHaveAttribute(
+      'title',
+      formatExactUtc('2026-11-20T17:05:00Z')!,
+    );
     expect(formatExactUtc('2026-11-20T17:05:00Z')).toContain('UTC');
     expect(first).toHaveTextContent('4');
     expect(within(first!).getByRole('button', { name: 'Turn off' })).toBeInTheDocument();

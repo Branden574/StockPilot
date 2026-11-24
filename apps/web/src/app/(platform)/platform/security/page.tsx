@@ -8,10 +8,21 @@ import { PlatformPage } from '@/components/platform/platform-page';
 import { PlatformPasskeysSection } from '@/components/platform/platform-passkeys-section';
 import { PlatformSecurityBriefingSection } from '@/components/platform/platform-security-briefing-section';
 import { PlatformTable } from '@/components/platform/platform-table';
+import { countryName } from '@/components/platform/security-map/map-model';
+import { SecurityResponseButton } from '@/components/platform/security-response/security-response-button';
+import { SecurityResponseHost } from '@/components/platform/security-response/security-response-host';
+import {
+  ConsoleMoment,
+  consoleZoneNote,
+  SECURITY_PAGES_CLOCK,
+} from '@/components/platform/zoned-time';
+import { Button } from '@/components/ui/button';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
+import { formatMomentInZone } from '@/lib/platform/dates';
 import { formatExactUtc } from '@/lib/platform/last-active';
+import { readPlatformViewerTimeZone } from '@/lib/platform/viewer-time-zone';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import {
   listPlatformSecurityEvents,
@@ -20,11 +31,13 @@ import {
 } from '@/server/services/platform/security-events';
 
 import {
-  securityEventCategoryLabel,
+  securityConsoleCategoryLabel,
   securityEventOutcomeLabel,
   securityEventPlaceLabel,
   securityEventReasonLabel,
   securityEventSourceLabel,
+  securityResponseCardIdFor,
+  SECURITY_RESPONSE_WORDS,
 } from '@stockpilot/core';
 
 // The Liquid Glass settings and administration composition (stage 4:
@@ -39,6 +52,19 @@ export const metadata: Metadata = { title: 'Security events · Platform' };
 
 /** Rows that count events past a cap: they have a count and no place. */
 const OVER_CAP = new Set(['over_minute_cap', 'over_buffer_cap']);
+
+/**
+ * A row's place on its card, as a card opened from the attack map says it:
+ * the city, then the country's name (the map's own countryName), "Example
+ * Piazza, Italy"; never the two-letter code alone (lab walk 3, F5). The table
+ * keeps its short form.
+ */
+function cardPlaceOf(country: string | null, city: string | null): string {
+  const short = securityEventPlaceLabel(country, city);
+  if (country === null || !/^[A-Z]{2}$/.test(country)) return short;
+  const town = city?.trim() ? city.trim() : null;
+  return town ? `${town}, ${countryName(country)}` : countryName(country);
+}
 
 /**
  * SECURITY EVENTS across the platform: the newest rows of every organization
@@ -78,6 +104,10 @@ export default async function PlatformSecurityEventsPage({
   const { org: orgParam } = await searchParams;
   const org = (Array.isArray(orgParam) ? orgParam[0] : orgParam) ?? null;
   if (org !== null) notFoundUnlessUuid(org);
+  // After the gate (and a bad ?org=, which reads nothing): the zone the viewer
+  // chose (their organization's Timezone setting), from the load the gate
+  // already made. Null: the tables print UTC.
+  const timeZone = await readPlatformViewerTimeZone();
 
   return (
     <PlatformPage>
@@ -85,20 +115,24 @@ export default async function PlatformSecurityEventsPage({
         title="Security events"
         subline={`What the app refused, across every organization and none. The newest ${PLATFORM_SECURITY_EVENT_LIMIT} entries; each counts events of one kind in one minute.`}
         actions={
-          <Link
-            href="/platform/security/map"
-            // Never prefetched: opening the map reads the whole window.
-            prefetch={false}
-            className="text-ink-2 hover:text-foreground text-[13px] underline underline-offset-2"
-          >
-            Attack map
-          </Link>
+          // The console's header action: the outline button, as Act as this org
+          // on an organization's page (a clear button, not a text link: the owner
+          // could not find the map, 2026-11-24). Its focus ring is the button's.
+          <Button asChild variant="outline" className="max-sm:h-11">
+            <Link
+              href="/platform/security/map"
+              // Never prefetched: opening the map reads the whole window.
+              prefetch={false}
+            >
+              Open attack map
+            </Link>
+          </Button>
         }
       />
 
       {/* The passkey switches (part 2, stage 6): read with the service
           client, after the gate above, like the events. */}
-      <PlatformPasskeysSection />
+      <PlatformPasskeysSection timeZone={timeZone} />
 
       {/* The briefing: after the passkey switches, and streamed in on its
           own, so the switches never wait for it. */}
@@ -110,6 +144,7 @@ export default async function PlatformSecurityEventsPage({
         <PlatformSecurityBriefingSection
           organizationId={org}
           actor={{ userId: admin.userId, email: admin.email }}
+          timeZone={timeZone}
         />
       </Suspense>
 
@@ -118,7 +153,7 @@ export default async function PlatformSecurityEventsPage({
       <Suspense
         fallback={<p className="text-muted-foreground text-[13px]">Loading security events...</p>}
       >
-        <PlatformSecurityEventsList />
+        <PlatformSecurityEventsList timeZone={timeZone} />
       </Suspense>
     </PlatformPage>
   );
@@ -132,7 +167,7 @@ export default async function PlatformSecurityEventsPage({
  * database's code and no row) and a notice where the table would be; it
  * never takes the passkey switches or the briefing down with it.
  */
-async function PlatformSecurityEventsList() {
+async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | null }) {
   let rows: PlatformSecurityEventRow[];
   try {
     rows = await listPlatformSecurityEvents({ limit: PLATFORM_SECURITY_EVENT_LIMIT });
@@ -151,74 +186,116 @@ async function PlatformSecurityEventsList() {
   }
 
   return (
-    <PlatformTable label="Security events" minWidth={980}>
-      <TableHeader>
-        <TableRow className="hover:bg-transparent">
-          <TableHead title="In UTC.">When</TableHead>
-          <TableHead>What</TableHead>
-          <TableHead>Organization</TableHead>
-          <TableHead>Where</TableHead>
-          <TableHead>Source</TableHead>
-          <TableHead className="text-right">Count</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.length === 0 ? (
+    // The how-to-respond panel's host: one for the list. Each row's control
+    // carries no card text; the panel and the cards load on the first press.
+    <SecurityResponseHost>
+      <PlatformTable label="Security events" minWidth={1180}>
+        <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableCell colSpan={6} className="p-0">
-              <StatePanel
-                kind="empty"
-                surface="plain"
-                headingLevel={null}
-                icon={null}
-                title="No security events recorded yet."
-              />
-            </TableCell>
+            <TableHead title={consoleZoneNote(timeZone)}>When</TableHead>
+            <TableHead>What</TableHead>
+            <TableHead>Organization</TableHead>
+            <TableHead>Where</TableHead>
+            <TableHead>Source</TableHead>
+            <TableHead className="text-right">Count</TableHead>
+            <TableHead>
+              <span className="sr-only">{SECURITY_RESPONSE_WORDS.open}</span>
+            </TableHead>
           </TableRow>
-        ) : (
-          rows.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                {formatExactUtc(r.lastSeenAt) ?? '—'}
-              </TableCell>
-              <TableCell>
-                <span className="text-foreground">{securityEventReasonLabel(r.reason)}</span>
-                <span className="text-muted-foreground block text-[12px]">
-                  {securityEventCategoryLabel(r.category)} · {securityEventOutcomeLabel(r.outcome)}
-                </span>
-              </TableCell>
-              <TableCell>
-                {r.organizationId === null ? (
-                  <span className="text-muted-foreground">No organization</span>
-                ) : (
-                  <Link
-                    href={`/platform/orgs/${r.organizationId}`}
-                    // Never prefetched: rendering an organization's page
-                    // writes a viewed_org row to the audit trail.
-                    prefetch={false}
-                    className={
-                      r.organizationName
-                        ? 'text-ink-2 hover:text-foreground'
-                        : 'text-muted-foreground hover:text-foreground font-mono text-[12px]'
-                    }
-                  >
-                    {r.organizationName ?? r.organizationId}
-                  </Link>
-                )}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {OVER_CAP.has(r.reason) ? '—' : securityEventPlaceLabel(r.country, r.city)}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {securityEventSourceLabel(r.source)}
-              </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">
-                {r.count.toLocaleString('en-US')}
+        </TableHeader>
+        <TableBody>
+          {rows.length === 0 ? (
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={7} className="p-0">
+                <StatePanel
+                  kind="empty"
+                  surface="plain"
+                  headingLevel={null}
+                  icon={null}
+                  title="No security events recorded yet."
+                />
               </TableCell>
             </TableRow>
-          ))
-        )}
-      </TableBody>
-    </PlatformTable>
+          ) : (
+            rows.map((r) => {
+              const cardId = securityResponseCardIdFor(r.reason);
+              const place = OVER_CAP.has(r.reason) ? null : cardPlaceOf(r.country, r.city);
+              return (
+                <TableRow key={r.id}>
+                  <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
+                    <ConsoleMoment at={r.lastSeenAt} timeZone={timeZone} />
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-foreground">{securityEventReasonLabel(r.reason)}</span>
+                    <span className="text-muted-foreground block text-[12px]">
+                      {securityConsoleCategoryLabel(r.category)} ·{' '}
+                      {securityEventOutcomeLabel(r.outcome)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    {r.organizationId === null ? (
+                      <span className="text-muted-foreground">No organization</span>
+                    ) : (
+                      <Link
+                        href={`/platform/orgs/${r.organizationId}`}
+                        // Never prefetched: rendering an organization's page
+                        // writes a viewed_org row to the audit trail.
+                        prefetch={false}
+                        className={
+                          r.organizationName
+                            ? 'text-ink-2 hover:text-foreground'
+                            : 'text-muted-foreground hover:text-foreground font-mono text-[12px]'
+                        }
+                      >
+                        {r.organizationName ?? r.organizationId}
+                      </Link>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {OVER_CAP.has(r.reason) ? '—' : securityEventPlaceLabel(r.country, r.city)}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {securityEventSourceLabel(r.source)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono tabular-nums">
+                    {r.count.toLocaleString('en-US')}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {cardId !== null ? (
+                      <SecurityResponseButton
+                        // One line on every row, "Stopped: nothing to do" too (lab walk 3, F4).
+                        oneLine
+                        request={{
+                          cardId,
+                          what: securityEventReasonLabel(r.reason),
+                          // What this row shows already, and nothing else.
+                          context: {
+                            kind: securityConsoleCategoryLabel(r.category),
+                            place,
+                            time: Number.isFinite(Date.parse(r.lastSeenAt))
+                              ? formatMomentInZone(
+                                  r.lastSeenAt,
+                                  timeZone ?? 'UTC',
+                                  SECURITY_PAGES_CLOCK,
+                                )
+                              : null,
+                            timeUtc: formatExactUtc(r.lastSeenAt),
+                            organization:
+                              r.organizationId === null
+                                ? 'No organization'
+                                : (r.organizationName ?? r.organizationId),
+                          },
+                          organizationId: r.organizationId,
+                        }}
+                      />
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </PlatformTable>
+    </SecurityResponseHost>
   );
 }

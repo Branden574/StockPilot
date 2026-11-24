@@ -4,7 +4,6 @@ import * as React from 'react';
 import { DetailSection, DetailSectionLink } from '@/components/patterns/detail-section';
 import { Badge } from '@/components/ui/badge';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { formatExactUtc } from '@/lib/platform/last-active';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
   findBriefingOrganization,
@@ -23,6 +22,7 @@ import {
 } from '@stockpilot/core';
 
 import { PlatformTable } from './platform-table';
+import { ConsoleMoment, consoleZoneNote } from './zoned-time';
 
 const COULD_NOT_CHECK = 'Could not check';
 
@@ -303,7 +303,7 @@ async function readOrganizationPart(
   };
 }
 
-function OneOrganization({ part }: { part: OrganizationPart }) {
+function OneOrganization({ part, timeZone }: { part: OrganizationPart; timeZone: string | null }) {
   if (part.state === 'unknown') {
     return <p className="text-muted-foreground text-[13px]">No organization has that id.</p>;
   }
@@ -452,7 +452,7 @@ function OneOrganization({ part }: { part: OrganizationPart }) {
           <PlatformTable label={`Admin and sign-in policy changes: ${part.name}`} minWidth={640}>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead title="In UTC.">When</TableHead>
+                <TableHead title={consoleZoneNote(timeZone)}>When</TableHead>
                 <TableHead>What</TableHead>
               </TableRow>
             </TableHeader>
@@ -460,7 +460,7 @@ function OneOrganization({ part }: { part: OrganizationPart }) {
               {detail.changes.map((c, i) => (
                 <TableRow key={`${c.at}-${i}`}>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                    {formatExactUtc(c.at) ?? '—'}
+                    <ConsoleMoment at={c.at} timeZone={timeZone} />
                   </TableCell>
                   <TableCell>{c.text}</TableCell>
                 </TableRow>
@@ -496,11 +496,14 @@ function OneOrganization({ part }: { part: OrganizationPart }) {
 export async function PlatformSecurityBriefingSection({
   organizationId,
   actor,
+  timeZone = null,
 }: {
   /** The ?org= value, already checked to be a uuid; null without one. */
   organizationId: string | null;
   /** The platform admin the gate answered: who a view is recorded for. */
   actor: { userId: string; email: string };
+  /** The viewer's chosen zone (lib/platform/viewer-time-zone), or null: UTC then. */
+  timeZone?: string | null;
 }) {
   const [platform, organization] = await Promise.all([
     readPlatformSecurityBriefing(),
@@ -510,7 +513,7 @@ export async function PlatformSecurityBriefingSection({
   return (
     <section aria-label="Security briefing" className="flex flex-col gap-4">
       <AllOrganizations briefing={platform} />
-      {organization ? <OneOrganization part={organization} /> : null}
+      {organization ? <OneOrganization part={organization} timeZone={timeZone} /> : null}
     </section>
   );
 }

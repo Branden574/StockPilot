@@ -10,20 +10,30 @@ import {
   SECURITY_MAP_COULD_NOT_CHECK,
   SECURITY_MAP_MARK_WORDS,
   SECURITY_MAP_WORDS,
+  SECURITY_RESPONSE_GENERAL_CARD,
+  SECURITY_RESPONSE_SIGN_IN_ALERT_CARD,
+  securityConsoleCategoryLabel,
   securityEventReasonLabel,
   securityEventSourceLabel,
+  securityResponseCardIdFor,
+  securityResponseLevelFor,
   securityMapFeedWords,
   securityMapFlaggedWords,
   securityMapTableRows,
+  securityMapTimesWords,
   type SecurityMapCounter,
   type SecurityMapFeedRow,
   type SecurityMapFlaggedRow,
+  type SecurityMapFlaggedWords,
   type SecurityMapLegendItem,
   type SecurityMapPillKind,
   type SecurityMapWholeRead,
+  type SecurityResponseCardId,
 } from '@stockpilot/core';
 
 import { PlatformTable } from '../platform-table';
+import { SecurityResponseButton } from '../security-response/security-response-button';
+import { ZonedTime, ZonedWords, exactUtcOf } from '../zoned-time';
 
 import { LABEL_LEADER } from './globe-math';
 import { markPath } from './security-map-flat';
@@ -196,7 +206,20 @@ function CountValue({ value }: { value: string }) {
   );
 }
 
-export function SecurityMapCounters({ counters }: { counters: readonly SecurityMapCounter[] }) {
+/**
+ * The zone the map's times are in (the viewer's chosen zone, else the
+ * browser's): set once by the island's client, read by every list here.
+ */
+export const SecurityMapZone = React.createContext<string>('UTC');
+
+export function SecurityMapCounters({
+  counters,
+  noteAt = null,
+}: {
+  counters: readonly SecurityMapCounter[];
+  /** The instant the day's note names ("Counted from ..."), for its exact UTC. */
+  noteAt?: string | null;
+}) {
   return (
     <dl className="grid grid-cols-1 gap-2 sm:grid-cols-3 sm:gap-3">
       {counters.map((c) => (
@@ -215,7 +238,9 @@ export function SecurityMapCounters({ counters }: { counters: readonly SecurityM
             </dd>
           ) : null}
           {c.note && c.id !== 'flagged_window' ? (
-            <dd className="text-muted-foreground basis-full text-[11.5px] leading-4">{c.note}</dd>
+            <dd className="text-muted-foreground basis-full text-[11.5px] leading-4">
+              <ZonedWords at={c.id === 'blocked_today' ? noteAt : null} text={c.note} />
+            </dd>
           ) : null}
         </div>
       ))}
@@ -243,14 +268,18 @@ const PILL_LOOK: Record<
  */
 export function SecurityMapModePill({
   pill,
+  at = null,
 }: {
   pill: { kind: SecurityMapPillKind; text: string };
+  /** The instants its words name, for their exact UTC in the title. */
+  at?: readonly number[] | null;
 }) {
   const look = PILL_LOOK[pill.kind];
   return (
     <div
       data-testid="security-map-pill"
       data-kind={pill.kind}
+      title={at ? (exactUtcOf(at) ?? undefined) : undefined}
       aria-hidden="true"
       className="sm-glass inline-flex h-8 items-center gap-2 rounded-full px-3 text-[12.5px] font-medium"
       style={{ borderColor: look.border, color: look.text }}
@@ -319,7 +348,14 @@ export function SecurityMapViewControls({
 }
 
 /** The short legend on the stage: the kinds with their marks, and what solid and dashed mean. */
-export function SecurityMapStageLegend({ items }: { items: readonly SecurityMapLegendItem[] }) {
+export function SecurityMapStageLegend({
+  items,
+  view = 'globe',
+}: {
+  items: readonly SecurityMapLegendItem[];
+  /** The view on screen: the line under the legend names it. */
+  view?: 'globe' | 'flat';
+}) {
   return (
     <div
       data-testid="security-map-stage-legend"
@@ -340,6 +376,20 @@ export function SecurityMapStageLegend({ items }: { items: readonly SecurityMapL
             </span>
           );
         })}
+        <span
+          data-legend-alert=""
+          className="flex items-center gap-1.5"
+          style={{ color: ON_STAGE.text }}
+        >
+          <CategoryMark
+            shape={HIDDEN_KIND_LOOK.shape}
+            colour={HIDDEN_KIND_LOOK.hex}
+            hollow
+            tile={false}
+            size={13}
+          />
+          {SECURITY_MAP_WORDS.legendSignInAlert}
+        </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="flex items-center gap-1.5">
@@ -371,7 +421,7 @@ export function SecurityMapStageLegend({ items }: { items: readonly SecurityMapL
           {SECURITY_MAP_WORDS.legendFlagged}
         </span>
       </div>
-      <p data-testid="security-map-legend-counts">{SECURITY_MAP_WORDS.legendCounts}</p>
+      <p data-testid="security-map-legend-counts">{SECURITY_MAP_WORDS.legendCounts(view)}</p>
     </div>
   );
 }
@@ -391,8 +441,9 @@ export function SecurityMapTicker({
   row: SecurityMapFeedRow | null;
   reserveRight: number;
 }) {
+  const zone = React.useContext(SecurityMapZone);
   if (!row) return <div className="flex-1" />;
-  const w = securityMapFeedWords(row);
+  const w = securityMapFeedWords(row, zone);
   const look = CATEGORY_LOOKS[w.category];
   // Centred under the globe (the room left of `reserveRight`) when it fits;
   // a longer line takes the reserve first, so it can grow to the whole width
@@ -430,10 +481,35 @@ export function SecurityMapTicker({
           {placeOf(w)}
         </span>
         <span className="shrink-0 font-mono text-[11px]" style={{ color: ON_STAGE.quiet }}>
-          {w.time}
+          <ZonedTime at={w.at} shown={w.time} />
         </span>
       </p>
       <div className="min-w-0" style={{ flex: `1 1 ${reserveRight}px` }} />
+    </div>
+  );
+}
+
+/** A kind's "How to respond": its general card (core's SECURITY_RESPONSE_GENERAL_CARD), no badge. */
+function KindResponse({
+  cardId,
+  label,
+}: {
+  /** The general card of the kind (core's SECURITY_RESPONSE_GENERAL_CARD); none for a kind with none. */
+  cardId: SecurityResponseCardId | null;
+  label: string;
+}) {
+  if (cardId === null) return null;
+  return (
+    <div className="mt-1.5">
+      <SecurityResponseButton
+        showLevel={false}
+        request={{
+          cardId,
+          what: label,
+          context: { kind: label, place: null, time: null, organization: null },
+          organizationId: null,
+        }}
+      />
     </div>
   );
 }
@@ -454,9 +530,28 @@ export function SecurityMapLegend({ items }: { items: readonly SecurityMapLegend
                 {item.blocked} · {item.flagged}
               </p>
               {item.help ? <p className="text-muted-foreground text-[12px]">{item.help}</p> : null}
+              <KindResponse
+                cardId={SECURITY_RESPONSE_GENERAL_CARD[item.category]}
+                label={item.label}
+              />
             </li>
           );
         })}
+        <li data-legend-alert="" className="min-w-0">
+          <p className="text-foreground flex items-center gap-2 text-[13px] font-medium">
+            <CategoryMark shape={HIDDEN_KIND_LOOK.shape} colour={HIDDEN_KIND_LOOK.hex} hollow />
+            {SECURITY_MAP_WORDS.legendSignInAlert}
+          </p>
+          <p className="text-muted-foreground text-[12px]">
+            {SECURITY_MAP_WORDS.legendSignInAlertHelp}
+          </p>
+          {/* The flagged sign-in alerts are of a kind the map does not show: its
+              general card, called by the legend's own words. */}
+          <KindResponse
+            cardId={SECURITY_RESPONSE_SIGN_IN_ALERT_CARD}
+            label={SECURITY_MAP_WORDS.legendSignInAlert}
+          />
+        </li>
       </ul>
       <ul className="text-muted-foreground flex flex-wrap gap-x-6 gap-y-1 text-[12.5px]">
         <li className="flex items-center gap-2">
@@ -511,13 +606,15 @@ function placeOf(w: { flood: boolean; country: string | null; city: string | nul
 
 /** One entry of the feed: a button that opens its facts (a disclosure, never a live region). */
 function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
-  const w = securityMapFeedWords(row);
+  const zone = React.useContext(SecurityMapZone);
+  const w = securityMapFeedWords(row, zone);
+  const when = <ZonedTime at={w.at} shown={w.time} />;
   const [open, setOpen] = React.useState(false);
   const id = React.useId();
   const look = CATEGORY_LOOKS[w.category];
   const place = placeOf(w);
   const facts: Array<[string, React.ReactNode]> = [
-    ['When', w.time],
+    ['When', when],
     ['Kind', w.categoryLabel],
     ['Outcome', w.outcomeLabel],
     ['What', securityEventReasonLabel(w.reason)],
@@ -544,28 +641,48 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
       ),
     ],
   ];
+  const cardId = securityResponseCardIdFor(w.reason);
   return (
-    <li className="border-border border-b last:border-b-0">
+    <li className="border-border flex flex-wrap items-center border-b last:border-b-0">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((v) => !v)}
-        className={`hover:bg-muted/50 flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-[13px] ${FOCUS_INSIDE}`}
+        className={`hover:bg-muted/50 flex min-w-0 basis-full items-center gap-2 px-3 py-2 text-left text-[13px] ${FOCUS_INSIDE}`}
       >
         <CategoryMark shape={look.shape} colour={look.hex} hollow={w.outcome === 'flagged'} />
         <span className="text-muted-foreground shrink-0 font-mono text-[12px] tabular-nums">
-          {w.time}
+          {when}
         </span>
         <span className="text-foreground min-w-0 truncate">
           {securityEventReasonLabel(w.reason)}
         </span>
         <span className="text-muted-foreground ml-auto shrink-0 text-[12px]">{w.outcomeLabel}</span>
       </button>
+      {cardId !== null ? (
+        <div className="flex shrink-0 px-3 pb-2 pl-9 pt-0.5 sm:pb-1.5">
+          <SecurityResponseButton
+            request={{
+              cardId,
+              what: securityEventReasonLabel(w.reason),
+              context: {
+                kind: w.categoryLabel,
+                place,
+                time: w.time,
+                timeUtc: exactUtcOf(w.at),
+                organization: w.organizationName ?? w.organizationId ?? w.organizationWords,
+              },
+              organizationId: w.organizationId,
+              organizations: w.organizations,
+            }}
+          />
+        </div>
+      ) : null}
       <dl
         id={id}
         hidden={!open}
-        className="grid gap-x-4 gap-y-1 px-3 pb-3 text-[12.5px] sm:grid-cols-[8rem_1fr]"
+        className="grid basis-full gap-x-4 gap-y-1 px-3 pb-3 text-[12.5px] sm:grid-cols-[8rem_1fr]"
       >
         {facts.map(([label, value]) => (
           <React.Fragment key={label}>
@@ -576,6 +693,24 @@ function FeedEntry({ row }: { row: SecurityMapFeedRow }) {
       </dl>
     </li>
   );
+}
+
+/** A flagged entry's organization in words: its name (its id when the name did not come), else "3 organizations" or "No organization". */
+function flaggedOrganizationWords(w: SecurityMapFlaggedWords): string {
+  return w.organizationName ?? w.organizationId ?? w.organizationWords ?? 'No organization';
+}
+
+/** The same on the entry's own line, where no label says what it is: "In 3 organizations". */
+function flaggedOrganizationLine(w: SecurityMapFlaggedWords): string {
+  return w.organizationId === null && w.organizations > 1
+    ? `In ${flaggedOrganizationWords(w)}`
+    : flaggedOrganizationWords(w);
+}
+
+/** The flagged rows with the Act now ones first, each group in its own order. */
+export function actNowFirst<R extends SecurityMapFlaggedRow>(rows: readonly R[]): R[] {
+  const now = (row: R) => securityResponseLevelFor(row[5]) === 'act_now';
+  return [...rows.filter(now), ...rows.filter((row) => !now(row))];
 }
 
 /** How many entries a list shows before "Show all N". */
@@ -625,6 +760,7 @@ export function SecurityMapFeedList({
   title: string;
   rows: readonly SecurityMapFeedRow[];
 }) {
+  const zone = React.useContext(SecurityMapZone);
   const headingId = React.useId();
   const listId = React.useId();
   const [all, setAll] = React.useState(false);
@@ -636,7 +772,9 @@ export function SecurityMapFeedList({
         <h3 id={headingId} className="text-foreground text-[13px] font-medium">
           {title}
         </h3>
-        <p className="text-muted-foreground text-[12px]">{SECURITY_MAP_WORDS.feedTimes}</p>
+        <p className="text-muted-foreground text-[12px]" data-testid="security-map-feed-times">
+          {securityMapTimesWords(zone)}
+        </p>
       </div>
       {rows.length === 0 ? (
         <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_WORDS.feedEmpty}</p>
@@ -691,12 +829,15 @@ export function SecurityMapFlaggedList({
   words: string | null;
   tone?: 'stage' | 'page';
 }) {
+  const zone = React.useContext(SecurityMapZone);
   const headingId = React.useId();
   const listId = React.useId();
   const [all, setAll] = React.useState(false);
   const stage = tone === 'stage';
   const more = rows.length > FLAGGED_VISIBLE;
-  const shown = all || !more ? rows : rows.slice(0, FLAGGED_VISIBLE);
+  // Show all puts the Act now entries first (their level from the reason, here in the
+  // browser: nothing new is sent); the short list keeps the newest first.
+  const shown = !more ? rows : all ? actNowFirst(rows) : rows.slice(0, FLAGGED_VISIBLE);
   const strong = stage ? undefined : 'text-foreground';
   const quiet = stage ? undefined : 'text-muted-foreground';
   const strongStyle = stage ? { color: ON_STAGE.text } : undefined;
@@ -716,7 +857,7 @@ export function SecurityMapFlaggedList({
         {SECURITY_MAP_WORDS.flaggedFeedTitle}
       </h3>
       <p className={`${quiet ?? ''} text-[11.5px] leading-snug`} style={quietStyle}>
-        {SECURITY_MAP_WORDS.flaggedFeedNote}
+        {SECURITY_MAP_WORDS.flaggedFeedNote} {securityMapTimesWords(zone)}
       </p>
       <p
         data-testid="security-map-flagged-split"
@@ -743,8 +884,9 @@ export function SecurityMapFlaggedList({
           } ${more && !all ? 'sm-fade-bottom' : ''}`}
         >
           {shown.map((row) => {
-            const w = securityMapFlaggedWords(row);
+            const w = securityMapFlaggedWords(row, zone);
             const look = flaggedLookOf(w.category);
+            const cardId = securityResponseCardIdFor(row[5]);
             return (
               <li
                 key={w.key}
@@ -774,7 +916,7 @@ export function SecurityMapFlaggedList({
                         never breaks): the line wraps between the place and them. */}
                     {stage ? (
                       <span className="whitespace-nowrap font-mono text-[11px] tabular-nums">
-                        {w.time} · {w.count}
+                        <ZonedTime at={w.at} shown={w.time} /> · {w.count}
                       </span>
                     ) : null}
                   </span>
@@ -783,9 +925,40 @@ export function SecurityMapFlaggedList({
                       className={`${quiet ?? ''} whitespace-nowrap font-mono text-[11.5px] tabular-nums`}
                       style={quietStyle}
                     >
-                      {w.time} · {w.count}
+                      <ZonedTime at={w.at} shown={w.time} /> · {w.count}
                     </span>
                   )}
+                  {/* Its organization, as the feed says it (review M1 reversed by the owner,
+                      2026-11-24): the name, "3 organizations", or "No organization". */}
+                  <span
+                    data-flagged-organization=""
+                    className={`${quiet ?? ''} min-w-0 text-[12px] [overflow-wrap:anywhere]`}
+                    style={quietStyle}
+                  >
+                    {flaggedOrganizationLine(w)}
+                  </span>
+                  {cardId !== null ? (
+                    <span className="mt-1.5 flex">
+                      <SecurityResponseButton
+                        tone={tone}
+                        request={{
+                          cardId,
+                          what: w.what,
+                          // The kind only when the map shows it: a hidden kind is never named.
+                          context: {
+                            kind:
+                              w.category === null ? null : securityConsoleCategoryLabel(w.category),
+                            place: placeOf(w),
+                            time: w.time,
+                            timeUtc: exactUtcOf(w.at),
+                            organization: flaggedOrganizationWords(w),
+                          },
+                          organizationId: w.organizationId,
+                          organizations: w.organizations,
+                        }}
+                      />
+                    </span>
+                  ) : null}
                 </span>
               </li>
             );
@@ -815,7 +988,14 @@ export function SecurityMapFlaggedList({
 }
 
 /** The by-country table: the map's numbers in full, and what a screen reader has in its place. */
-export function SecurityMapCountryTable({ whole }: { whole: SecurityMapWholeRead | null }) {
+export function SecurityMapCountryTable({
+  whole,
+  behind = false,
+}: {
+  whole: SecurityMapWholeRead | null;
+  /** The kept lists hold entries newer than the totals: an empty table is being counted again. */
+  behind?: boolean;
+}) {
   const rows = whole ? securityMapTableRows(whole) : null;
   return (
     <section className="flex min-w-0 flex-col gap-2" aria-label={SECURITY_MAP_WORDS.tableTitle}>
@@ -824,7 +1004,9 @@ export function SecurityMapCountryTable({ whole }: { whole: SecurityMapWholeRead
       {rows === null ? (
         <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_COULD_NOT_CHECK}.</p>
       ) : rows.length === 0 ? (
-        <p className="text-muted-foreground text-[13px]">{SECURITY_MAP_WORDS.feedEmpty}</p>
+        <p className="text-muted-foreground text-[13px]" data-testid="security-map-table-empty">
+          {behind ? SECURITY_MAP_WORDS.tableRecounting : SECURITY_MAP_WORDS.feedEmpty}
+        </p>
       ) : (
         <PlatformTable label="Blocked and flagged events by country" minWidth={520}>
           <TableHeader>
