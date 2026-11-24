@@ -583,6 +583,45 @@ describe('each rule', () => {
   });
 });
 
+describe("the table's own rules also run over the kept text, where an escape's digits count", () => {
+  // Each input reads clean when decoded; the text as kept (an escape stays an
+  // escape) is what the table checks, and there it is an address, a long
+  // value or an id. Without these rules each would end as the last step's
+  // (unreadable) or <removed>.
+  it.each([
+    ['%25.1.2.3', '<address>'],
+    ['%2Fabcdefghijklmnopqrstuv', '<long value>'],
+    ['%25abcdef0-1234-abcd-abcd-abcdefabcdef', '<id>'],
+  ])('%s', (text, marker) => {
+    expect(scrubRequestTarget(`/x/${text}`)).toBe(`/x/${marker}`);
+    expect(scrubRequestSample(`q=${text}`)).toBe(`q=${marker}`);
+  });
+});
+
+describe('the key rule also reads a value split at decoded separators', () => {
+  // Split as a server splits it first; then again at an encoded `&`, `;`, `=`
+  // (or `/` in a path), so a secret-named key inside a value loses its value.
+  it.each([
+    ['q=a%26token%3Dxyz', 'q=a%26token%3D<removed>'],
+    ['q=a%3Bsession%3Dxyz', 'q=a%3Bsession%3D<removed>'],
+    ['q=a%2526token%253Dxyz', 'q=a%2526token%253D<removed>'],
+    ['token%3Dxyz', 'token%3D<removed>'],
+    ['pass%3Dword=x', 'pass%3D<removed>'],
+    ['q=a%26b%3Dc', 'q=a%26b%3Dc'],
+  ])('a query: %s', (query, out) => {
+    expect(scrubRequestSample(query)).toBe(out);
+    expect(scrubRequestSample(out)).toBe(out);
+  });
+  it.each([
+    ['/x%3Btoken%3Dxyz/.env', '/x%3Btoken%3D<removed>/.env'],
+    ['/a%2Fb%3Bsig%3Dxyz/.git/config', '/a%2Fb%3Bsig%3D<removed>/.git/config'],
+    ['/x;token=xyz/.env', '/x;token=<removed>/.env'],
+  ])('a path: %s', (target, out) => {
+    expect(scrubRequestTarget(target)).toBe(out);
+    expect(scrubRequestTarget(out)).toBe(out);
+  });
+});
+
 describe('ordinary scanner shapes are kept as they were sent', () => {
   it.each([
     '/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php',

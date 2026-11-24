@@ -189,8 +189,9 @@ export function isSecretQueryKey(name: string): boolean {
  *   out: what is kept: the text as it was sent (an escape stays an escape),
  *     '?' for a literal character that is not printable ASCII, '' for a
  *     literal invisible one; for a marker, its text.
- *   literal: the character was sent as itself, not percent-encoded. Only a
- *     literal `/`, `;`, `&` or `=` separates anything.
+ *   literal: the character was sent as itself, not percent-encoded. The
+ *     text is split at a literal `/`, `;`, `&` or `=` as a server splits it;
+ *     the key rule then reads it a second time split at decoded ones too.
  */
 interface Piece {
   view: string;
@@ -459,6 +460,21 @@ function readsAsWords(run: string): boolean {
   return acronyms <= 3 && words >= 1;
 }
 
+/** How often a letter and a digit stand next to each other in `run`. */
+function letterDigitChanges(run: string): number {
+  let changes = 0;
+  for (let i = 1; i < run.length; i++) {
+    const a = run[i - 1]!;
+    const b = run[i]!;
+    const aDigit = a >= '0' && a <= '9';
+    const bDigit = b >= '0' && b <= '9';
+    const aLetter = /[A-Za-z]/.test(a);
+    const bLetter = /[A-Za-z]/.test(b);
+    if ((aDigit && bLetter) || (aLetter && bDigit)) changes++;
+  }
+  return changes;
+}
+
 /**
  * Whether a run of letters, digits, `-` and `_` (one whole run, at least
  * SAMPLE_TOKEN_RUN_MIN long) is shaped like a token, such as this app's
@@ -476,21 +492,6 @@ function readsAsWords(run: string): boolean {
  * mixed-case names it also replaces and the names it keeps are pinned in
  * request-scrub.test.ts.
  */
-/** How often a letter and a digit stand next to each other in `run`. */
-function letterDigitChanges(run: string): number {
-  let changes = 0;
-  for (let i = 1; i < run.length; i++) {
-    const a = run[i - 1]!;
-    const b = run[i]!;
-    const aDigit = a >= '0' && a <= '9';
-    const bDigit = b >= '0' && b <= '9';
-    const aLetter = /[A-Za-z]/.test(a);
-    const bLetter = /[A-Za-z]/.test(b);
-    if ((aDigit && bLetter) || (aLetter && bDigit)) changes++;
-  }
-  return changes;
-}
-
 export function looksLikeToken(run: string): boolean {
   let upper = 0;
   let lower = 0;
@@ -669,17 +670,26 @@ function isSeparator(p: Piece, chars: string): boolean {
   return p.literal && !p.marker && p.view.length === 1 && chars.includes(p.view);
 }
 
-/** Splits [from, to) of `pieces` at the literal separators in `chars`: [start, end) ranges. */
+/** A separator in `chars` at piece `p`, sent as itself or encoded (never a marker). */
+function isDecodedSeparator(p: Piece, chars: string): boolean {
+  return !p.marker && p.view.length === 1 && chars.includes(p.view);
+}
+
+/** How the key rule reads a text: split as a server splits it, or at decoded separators too. */
+type Split = typeof isSeparator;
+
+/** Splits [from, to) of `pieces` at the separators in `chars`: [start, end) ranges. */
 function partsOf(
   pieces: readonly Piece[],
   from: number,
   to: number,
   chars: string,
+  split: Split = isSeparator,
 ): Array<[number, number]> {
   const parts: Array<[number, number]> = [];
   let start = from;
   for (let i = from; i < to; i++) {
-    if (isSeparator(pieces[i]!, chars)) {
+    if (split(pieces[i]!, chars)) {
       parts.push([start, i]);
       start = i + 1;
     }
@@ -697,6 +707,7 @@ function removeSecretValues(
   pieces: Piece[],
   parts: Array<[number, number]>,
   bare: (from: number, to: number) => boolean,
+  split: Split = isSeparator,
 ): Piece[] {
   const replace: Array<[number, number]> = [];
   for (const [from, end] of parts) {
@@ -705,7 +716,7 @@ function removeSecretValues(
     const to = endsInCutMark(pieces, from, end) ? end - SAMPLE_CUT_MARK.length : end;
     let eq = -1;
     for (let i = from; i < to; i++) {
-      if (isSeparator(pieces[i]!, '=')) {
+      if (split(pieces[i]!, '=')) {
         eq = i;
         break;
       }
@@ -755,7 +766,8 @@ function keptText(pieces: readonly Piece[], max: number, cut: boolean): string {
  * In order: the path is cut to SAMPLE_INPUT_MAX characters; a malformed
  * escape makes it unreadable; every rule in SCRUB_RULES runs over the decoded
  * text, and the table's own rules over the text as kept; the value of a
- * `;key=value` part of a segment whose key names a secret is removed; the
+ * `;key=value` part of a segment whose key names a secret is removed (split
+ * at literal separators, then at decoded ones too); the
  * result is cut to length with `...`. LAST, the result is checked with
  * isStorableTarget, and anything that still fails is SAMPLE_UNREADABLE_TARGET,
  * so the database never has to skip it.
@@ -770,11 +782,15 @@ export function scrubRequestTarget(pathname: string): string {
     // `;key=value` parts of each segment: the key rule, as for a query. It
     // runs after the text rules, so a key reads the same here as it will in
     // the kept text (a marker in a key is part of its name).
-    const params: Array<[number, number]> = [];
-    for (const [from, to] of partsOf(pieces, 0, pieces.length, '/')) {
-      params.push(...partsOf(pieces, from, to, ';').slice(1));
+    // Read twice: split as a server splits it, then at decoded `/`, `;` and
+    // `=` too, so a `%3Bpassword%3D...` inside a segment loses its value.
+    for (const split of [isSeparator, isDecodedSeparator]) {
+      const params: Array<[number, number]> = [];
+      for (const [from, to] of partsOf(pieces, 0, pieces.length, '/', split)) {
+        params.push(...partsOf(pieces, from, to, ';', split).slice(1));
+      }
+      pieces = removeSecretValues(pieces, params, () => false, split);
     }
-    pieces = removeSecretValues(pieces, params, () => false);
     const out = keptText(pieces, SAMPLE_TARGET_MAX, input.cut);
     return isStorableTarget(out) ? out : SAMPLE_UNREADABLE_TARGET;
   } catch {
@@ -792,7 +808,8 @@ export function scrubRequestTarget(pathname: string): string {
  * sample; the text rules, as for a path; then the query is split at literal
  * `&` and `;`, and the value of each key that names a secret
  * (isSecretQueryKey) is removed whole, as is a part with no `=` of
- * SAMPLE_BARE_VALUE_MAX characters or more; then the cut. LAST, the result is checked with isStorableSample,
+ * SAMPLE_BARE_VALUE_MAX characters or more; then the key rule again with
+ * decoded `&`, `;` and `=` splitting too; then the cut. LAST, the result is checked with isStorableSample,
  * and anything that still fails is the marker `<removed>`.
  */
 export function scrubRequestSample(queryString: string | null | undefined): string | null {
@@ -802,7 +819,10 @@ export function scrubRequestSample(queryString: string | null | undefined): stri
     if (input === null) return null;
     let pieces = unitsOf(input.text);
     applyTextRules(pieces);
-    // After the text rules, as for a path's `;key=value` parts.
+    // After the text rules, as for a path's `;key=value` parts. Split as a
+    // server splits it (where the bare rule applies), then again at decoded
+    // `&`, `;` and `=` too, so a value that is itself a query string
+    // (`q=a%26token%3D...`) loses what a secret-named key inside it holds.
     const kept = pieces;
     pieces = removeSecretValues(
       kept,
@@ -812,6 +832,12 @@ export function scrubRequestSample(queryString: string | null | undefined): stri
           .slice(from, to)
           .map((p) => p.out)
           .join('').length >= SAMPLE_BARE_VALUE_MAX,
+    );
+    pieces = removeSecretValues(
+      pieces,
+      partsOf(pieces, 0, pieces.length, '&;', isDecodedSeparator),
+      () => false,
+      isDecodedSeparator,
     );
     const out = keptText(pieces, SAMPLE_QUERY_MAX, input.cut);
     if (out === '') return null;
