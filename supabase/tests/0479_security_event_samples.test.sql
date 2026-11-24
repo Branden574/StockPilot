@@ -58,6 +58,9 @@ select plan(120);
 -- session says (0479/99), and so does this file.
 set local timezone = 'UTC';
 
+-- First, before any helper names the table (they cannot be created without it).
+select has_table('public', 'security_event_samples', '0479/1: the table exists');
+
 -- ── Helpers ─────────────────────────────────────────────────────────────────
 -- Every grant on a function other than its owner's, as role:privilege.
 create function pg_temp.grants_of(p regprocedure) returns text[] language sql as $$
@@ -241,11 +244,25 @@ create function pg_temp.raw(p jsonb) returns void language sql as $$
          coalesce((p ->> 'last_seen_at')::timestamptz, (p ->> 'first_seen_at')::timestamptz, x.hour)
     from (select coalesce((p ->> 'hour')::timestamptz, (select c.h0 from pg_temp.clock c)) as hour) x;
 $$;
+-- A fixture row: pg_temp.raw, except that a row the table refuses is left out
+-- with a notice instead of stopping the file. Under the migration as written
+-- no fixture row is refused (every hand-worked answer below depends on them).
+create function pg_temp.put(p jsonb) returns void language plpgsql as $$
+begin
+  perform pg_temp.raw(p);
+exception when others then
+  raise notice 'pg_temp.put: fixture row refused (%)', sqlstate;
+end;
+$$;
+-- The length of a JSON array; null for anything else (never an error).
+create function pg_temp.alen(p jsonb) returns integer language sql immutable as $$
+  select case when jsonb_typeof(p) = 'array' then jsonb_array_length(p) end;
+$$;
 -- One row at h(p_hour) plus minutes for its first and last time.
 create function pg_temp.at(p_hour integer, p_reason text, p_target text, p_method text, p_sample text, p_country text,
                            p_count integer, p_first_min integer, p_last_min integer)
 returns void language sql as $$
-  select pg_temp.raw(jsonb_build_object(
+  select pg_temp.put(jsonb_build_object(
            'hour', pg_temp.h(p_hour), 'reason', p_reason, 'target', p_target, 'method', p_method,
            'sample', p_sample, 'country', p_country, 'event_count', p_count,
            'first_seen_at', pg_temp.h(p_hour) + make_interval(mins => p_first_min),
@@ -327,7 +344,6 @@ insert into texts (col, ok, val) values
 delete from public.security_event_samples;
 
 -- ── 1. Shape ────────────────────────────────────────────────────────────────
-select has_table('public', 'security_event_samples', '0479/1: the table exists');
 select is(
   (select array_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text || ':'
                     || coalesce(nullif(a.attgenerated::text, ''), '-') order by a.attnum)
@@ -650,8 +666,8 @@ select is(
         pg_temp.try($$ select pg_temp.raw('{}'), pg_temp.raw('{"sample": "a=1"}'), pg_temp.raw('{"method": "POST"}'), pg_temp.raw('{"country": "US"}'), pg_temp.raw('{"target": "/example-probe/.env2"}'), pg_temp.raw('{"reason": "git_dir"}') $$)],
   array['428C9', '23505', 'ok', 'ok'],
   '0479/44: the row key cannot be written; two rows with the same content in one hour are refused; the same content in another hour, or another query string, method, country, path or kind in the same hour, is another row');
-select pg_temp.raw(jsonb_build_object('country', 'US', 'sample', 'a=1', 'method', 'POST', 'target', '/example-probe/key/.env'));
-select pg_temp.raw('{"target": "(more than could be listed)", "method": null}');
+select pg_temp.put(jsonb_build_object('country', 'US', 'sample', 'a=1', 'method', 'POST', 'target', '/example-probe/key/.env'));
+select pg_temp.put('{"target": "(more than could be listed)", "method": null}');
 select is(
   (select array_agg(s.dedupe_key = md5(s.category || chr(31) || s.reason || chr(31) || s.source || chr(31)
                                        || coalesce(s.country, '') || chr(31) || coalesce(s.method, '') || chr(31)
@@ -824,8 +840,8 @@ update public.security_event_samples set event_count = 1999999998
 select pg_temp.rec(jsonb_build_array(
   pg_temp.el('php_file', '/example-dup/index.php', 'POST', null, 'US', pg_temp.h(-1) + interval '30 minutes', 5)));
 select is(
-  (select event_count from public.security_event_samples where reason = 'php_file' and method = 'POST'),
-  2000000000,
+  (select array_agg(event_count) from public.security_event_samples where reason = 'php_file' and method = 'POST'),
+  array[2000000000],
   '0479/62: a count stops at two billion');
 select is(
   (select bool_and(s.dedupe_key = md5(s.category || chr(31) || s.reason || chr(31) || s.source || chr(31)
@@ -889,7 +905,7 @@ select is(
 -- h(-1) now holds 55 listed rows (50 env_file, 5 git_dir) and one overflow
 -- row. 240 more listed rows of a third kind, written by the owner, bring the
 -- listed rows to 295.
-select pg_temp.raw(jsonb_build_object('hour', pg_temp.h(-1), 'reason', 'wordpress',
+select pg_temp.put(jsonb_build_object('hour', pg_temp.h(-1), 'reason', 'wordpress',
                                       'target', '/example-hour/' || i || '/wp-login.php'))
   from generate_series(1, 240) i;
 select is(
@@ -933,10 +949,10 @@ create temporary table cutoff as
   select case when date_trunc('hour', now() - interval '90 days', 'UTC') = now() - interval '90 days'
               then now() - interval '90 days'
               else date_trunc('hour', now() - interval '90 days', 'UTC') + interval '1 hour' end as a;
-select pg_temp.raw(jsonb_build_object('hour', (select a from cutoff) - interval '1 hour', 'target', '/example-purge/b'));
-select pg_temp.raw(jsonb_build_object('hour', (select a from cutoff), 'target', '/example-purge/a'));
-select pg_temp.raw(jsonb_build_object('hour', pg_temp.h(0), 'target', '/example-purge/now'));
-select pg_temp.raw(jsonb_build_object('hour', (select a from cutoff) - interval '10 hours', 'target', '/example-purge/old/' || i))
+select pg_temp.put(jsonb_build_object('hour', (select a from cutoff) - interval '1 hour', 'target', '/example-purge/b'));
+select pg_temp.put(jsonb_build_object('hour', (select a from cutoff), 'target', '/example-purge/a'));
+select pg_temp.put(jsonb_build_object('hour', pg_temp.h(0), 'target', '/example-purge/now'));
+select pg_temp.put(jsonb_build_object('hour', (select a from cutoff) - interval '10 hours', 'target', '/example-purge/old/' || i))
   from generate_series(1, 5000) i;
 create temporary table purged (n serial, answer jsonb, b_left boolean);
 insert into purged (answer) select pg_temp.purge();
@@ -999,7 +1015,7 @@ select pg_temp.at(-37, 'env_file', '/example-g/.env', m, null, 'US', n::integer,
   from unnest(array['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) with ordinality as x(m, n);
 select pg_temp.at(-37, 'env_file', '/example-h/.env', 'GET', q, 'US', 1, 10, 10)
   from unnest(array['b=2', null, 'a=1']) q;
-select pg_temp.raw(jsonb_build_object('hour', pg_temp.h(-40), 'target', '/example-n/' || i || '.env', 'event_count', i,
+select pg_temp.put(jsonb_build_object('hour', pg_temp.h(-40), 'target', '/example-n/' || i || '.env', 'event_count', i,
                                       'first_seen_at', pg_temp.h(-40) + make_interval(secs => i)))
   from generate_series(1, 60) i;
 
@@ -1110,9 +1126,9 @@ select is(
   (select array_agg(v order by u.o, w.k)
      from unnest(array[1, 3, 0, -5, 1000]) with ordinality as u(n, o),
           lateral (select pg_temp.rd(pg_temp.h(-40), pg_temp.h(-39), null, null, null, u.n) as r) q,
-          lateral unnest(array[jsonb_array_length(q.r -> 'targets'), (q.r -> 'targets' -> 0 ->> 'events')::int,
+          lateral unnest(array[pg_temp.alen(q.r -> 'targets'), (q.r -> 'targets' -> 0 ->> 'events')::int,
                                (q.r -> 'targets' -> -1 ->> 'events')::int]) with ordinality as w(v, k))
-  || array[jsonb_array_length(pg_temp.rd(pg_temp.h(-40), pg_temp.h(-39)) -> 'targets')],
+  || array[pg_temp.alen(pg_temp.rd(pg_temp.h(-40), pg_temp.h(-39)) -> 'targets')],
   array[1, 60, 60, 3, 60, 58, 1, 60, 60, 1, 60, 60, 50, 60, 11, 10],
   '0479/92: the limit: 1 and 3 give that many; 0 and -5 give one; 1,000 gives the most, 50; none gives 10');
 select is(
@@ -1173,9 +1189,12 @@ select is(
                                            f, t, r, c, k, coalesce(l::text, 'null'))) order by o)
      from (values (1, null::timestamptz, null::timestamptz, null::text, null::text, null::text, -2147483648),
                   (2, 'infinity', '-infinity', 'x', 'y', 'z', 2147483647),
-                  (3, now(), now(), repeat('x', 10000), repeat('y', 10000), repeat('z', 10000), 0)) as v(o, f, t, r, c, k, l)),
-  array['no error', 'no error', 'no error'],
-  '0479/98: no argument makes the read raise');
+                  (3, now(), now(), repeat('x', 10000), repeat('y', 10000), repeat('z', 10000), 0),
+                  (4, pg_temp.h(-3), pg_temp.h(-1), repeat('x', 10000), null, null, 5),
+                  (5, pg_temp.h(-3), pg_temp.h(-1), null, repeat('y', 10000), null, 5),
+                  (6, pg_temp.h(-3), pg_temp.h(-1), null, null, repeat('z', 10000), 5)) as v(o, f, t, r, c, k, l)),
+  array['no error', 'no error', 'no error', 'no error', 'no error', 'no error'],
+  '0479/98: no argument makes the read raise (a window it will not read, a limit at either end, a filter far too long)');
 savepoint tz;
 set local timezone = 'Pacific/Auckland';
 select is(pg_temp.rd(pg_temp.h(-3), pg_temp.h(-1))::text, (select a::text from ans),
@@ -1186,12 +1205,12 @@ select is(
   array[true, true],
   '0479/100: written with +00:00');
 create temporary table before_read as
-  select md5(string_agg(s::text, ',' order by s.id)) as m, count(*) as n from public.security_event_samples s;
+  select md5(string_agg(s::text || s.ctid::text, ',' order by s.id)) as m, count(*) as n from public.security_event_samples s;
 select pg_temp.rd(pg_temp.h(-40), pg_temp.h(1)) is not null as read_once;
 select is(
-  (select array[md5(string_agg(s::text, ',' order by s.id)), count(*)::text] from public.security_event_samples s),
+  (select array[md5(string_agg(s::text || s.ctid::text, ',' order by s.id)), count(*)::text] from public.security_event_samples s),
   (select array[m, n::text] from before_read),
-  '0479/101: the read changes nothing');
+  '0479/101: the read changes nothing: every row is as it was and where it was (none rewritten)');
 
 -- ── 11. The row ceiling ─────────────────────────────────────────────────────
 -- 30,000 rows in each of h(-4) and h(-3): the window [h(-4), h(-2)) holds
@@ -1205,7 +1224,7 @@ select is(
      from (select pg_temp.rd(pg_temp.h(-4), pg_temp.h(-2)) as r) x),
   array['false'::jsonb, to_jsonb(pg_temp.h(-4)), '"60000|60000|true"'::jsonb],
   '0479/102: a window that holds exactly the ceiling (60,000 rows) is read as asked');
-select pg_temp.raw(jsonb_build_object('hour', pg_temp.h(-4), 'target', '/example-ceiling/one-more'));
+select pg_temp.put(jsonb_build_object('hour', pg_temp.h(-4), 'target', '/example-ceiling/one-more'));
 create temporary table shortened as
   select pg_temp.rd(pg_temp.h(-4), pg_temp.h(-2)) as r,
          pg_temp.rd(pg_temp.h(-3), pg_temp.h(-2)) as from_read,
@@ -1302,7 +1321,7 @@ select pg_temp.rec((select jsonb_agg(pg_temp.el('wordpress', '/example-flood/' |
                                               pg_temp.h(-1) + interval '16 minutes', 2) order by i)
                       from generate_series(51, 70) i));
 select is(
-  (select array[jsonb_array_length(r -> 'targets'), (r ->> 'listed_targets')::int, (r ->> 'listed_events')::int]
+  (select array[pg_temp.alen(r -> 'targets'), (r ->> 'listed_targets')::int, (r ->> 'listed_events')::int]
           || array[(r -> 'more_than_listed' -> 0 ->> 'events')::int, (r -> 'more_than_listed' -> 0 ->> 'hours')::int]
      from (select pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), 'wordpress', null, null, 50) as r) x),
   array[50, 50, 50, 40, 1],
@@ -1313,7 +1332,7 @@ select is(
   0,
   '0479/114: the overflow row is never listed as a target');
 select is(
-  (select array[(r -> 'more_than_listed' -> 0 ->> 'events')::int, jsonb_array_length(r -> 'targets')]
+  (select array[(r -> 'more_than_listed' -> 0 ->> 'events')::int, pg_temp.alen(r -> 'targets')]
      from (select pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), 'wordpress', null, 'DE') as r) x),
   array[40, 0],
   '0479/115: and its count is given under any country filter, with no listed path from that country');
@@ -1322,12 +1341,12 @@ select is(
 -- 50 targets of 200 characters with 6 pairs of 300 characters each: the
 -- answer holds 50 targets and 250 pairs, never more.
 delete from public.security_event_samples;
-select pg_temp.raw(jsonb_build_object('hour', pg_temp.h(-1), 'target', '/' || i || repeat('t', 197 - length(i::text)) || 'x',
+select pg_temp.put(jsonb_build_object('hour', pg_temp.h(-1), 'target', '/' || i || repeat('t', 197 - length(i::text)) || 'x',
                                       'method', m, 'sample', repeat('s', 299) || i % 10))
   from generate_series(1, 60) i, unnest(array['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']) m;
 select is(
-  (select array[jsonb_array_length(r -> 'targets'),
-                (select sum(jsonb_array_length(t -> 'samples'))::int from jsonb_array_elements(r -> 'targets') t),
+  (select array[pg_temp.alen(r -> 'targets'),
+                (select sum(pg_temp.alen(t -> 'samples'))::int from jsonb_array_elements(r -> 'targets') t),
                 (select count(*)::int from jsonb_array_elements(r -> 'targets') t where (t ->> 'samples_truncated')::boolean),
                 (r ->> 'listed_targets')::int]
      from (select pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), null, null, null, 1000) as r) x),
