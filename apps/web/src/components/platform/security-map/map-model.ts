@@ -65,9 +65,13 @@ export const CATEGORY_LOOKS: Readonly<Record<SecurityEventCategory, CategoryLook
  */
 export const HIDDEN_KIND_LOOK: CategoryLook = look('#9aa6b8', 'triangle');
 
-/** An entry's look in the flagged list: its kind's own when the map shows that kind, else the grey one. */
-export function flaggedLookOf(category: SecurityEventCategory): CategoryLook {
-  return securityMapShownCategories().includes(category)
+/**
+ * An entry's look in the flagged list: its kind's own when the map shows
+ * that kind, else the grey one. A kind the map does not show arrives with no
+ * category (null).
+ */
+export function flaggedLookOf(category: SecurityEventCategory | null): CategoryLook {
+  return category !== null && securityMapShownCategories().includes(category)
     ? CATEGORY_LOOKS[category]
     : HIDDEN_KIND_LOOK;
 }

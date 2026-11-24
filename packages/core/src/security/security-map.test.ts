@@ -22,6 +22,7 @@ import {
   SECURITY_MAP_NOT_COUNTED_YET,
   SECURITY_MAP_POLL_FAILED,
   SECURITY_MAP_POLL_REFUSED,
+  SECURITY_MAP_READ_LIMIT_MS,
   SECURITY_MAP_REFUSALS,
   SECURITY_MAP_ROWS_PER_SIGN_IN,
   SECURITY_MAP_STEP_MS,
@@ -44,11 +45,12 @@ import {
   securityMapCountWords,
   securityMapCounters,
   securityMapEmptyWords,
-  securityMapFeedRowKey,
+  securityMapEntryKey,
   securityMapFeedWords,
   securityMapFlaggedFeedLeavesOut,
   securityMapFlaggedListWords,
   securityMapFlaggedReasonWords,
+  securityMapFlaggedWords,
   securityMapHealthAfter,
   securityMapIsFloor,
   securityMapLegend,
@@ -56,6 +58,7 @@ import {
   securityMapMergeFeed,
   securityMapModeWords,
   securityMapNextPollDelay,
+  securityMapNextWholeDelay,
   securityMapNotes,
   securityMapOutcomeWords,
   securityMapRefusedWindowWords,
@@ -64,6 +67,7 @@ import {
   securityMapStopReason,
   securityMapStopWords,
   securityMapTableRows,
+  securityMapTallyWords,
   securityMapViewOf,
   securityMapWindowStartNow,
   securityMapWindowWords,
@@ -72,6 +76,7 @@ import {
   type SecurityMapCategoryCounts,
   type SecurityMapFeedEntry,
   type SecurityMapFeedRow,
+  type SecurityMapFlaggedRow,
   type SecurityMapTimelineCell,
   type SecurityMapView,
   type SecurityMapWholeRead,
@@ -301,6 +306,34 @@ const busy = (): Partial<SecurityMapAnswer> => ({
     },
   ],
 });
+
+/** The three tally reasons of the contract's fixture, in the database's order (by reason). */
+const THREE_TALLIES: SecurityMapAnswer['tallies'] = [
+  {
+    reason: 'too_many_forms_to_count',
+    source: 'api',
+    category: 'password_guessing',
+    outcome: 'flagged',
+    events: 400,
+    rows: 1,
+  },
+  {
+    reason: 'unrecorded_server_form_code',
+    source: 'api',
+    category: 'password_guessing',
+    outcome: 'flagged',
+    events: 4,
+    rows: 1,
+  },
+  {
+    reason: 'unrecorded_server_form_password',
+    source: 'api',
+    category: 'password_guessing',
+    outcome: 'flagged',
+    events: 25,
+    rows: 1,
+  },
+];
 
 /* ───────────────────────────── the lists ───────────────────────────── */
 
@@ -799,6 +832,46 @@ describe('the categories the map shows', () => {
 const securityMapArcKey = (row: Parameters<typeof securityMapArcOf>[0]): string =>
   securityMapArcOf(row).key;
 
+const VIEW_KEYS = [
+  'askedFrom',
+  'feed',
+  'flaggedFeed',
+  'from',
+  'generatedAt',
+  'live',
+  'liveCut',
+  'liveFrom',
+  'liveUndrawn',
+  'scope',
+  'shortened',
+  'to',
+  'v',
+  'whole',
+];
+const WHOLE_KEYS = [
+  'allowed',
+  'blocked',
+  'blockedSinceDayStart',
+  'blockedSinceDayStartPartial',
+  'dayStart',
+  'drawingCut',
+  'flagged',
+  'flood',
+  'floors',
+  'late',
+  'lateFloor',
+  'legend',
+  'noPlace',
+  'notDrawnOther',
+  'notDrawnSignInAlerts',
+  'oldestEventAt',
+  'steps',
+  'still',
+  'table',
+  'tableCut',
+  'tallies',
+];
+
 describe('securityMapViewOf: what leaves the server', () => {
   const view = whole(busy());
 
@@ -818,10 +891,12 @@ describe('securityMapViewOf: what leaves the server', () => {
       'exploit',
       'bots',
     ]);
-    expect(view.feed.some((row) => row[1] === phishing)).toBe(false);
+    expect(view.feed.some((row) => row[4] === phishing)).toBe(false);
     expect(view.feed).toHaveLength(2);
-    // Its flagged sign-in alert is in the flagged feed only, never in any drawing or the plain feed.
-    expect(view.flaggedFeed.filter((row) => row[1] === phishing).map((row) => row[6])).toEqual([
+    // Its flagged sign-in alert is in the flagged feed only, with no category at all: never in
+    // any drawing or the plain feed, and the kind's place in the list never leaves the server.
+    expect(view.flaggedFeed.some((row) => row[4] === phishing)).toBe(false);
+    expect(view.flaggedFeed.filter((row) => row[4] === null).map((row) => row[7])).toEqual([
       'Example Harbour',
     ]);
     expect(JSON.stringify({ ...view, flaggedFeed: [] })).not.toContain('Example Harbour');
@@ -840,6 +915,11 @@ describe('securityMapViewOf: what leaves the server', () => {
     expect(all.live.map(securityMapArcKey)).toContain('PT:phishing:flagged');
     expect(all.whole?.notDrawnSignInAlerts).toBe(0);
     expect(all.feed).toHaveLength(3);
+    // In the flagged list it has its own kind again, so its own colour.
+    expect(all.flaggedFeed.map((row) => row[4])).toEqual([
+      SECURITY_EVENT_CATEGORIES.indexOf('phishing'),
+      0,
+    ]);
   });
 
   it('an allowed event is never an arc or a table row; it is counted in words', () => {
@@ -912,12 +992,29 @@ describe('securityMapViewOf: what leaves the server', () => {
     expect(cut.whole.tableCut).toBe(true);
   });
 
-  it('no place, floods, late sources and tallies are sums of what the answer lists', () => {
+  it('no place, floods and late sources are sums of what the answer lists', () => {
     expect(view.whole.noPlace).toBe(36);
     expect(view.whole.flood).toBe(36);
     expect(view.whole.late).toBe(5);
-    expect(view.whole.tallyEvents).toBe(400);
-    expect(view.whole.tallyRows).toBe(1);
+  });
+
+  it('the tallies: one row per reason, never added across reasons; a number only where the page says one', () => {
+    expect(view.whole.tallies).toEqual([['too_many_forms_to_count', 400]]);
+    expect(whole({ tallies: THREE_TALLIES }).whole.tallies).toEqual([
+      ['too_many_forms_to_count', 400],
+      ['unrecorded_server_form_code', null],
+      ['unrecorded_server_form_password', null],
+    ]);
+    // One reason over two hours is one line: its own rows added, nothing else.
+    const twoHours = [
+      THREE_TALLIES[0]!,
+      { ...THREE_TALLIES[0]!, category: 'bots' as const, events: 7 },
+    ];
+    expect(whole({ tallies: twoHours }).whole.tallies).toEqual([['too_many_forms_to_count', 407]]);
+    // The numbers that are not said never leave the server.
+    const sent = JSON.stringify(whole({ tallies: THREE_TALLIES.slice(1) }).whole.tallies);
+    expect(sent).not.toMatch(/25|4/);
+    expect(whole().whole.tallies).toEqual([]);
   });
 
   it('a read of the last ten minutes carries the live arcs and the two feeds, and no totals', () => {
@@ -926,55 +1023,122 @@ describe('securityMapViewOf: what leaves the server', () => {
     expect(r.live).toEqual([['US', 0, 0, 7]]);
     expect(r.feed).toHaveLength(2);
     expect(r.flaggedFeed).toHaveLength(2);
-    expect(Object.keys(r).sort()).toEqual([
-      'askedFrom',
-      'feed',
-      'flaggedFeed',
-      'from',
-      'generatedAt',
-      'live',
-      'liveCut',
-      'liveFrom',
-      'scope',
-      'shortened',
-      'to',
-      'v',
-      'whole',
-    ]);
+    expect(Object.keys(r).sort()).toEqual(VIEW_KEYS);
   });
 
-  it('the flagged feed: every kind, the hidden ones too, flagged only, each with its own "at least"', () => {
+  it('every object of the view holds exactly its keys and every row exactly its parts, a whole read and a poll alike', () => {
+    const full = { ...busy(), tallies: THREE_TALLIES };
+    for (const v of [whole(full), recent(full)]) {
+      expect(Object.keys(v).sort(), v.scope).toEqual(VIEW_KEYS);
+      expect(v.live.length).toBeGreaterThan(0);
+      expect(v.feed.length).toBeGreaterThan(0);
+      expect(v.flaggedFeed.length).toBeGreaterThan(0);
+      for (const row of v.live) expect(row).toHaveLength(4);
+      for (const row of v.feed) expect(row).toHaveLength(13);
+      for (const row of v.flaggedFeed) expect(row).toHaveLength(8);
+      // No object anywhere but the view and its whole part: nothing can ride along inside a row.
+      const objects: string[] = [];
+      const walk = (value: unknown, at: string): void => {
+        if (Array.isArray(value)) value.forEach((item, i) => walk(item, `${at}.${i}`));
+        else if (value !== null && typeof value === 'object') {
+          objects.push(at);
+          for (const [key, item] of Object.entries(value)) walk(item, `${at}.${key}`);
+        }
+      };
+      walk(v, 'view');
+      expect(objects).toEqual(v.whole ? ['view', 'view.whole'] : ['view']);
+      if (!v.whole) continue;
+      expect(Object.keys(v.whole).sort()).toEqual(WHOLE_KEYS);
+      for (const row of [...v.whole.still, ...v.whole.table]) expect(row).toHaveLength(4);
+      for (const step of v.whole.steps) {
+        expect(step).toHaveLength(2);
+        for (const row of step[1]) expect(row).toHaveLength(4);
+      }
+      for (const row of v.whole.legend) expect(row).toHaveLength(3);
+      expect(v.whole.tallies).toHaveLength(3);
+      for (const row of v.whole.tallies) expect(row).toHaveLength(2);
+      expect(v.whole.floors.every((name) => typeof name === 'string')).toBe(true);
+    }
+  });
+
+  it('the flagged feed: every kind, the hidden ones too, flagged only, each with its own "at least", and only what the list draws', () => {
+    const [pt, gb] = busy().flagged_feed!;
     expect(view.flaggedFeed).toEqual([
       [
+        securityMapEntryKey(pt!),
         '2026-11-23T21:59:00+00:00',
-        SECURITY_EVENT_CATEGORIES.indexOf('phishing'),
         1,
+        true,
+        null,
         'sign_in_new_country',
-        'web',
         'PT',
         'Example Harbour',
-        1,
-        true,
-        null,
-        null,
-        3,
       ],
       [
+        securityMapEntryKey(gb!),
         '2026-11-23T03:20:00+00:00',
-        0,
-        1,
-        'sign_in_alerts_held',
-        'web',
-        'GB',
-        'Example Borough',
         4,
         true,
-        'a0478000-0000-4000-8000-000000000001',
-        'Example Academy',
-        1,
+        0,
+        'sign_in_alerts_held',
+        'GB',
+        'Example Borough',
       ],
     ]);
-    expect(view.feed.map((row) => row[8])).toEqual([false, true]);
+    // No organization and no source: the list draws neither, so neither leaves the server in it.
+    const sent = JSON.stringify(view.flaggedFeed);
+    expect(sent).not.toContain('a0478000-0000-4000-8000-000000000001');
+    expect(sent).not.toContain('Example Academy');
+    expect(sent).not.toContain('"web"');
+    // The plain feed draws them: there they stay.
+    expect(view.feed[1]?.slice(10)).toEqual([
+      'a0478000-0000-4000-8000-000000000001',
+      'Example Academy',
+      1,
+    ]);
+    expect(view.feed.map((row) => row[3])).toEqual([false, true]);
+  });
+
+  it('the last ten minutes: whether they hold events the live play cannot draw', () => {
+    // busy's newest entries have a country and come from the web: all drawn live.
+    expect(view.liveUndrawn).toBe(false);
+    const at = '2026-11-23T21:56:00+00:00';
+    const before = '2026-11-23T21:49:00+00:00';
+    const cases: Array<[string, Partial<SecurityMapAnswer>, boolean]> = [
+      ['no place', { feed: [entry({ minute: at, country: null, city: null })] }, true],
+      ['a flood', { feed: [entry({ minute: at, reason: 'over_minute_cap' })] }, true],
+      ['from the API', { feed: [entry({ minute: at, source: 'api' })] }, true],
+      [
+        'from the phone app',
+        { flagged_feed: [entry({ ...FLAGGED, minute: at, source: 'phone' })] },
+        true,
+      ],
+      ['before the last ten minutes', { feed: [entry({ minute: before, source: 'api' })] }, false],
+      [
+        'allowed, never drawn anyway',
+        { feed: [entry({ minute: at, outcome: 'allowed', country: null })] },
+        false,
+      ],
+      [
+        'a kind the map does not show',
+        { feed: [entry({ minute: at, category: 'phishing', source: 'api' })] },
+        false,
+      ],
+    ];
+    for (const [name, over, want] of cases) {
+      expect(whole(over).liveUndrawn, name).toBe(want);
+      expect(recent(over).liveUndrawn, `${name}, a poll`).toBe(want);
+    }
+    // A poll's numbers are of the last ten minutes alone: they count too.
+    expect(recent({ no_place: counts({ bots: { blocked: 3 } }) }).liveUndrawn).toBe(true);
+    expect(
+      recent({
+        late_sources: [{ source: 'api', category: 'exploit', outcome: 'blocked', events: 2 }],
+      }).liveUndrawn,
+    ).toBe(true);
+    expect(recent({ no_place: counts({ phishing: { flagged: 3 } }) }).liveUndrawn).toBe(false);
+    // A whole read's numbers are of the whole window: they say nothing of the last ten minutes.
+    expect(whole({ no_place: counts({ bots: { blocked: 3 } }) }).liveUndrawn).toBe(false);
   });
 
   it('the floors, the partial day count and the window read are carried as the database gives them', () => {
@@ -1017,55 +1181,56 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
     expect(
       readSecurityMapView({ ...view, whole: { ...view.whole, table: [['PT', phishing, 1, 1]] } }),
     ).toBeNull();
-    expect(
-      readSecurityMapView({
-        ...view,
-        feed: [
-          [
-            '2026-11-23T21:59:00+00:00',
-            phishing,
-            1,
-            'sign_in_new_country',
-            'web',
-            'PT',
-            null,
-            1,
-            true,
-            null,
-            null,
-            3,
-          ],
-        ],
-      }),
-    ).toBeNull();
-    const phishingFlagged: SecurityMapFeedRow = [
+    const phishingFeed: SecurityMapFeedRow = [
+      'k1',
       '2026-11-23T21:59:00+00:00',
+      1,
+      true,
       phishing,
       1,
       'sign_in_new_country',
       'web',
       'PT',
       null,
-      1,
-      true,
       null,
       null,
       3,
     ];
-    // In the flagged feed a hidden kind is read: the flagged sign-in alerts are listed.
-    expect(readSecurityMapView({ ...view, flaggedFeed: [phishingFlagged] })).not.toBeNull();
+    expect(readSecurityMapView({ ...view, feed: [phishingFeed] })).toBeNull();
     expect(
       readSecurityMapView({
         ...view,
-        flaggedFeed: [[...phishingFlagged.slice(0, 2), 0, ...phishingFlagged.slice(3)]],
+        feed: [[...phishingFeed.slice(0, 4), 0, ...phishingFeed.slice(5)]],
       }),
-    ).toBeNull();
-    expect(
-      readSecurityMapView({
-        ...view,
-        flaggedFeed: [[phishingFlagged[0], 9, ...phishingFlagged.slice(2)]],
-      }),
-    ).toBeNull();
+    ).not.toBeNull();
+    const hiddenFlagged: SecurityMapFlaggedRow = [
+      'k1',
+      '2026-11-23T21:59:00+00:00',
+      1,
+      true,
+      null,
+      'sign_in_new_country',
+      'PT',
+      null,
+    ];
+    // In the flagged feed a hidden kind is read, with no category: the flagged sign-in alerts are listed.
+    expect(readSecurityMapView({ ...view, flaggedFeed: [hiddenFlagged] })).not.toBeNull();
+    const flaggedBad: Array<[string, unknown[]]> = [
+      [
+        'a hidden kind by its place',
+        [...hiddenFlagged.slice(0, 4), phishing, ...hiddenFlagged.slice(5)],
+      ],
+      ['a kind that is not one', [...hiddenFlagged.slice(0, 4), 9, ...hiddenFlagged.slice(5)]],
+      ['a source beside it', [...hiddenFlagged, 'web']],
+      ['an organization beside it', [...hiddenFlagged, 'a0478000-0000-4000-8000-000000000001']],
+      ['an outcome in it', [...hiddenFlagged.slice(0, 4), 1, ...hiddenFlagged.slice(4)]],
+      ['a key that is not a key', ['<b>', ...hiddenFlagged.slice(1)]],
+      ['a key too long to be one', ['a'.repeat(12), ...hiddenFlagged.slice(1)]],
+      ['no key', hiddenFlagged.slice(1)],
+    ];
+    for (const [name, row] of flaggedBad) {
+      expect(readSecurityMapView({ ...view, flaggedFeed: [row] }), name).toBeNull();
+    }
   });
 
   it('anything else is not a view', () => {
@@ -1076,8 +1241,43 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       ['a version after', { ...view, v: 3 }],
       ['no flagged feed', { ...view, flaggedFeed: undefined }],
       [
-        'a blocked entry in the flagged feed',
-        { ...view, flaggedFeed: [[...(view.feed as unknown[][])[0]!]] },
+        'a plain feed row in the flagged feed',
+        { ...view, flaggedFeed: [(view.feed as unknown[][])[0]] },
+      ],
+      [
+        'a flagged row in the plain feed',
+        { ...view, feed: [(view.flaggedFeed as unknown[][])[0]] },
+      ],
+      ['no word on the undrawn', { ...view, liveUndrawn: undefined }],
+      ['the undrawn as text', { ...view, liveUndrawn: 'no' }],
+      [
+        'the tallies as the two sums of the version before',
+        { ...view, whole: { ...w, tallies: undefined, tallyEvents: 400, tallyRows: 1 } },
+      ],
+      [
+        'a number beside a tally whose number is not said',
+        { ...view, whole: { ...w, tallies: [['unrecorded_server_form_password', 25]] } },
+      ],
+      [
+        'no number beside the tally whose number is said',
+        { ...view, whole: { ...w, tallies: [['too_many_forms_to_count', null]] } },
+      ],
+      [
+        'one tally reason twice',
+        {
+          ...view,
+          whole: {
+            ...w,
+            tallies: [
+              ['too_many_forms_to_count', 1],
+              ['too_many_forms_to_count', 2],
+            ],
+          },
+        },
+      ],
+      [
+        'a tally of three parts',
+        { ...view, whole: { ...w, tallies: [['too_many_forms_to_count', 1, 1]] } },
       ],
       ['shortened as text', { ...view, shortened: 'no' }],
       ['no start asked for', { ...view, askedFrom: null }],
@@ -1108,7 +1308,7 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
       ['a legend of other categories', { ...view, whole: { ...w, legend: [[0, 1, 1]] } }],
       ['an empty step', { ...view, whole: { ...w, steps: [[0, []]] } }],
       [
-        'a feed row of the eleven parts of version 1',
+        'a feed row of the twelve parts of the build before, with no key',
         {
           ...view,
           feed: [
@@ -1121,6 +1321,7 @@ describe('readSecurityMapView: the browser reads what the server handed it', () 
               'US',
               null,
               1,
+              false,
               null,
               null,
               0,
@@ -1213,6 +1414,7 @@ describe('the playback plan', () => {
       steps: [],
       picture: [],
       cut: false,
+      liveUndrawn: false,
     });
     expect(planSecurityMapPlayback(null, null).mode).toBe('still');
     // Only a hidden category in the last ten minutes: nothing is live.
@@ -1251,6 +1453,22 @@ describe('the playback plan', () => {
     expect(planSecurityMapPlayback(whole(busy()), emptied).mode).toBe('replay');
     // A recent read alone can be live.
     expect(planSecurityMapPlayback(null, newer).mode).toBe('live');
+  });
+
+  it("the undrawn last ten minutes are the newest read's", () => {
+    const quiet = busy();
+    quiet.timeline = quiet.timeline?.filter((c) => c.bucket_seconds === 600);
+    const at = '2026-11-23T21:56:00+00:00';
+    const w = whole({ ...quiet, feed: [entry({ minute: at, source: 'api' })] });
+    expect(planSecurityMapPlayback(w, null).liveUndrawn).toBe(true);
+    // A newer poll with nothing undrawn says so, whatever the whole read held.
+    const newer = recent({ generated_at: '2026-11-23T22:00:30+00:00' });
+    expect(planSecurityMapPlayback(w, newer).liveUndrawn).toBe(false);
+    const undrawn = recent({
+      generated_at: '2026-11-23T22:00:30+00:00',
+      no_place: counts({ exploit: { blocked: 1 } }),
+    });
+    expect(planSecurityMapPlayback(whole(quiet), undrawn).liveUndrawn).toBe(true);
   });
 
   it('flagged is a different arc from blocked for the same country and category', () => {
@@ -1295,7 +1513,7 @@ describe('the kept feeds: a poll merged in by identity', () => {
     category: 'exploit',
   });
   const brief = (feed: { rows: readonly SecurityMapFeedRow[] }) =>
-    feed.rows.map((row) => [row[0], row[3], row[7]]);
+    feed.rows.map((row) => [row[1], row[6], row[2]]);
 
   it("a poll's entries join the kept list; an entry the poll does not carry stays", () => {
     const merged = securityMapMergeFeed(rows(kept, old), rows(newest), fromMs, 60);
@@ -1320,7 +1538,7 @@ describe('the kept feeds: a poll merged in by identity', () => {
       ['2026-11-23T21:55:00+00:00', 'wrong_password', 3],
     ]);
     const floor = entry({ minute: '2026-11-23T21:55:00+00:00', events: 3, at_least: true });
-    expect(securityMapMergeFeed(rows(grown), rows(floor), fromMs, 60).rows[0]?.[8]).toBe(true);
+    expect(securityMapMergeFeed(rows(grown), rows(floor), fromMs, 60).rows[0]?.[3]).toBe(true);
     // Another organization is another entry.
     const elsewhere = entry({ ...kept, organization_id: '5eed0000-0001-4000-8000-0000000000c9' });
     expect(securityMapMergeFeed(rows(kept), rows(elsewhere), fromMs, 60).rows).toHaveLength(2);
@@ -1340,8 +1558,8 @@ describe('the kept feeds: a poll merged in by identity', () => {
     const flagged = (list: SecurityMapFeedEntry[]) => whole({ flagged_feed: list }).flaggedFeed;
     const merged = securityMapMergeFeed(flagged(many), flagged([FLAGGED]), fromMs, 20);
     expect(merged.rows).toHaveLength(20);
-    expect(merged.rows[0]?.[0]).toBe(FLAGGED.minute);
-    expect(merged.rows.at(-1)?.[0]).toBe('2026-11-23T20:11:00+00:00');
+    expect(merged.rows[0]?.[1]).toBe(FLAGGED.minute);
+    expect(merged.rows.at(-1)?.[1]).toBe('2026-11-23T20:11:00+00:00');
     expect(merged.cut).toBe(true);
     expect(securityMapMergeFeed(flagged(many), [], fromMs, 20).cut).toBe(false);
   });
@@ -1375,7 +1593,7 @@ describe('the kept feeds: a poll merged in by identity', () => {
     // The kept list, polls merged in, is what is counted.
     const more = [
       ...rows,
-      [...rows[0]!.slice(0, 7), 1, ...rows[0]!.slice(8)] as unknown as SecurityMapFeedRow,
+      [...rows[0]!.slice(0, 2), 1, ...rows[0]!.slice(3)] as unknown as SecurityMapFlaggedRow,
     ];
     expect(securityMapFlaggedFeedLeavesOut(read(3), more)).toBe(false);
     // Entries fell past the cap of the kept list.
@@ -1422,14 +1640,53 @@ describe('the kept feeds: a poll merged in by identity', () => {
     }
   });
 
-  it("an entry's identity is its minute, kind, outcome, reason, source, place and organization", () => {
-    const [a] = whole({ feed: [entry()] }).feed;
-    const [b] = whole({
-      feed: [entry({ events: 99, at_least: true, organization_name: 'Other' })],
-    }).feed;
-    const [c] = whole({ feed: [entry({ city: 'Example Harbour' })] }).feed;
-    expect(securityMapFeedRowKey(a!)).toBe(securityMapFeedRowKey(b!));
-    expect(securityMapFeedRowKey(a!)).not.toBe(securityMapFeedRowKey(c!));
+  it("an entry's key is made on the server from its minute, kind, outcome, reason, source, place and organization", () => {
+    const key = securityMapEntryKey(entry());
+    expect(key).toMatch(/^[0-9a-z]{1,11}$/);
+    // Its count, its floor and the organization's name are not its identity.
+    expect(
+      securityMapEntryKey(entry({ events: 99, at_least: true, organization_name: 'Other' })),
+    ).toBe(key);
+    // The same minute written another way is the same minute.
+    expect(securityMapEntryKey(entry({ minute: '2026-11-23T21:58:00.000Z' }))).toBe(key);
+    const others: Array<Partial<SecurityMapFeedEntry>> = [
+      { minute: '2026-11-23T21:57:00+00:00' },
+      { category: 'bots' },
+      { outcome: 'flagged' },
+      { reason: 'wrong_code' },
+      { source: 'api' },
+      { country: 'GB' },
+      { country: null },
+      { city: 'Example Harbour' },
+      { city: null },
+      { organization_id: 'a0478000-0000-4000-8000-000000000001' },
+      { organization_id: 'a0478000-0000-4000-8000-000000000002' },
+    ];
+    const keys = new Set([key, ...others.map((over) => securityMapEntryKey(entry(over)))]);
+    expect(keys.size).toBe(others.length + 1);
+    // One entry has one key in both feeds, and the key is the one thing the browser keeps it by.
+    const both = whole({ feed: [FLAGGED], flagged_feed: [FLAGGED] });
+    expect(both.feed[0]?.[0]).toBe(both.flaggedFeed[0]?.[0]);
+    expect(both.feed[0]?.[0]).toBe(securityMapEntryKey(FLAGGED));
+    // It never holds the organization's id, whatever the id is.
+    const id = 'a0478000-0000-4000-8000-000000000001';
+    expect(securityMapEntryKey(entry({ organization_id: id }))).not.toContain(id.slice(0, 8));
+  });
+
+  it('the flagged list merges by the key alone, like the feed', () => {
+    const flagged = (list: SecurityMapFeedEntry[]) => whole({ flagged_feed: list }).flaggedFeed;
+    const one = entry({ ...FLAGGED, events: 1 });
+    const grownFlagged = entry({ ...FLAGGED, events: 5 });
+    const elsewhere = entry({
+      ...FLAGGED,
+      organization_id: 'a0478000-0000-4000-8000-000000000001',
+    });
+    const merged = securityMapMergeFeed(flagged([one]), flagged([grownFlagged]), fromMs, 20);
+    expect(merged.rows.map((row) => row[2])).toEqual([5]);
+    // Another organization: two entries, though the rows show nothing that tells them apart but the key.
+    const two = securityMapMergeFeed(flagged([one]), flagged([elsewhere]), fromMs, 20);
+    expect(two.rows).toHaveLength(2);
+    expect(new Set(two.rows.map((row) => row[0])).size).toBe(2);
   });
 });
 
@@ -1438,6 +1695,29 @@ describe('polling and when the play stops', () => {
     expect([0, 1, 2, 3, 50].map(securityMapNextPollDelay)).toEqual([
       30_000, 60_000, 120_000, 120_000, 120_000,
     ]);
+  });
+
+  it('a failed read of the whole window waits 2, 4, 8, then 10 minutes for the next; a good one, 5', () => {
+    expect([0, 1, 2, 3, 4, 5, 50].map(securityMapNextWholeDelay)).toEqual([
+      300_000, 120_000, 240_000, 480_000, 600_000, 600_000, 600_000,
+    ]);
+    expect(securityMapNextWholeDelay(-1)).toBe(300_000);
+  });
+
+  it('a read with no answer by the limit stops the play at once, and is a failure like any other', () => {
+    expect(SECURITY_MAP_READ_LIMIT_MS).toBe(20_000);
+    const good = securityMapHealthAfter(SECURITY_MAP_HEALTH_AT_START, 'ok', 1000);
+    const timedOut = securityMapHealthAfter(good, 'timed_out', 21_000);
+    expect(timedOut).toEqual({
+      failures: SECURITY_MAP_FAILED_POLLS_BEFORE_STOP,
+      lastGoodAt: 1000,
+      refused: false,
+    });
+    expect(state({ health: timedOut })).toBe('not_updating');
+    // Past the stop already, it counts on.
+    expect(securityMapHealthAfter({ ...timedOut, failures: 5 }, 'timed_out', 1).failures).toBe(6);
+    // A good read after it clears it.
+    expect(securityMapHealthAfter(timedOut, 'ok', 30_000).failures).toBe(0);
   });
 
   it('health: a good read clears the failures and is remembered; a refusal is a failure too', () => {
@@ -1662,8 +1942,22 @@ describe('the words', () => {
     const q = whole(quiet);
     const replay = planSecurityMapPlayback(q, null);
     expect(securityMapModeWords(replay, q, 0, 'UTC')).toBe(
-      'Replay of the last 24 hours: nothing in the last 10 minutes. Now showing 03:00 to 04:00, your time. Hours with nothing to draw are skipped.',
+      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Now showing 03:00 to 04:00, your time. Hours with nothing to draw are skipped.',
     );
+    // Events of the last ten minutes the live play cannot draw: said, never "nothing".
+    const api = whole({
+      ...quiet,
+      feed: [entry({ minute: '2026-11-23T21:56:00+00:00', source: 'api', country: null })],
+    });
+    expect(securityMapModeWords(planSecurityMapPlayback(api, null), api, 0, 'UTC')).toBe(
+      'Replay of the last 24 hours. Nothing to draw from the last 10 minutes. Events of the last 10 minutes without a place, or from the phone app and the API, are counted in the numbers, but the live play does not draw them. Now showing 03:00 to 04:00, your time. Hours with nothing to draw are skipped.',
+    );
+    for (const words of [
+      securityMapModeWords(replay, q, 0),
+      securityMapModeWords(planSecurityMapPlayback(api, null), api, 0),
+    ]) {
+      expect(words).not.toMatch(/nothing in the last 10 minutes/i);
+    }
     expect(securityMapModeWords(replay, q, 1, 'America/Los_Angeles')).toContain(
       'Now showing 13:00 to 14:00, your time.',
     );
@@ -1721,7 +2015,7 @@ describe('the words', () => {
       '36 events in a flood: place not listed.',
       '2 events were allowed. Allowed events are counted here and never drawn.',
       'Events from the phone app and direct callers are left out of the live play: some of them are added up to about seven hours late, with a country only. They are in the totals and the replay. In the last 24 hours: 5 such events so far.',
-      "An hour's refused sign-ins could not all be counted: 400 requests were counted. That number is in no total here.",
+      'Refused sign-in requests that could not all be counted one by one: 400 requests were counted together. That number can repeat requests already counted elsewhere, so it is in no total here.',
       'A sign-in is recorded once in each organization of the account, and the record cannot tell one account from another. So it is counted as the fewest sign-ins its rows can stand for, and a number that holds one says "at least".',
     ]);
     // With no floor, no "at least" and no line about floors.
@@ -1795,6 +2089,39 @@ describe('the words', () => {
     expect(one.some((line) => line.includes('1 such event so far.'))).toBe(true);
   });
 
+  it('the tallies: one line per reason, each in its own words; a number only for the one that counts requests', () => {
+    const notes = securityMapNotes(whole({ tallies: THREE_TALLIES }), 'UTC');
+    expect(notes).toEqual([
+      SECURITY_MAP_WORDS.tallyTooManyForms(400),
+      SECURITY_MAP_WORDS.tallyUnrecordedCode,
+      SECURITY_MAP_WORDS.tallyUnrecordedPassword,
+    ]);
+    // Never the sum of two reasons, and no number at all beside the two that can repeat other rows.
+    expect(notes.join(' ')).not.toMatch(/429|425|404|29\b|25|\b4\b/);
+    for (const words of [
+      SECURITY_MAP_WORDS.tallyUnrecordedPassword,
+      SECURITY_MAP_WORDS.tallyUnrecordedCode,
+      SECURITY_MAP_WORDS.tallyOther,
+    ]) {
+      expect(words).not.toMatch(/\d/);
+      expect(words).toMatch(/could not all be counted/);
+    }
+    expect(SECURITY_MAP_WORDS.tallyTooManyForms(1)).toContain('1 request was counted together.');
+    // Each line is that reason's own.
+    expect(securityMapTallyWords('unrecorded_server_form_password', null)).toMatch(
+      /^Refused sign-ins /,
+    );
+    expect(securityMapTallyWords('unrecorded_server_form_code', null)).toMatch(
+      /^Refused authenticator codes /,
+    );
+    // A reason this build does not know: a plain line, no number, never its code.
+    expect(securityMapTallyWords('some_new_tally', null)).toBe(SECURITY_MAP_WORDS.tallyOther);
+    // Only the unrecorded password reason: its own words, never the hour's count's.
+    expect(securityMapNotes(whole({ tallies: [THREE_TALLIES[2]!] }), 'UTC')).toEqual([
+      SECURITY_MAP_WORDS.tallyUnrecordedPassword,
+    ]);
+  });
+
   it('a hidden kind that is not a flagged sign-in alert is counted as "other"', () => {
     const notes = securityMapNotes(
       whole({ totals: counts({ phishing: { flagged: 2, blocked: 1 }, malware: { blocked: 4 } }) }),
@@ -1839,7 +2166,11 @@ describe('the words', () => {
       'Totals and table as of 22:00, your time. They are counted again every 5 minutes; the live play and the feed every 30 seconds.',
     );
     expect(securityMapAsOfWords(null)).toBe(
-      'The totals could not be read. They are read again every 5 minutes.',
+      "The day's picture is incomplete: the totals and the table could not be read. They are tried again within 10 minutes.",
+    );
+    // The newest whole read failed: the totals are those read before, and the page says so.
+    expect(securityMapAsOfWords(whole(), 'UTC', true)).toBe(
+      'Totals and table as of 22:00, your time. The newest count could not be read, so these may be out of date; it is tried again within 10 minutes. The live play and the feed are read every 30 seconds.',
     );
   });
 
@@ -1866,83 +2197,88 @@ describe('the words', () => {
       organizationName: 'Example Academy',
       organizationWords: null,
     });
-    const folded = securityMapFeedWords([
-      '2026-11-23T21:59:00+00:00',
-      0,
-      1,
-      'sign_in_alerts_held',
-      'phone',
-      'PT',
-      'Example Harbour',
-      1,
-      true,
-      null,
-      null,
-      3,
-    ]);
+    const one = (over: Partial<SecurityMapFeedEntry>) =>
+      securityMapFeedWords(whole({ feed: [entry(over)] }).feed[0]!);
+    const folded = one({
+      outcome: 'flagged',
+      reason: 'sign_in_alerts_held',
+      source: 'phone',
+      country: 'PT',
+      city: 'Example Harbour',
+      events: 1,
+      at_least: true,
+      organizations: 3,
+    });
     expect(folded.organizationWords).toBe('3 organizations');
     expect(folded.count).toBe('at least 1');
-    const flood = securityMapFeedWords([
-      '2026-11-23T21:59:00+00:00',
-      2,
-      0,
-      'over_minute_cap',
-      'web',
-      'US',
-      'Example Falls',
-      30,
-      false,
-      null,
-      null,
-      0,
-    ]);
+    expect(folded.source).toBe('phone');
+    const flood = one({ category: 'bots', reason: 'over_minute_cap', events: 30 });
     expect(flood).toMatchObject({ flood: true, country: null, city: null, count: '30' });
     // Two entries of one minute that differ only by organization have different keys.
-    const a = securityMapFeedWords([
-      '2026-11-23T21:59:00+00:00',
-      0,
-      0,
-      'wrong_password',
-      'web',
-      'US',
-      null,
-      1,
-      false,
-      'a0478000-0000-4000-8000-000000000001',
-      'One',
-      1,
-    ]);
-    const b = securityMapFeedWords([
-      '2026-11-23T21:59:00+00:00',
-      0,
-      0,
-      'wrong_password',
-      'web',
-      'US',
-      null,
-      1,
-      false,
-      'a0478000-0000-4000-8000-000000000002',
-      'Two',
-      1,
-    ]);
+    const a = one({
+      organization_id: 'a0478000-0000-4000-8000-000000000001',
+      organization_name: 'One',
+      organizations: 1,
+    });
+    const b = one({
+      organization_id: 'a0478000-0000-4000-8000-000000000002',
+      organization_name: 'Two',
+      organizations: 1,
+    });
+    expect(a).toMatchObject({
+      organizationId: 'a0478000-0000-4000-8000-000000000001',
+      organizationName: 'One',
+    });
     // A folded count is said as the database marks it, not guessed from the reason.
-    const exact = securityMapFeedWords([
-      '2026-11-23T21:59:00+00:00',
-      0,
-      1,
-      'sign_in_alerts_held',
-      'web',
-      'GB',
-      null,
-      4,
-      false,
-      null,
-      null,
-      1,
-    ]);
+    const exact = one({ outcome: 'flagged', reason: 'sign_in_alerts_held', events: 4 });
     expect(exact.count).toBe('4');
     expect(a.key).not.toBe(b.key);
+    expect(a.key).toBe(
+      securityMapEntryKey(entry({ organization_id: 'a0478000-0000-4000-8000-000000000001' })),
+    );
+  });
+
+  it('a flagged entry: time, place, count and its plain name, and nothing else', () => {
+    const view = whole(busy());
+    const [pt, gb] = view.flaggedFeed.map(securityMapFlaggedWords);
+    expect(pt).toEqual({
+      key: securityMapEntryKey(busy().flagged_feed![0]!),
+      time: '21:59 UTC',
+      category: null,
+      what: 'Sign-in from a new country',
+      country: 'PT',
+      city: 'Example Harbour',
+      flood: false,
+      count: 'at least 1',
+    });
+    expect(gb).toMatchObject({
+      category: 'password_guessing',
+      what: 'Sign-in alerts held after too many in one day',
+      count: 'at least 4',
+    });
+    const flood = securityMapFlaggedWords([
+      'k1',
+      '2026-11-23T21:59:00+00:00',
+      7,
+      false,
+      2,
+      'over_minute_cap',
+      'US',
+      'Example Falls',
+    ]);
+    expect(flood).toMatchObject({ flood: true, country: null, city: null, count: '7' });
+    expect(
+      securityMapFlaggedWords([
+        'k1',
+        '2026-11-23T21:59:00+00:00',
+        1,
+        false,
+        null,
+        'sign_in_from_the_moon',
+        null,
+        null,
+      ]).what,
+    ).toBe(SECURITY_MAP_FLAGGED_UNKNOWN_REASON);
   });
 
   it('the table: one row per country and category, blocked beside flagged, the largest first', () => {

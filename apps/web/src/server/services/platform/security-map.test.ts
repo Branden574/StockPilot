@@ -240,7 +240,7 @@ describe('the read', () => {
     expect(awaited[0]?.args[1]?.[0]).toBe(timeout.mock.results[0]?.value);
   });
 
-  it("hands back core's view, not the database's document: a hidden category never leaves the server", async () => {
+  it("hands back core's view, not the database's document: a hidden category is in no drawing and no plain feed", async () => {
     const result = await readPlatformSecurityMap({ scope: 'whole', dayStart: null }, NOW);
     if (!result.ok || result.view === null) throw new Error('expected a view');
     expect(readSecurityMapView(JSON.parse(JSON.stringify(result.view)))).toEqual(result.view);
@@ -255,6 +255,53 @@ describe('the read', () => {
     // Counted in words: one flagged sign-in alert that is not drawn.
     expect(result.view.whole?.notDrawnSignInAlerts).toBe(1);
     expect(result.view.whole?.flagged).toBe(1);
+  });
+
+  it('the flagged list carries no organization and no source, in a whole read and a poll; the plain feed only what it draws', async () => {
+    const ORG_ID = 'a0478000-0000-4000-8000-0000000000aa';
+    const ORG_NAME = 'Example Quiet Academy';
+    const alert = feedEntry({
+      category: 'phishing',
+      outcome: 'flagged',
+      reason: 'sign_in_new_country',
+      source: 'api',
+      country: 'PT',
+      city: 'Example Harbour',
+      events: 1,
+      at_least: true,
+      organization_id: ORG_ID,
+      organization_name: ORG_NAME,
+      organizations: 1,
+    });
+    const held = {
+      ...FLAGGED_ENTRY,
+      organization_id: ORG_ID,
+      organization_name: ORG_NAME,
+      organizations: 1,
+    };
+    answer = {
+      data: mapAnswer({ feed: [feedEntry(), held], flagged_feed: [alert, held] }),
+      error: null,
+    };
+    for (const scope of ['whole', 'recent'] as const) {
+      const result = await readPlatformSecurityMap({ scope, dayStart: null }, NOW);
+      if (!result.ok || result.view === null) throw new Error('expected a view');
+      const flagged = JSON.stringify(result.view.flaggedFeed);
+      expect(result.view.flaggedFeed, scope).toHaveLength(2);
+      expect(flagged).not.toContain(ORG_ID);
+      expect(flagged).not.toContain(ORG_NAME);
+      expect(flagged).not.toMatch(/"(api|web|phone|server)"/);
+      for (const row of result.view.flaggedFeed) expect(row).toHaveLength(8);
+      // The hidden kind's alert: no category at all, and its organization nowhere in the answer.
+      expect(result.view.flaggedFeed[0]?.[4]).toBeNull();
+      // The plain feed draws the organization of an entry of a shown kind: its name, and its id for the link.
+      expect(result.view.feed.map((row) => row.slice(10, 12))).toEqual([
+        [null, null],
+        [ORG_ID, ORG_NAME],
+      ]);
+      // Both lists keep an entry by the key made here, the same for the same entry.
+      expect(result.view.feed[1]?.[0]).toBe(result.view.flaggedFeed[1]?.[0]);
+    }
   });
 
   it('a window the database would not read is said, not shown as an empty map', async () => {

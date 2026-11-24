@@ -46,6 +46,7 @@ const plan = (mode: SecurityMapPlan['mode']): SecurityMapPlan => ({
   steps: mode === 'replay' ? steps : [],
   picture: mode === 'live' ? live : mode === 'replay' ? picture : [],
   cut: false,
+  liveUndrawn: false,
 });
 
 describe('how a category looks', () => {

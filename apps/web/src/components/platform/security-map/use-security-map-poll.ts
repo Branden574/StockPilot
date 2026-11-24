@@ -12,6 +12,7 @@ import {
   securityMapMergeFeed,
   securityMapWindowStartNow,
   type SecurityMapFeedRow,
+  type SecurityMapFlaggedRow,
   type SecurityMapHealth,
   type SecurityMapPlan,
   type SecurityMapRefusal,
@@ -46,10 +47,11 @@ export interface SecurityMapPollState {
   recent: SecurityMapView | null;
   /**
    * The two feeds as kept: the newest whole read's, with every poll since
-   * merged in by entry identity. A new read of the whole window starts them again.
+   * merged in by the key the server made from each entry's identity. A new
+   * read of the whole window starts them again.
    */
   feed: readonly SecurityMapFeedRow[];
-  flaggedFeed: readonly SecurityMapFeedRow[];
+  flaggedFeed: readonly SecurityMapFlaggedRow[];
   /** Flagged entries fell off the kept list's end behind newer ones. */
   flaggedCut: boolean;
   health: SecurityMapHealth;

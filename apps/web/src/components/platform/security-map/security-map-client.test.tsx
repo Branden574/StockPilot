@@ -601,7 +601,7 @@ describe('a window the database shortened', () => {
     expect(screen.getByText('Flagged, last 3 hours 52 minutes')).toBeInTheDocument();
     expect(screen.queryByText('Blocked, last 24 hours')).toBeNull();
     expect(screen.getByTestId('security-map-mode').textContent).toMatch(
-      /^Replay of the last 3 hours 52 minutes:/,
+      /^Replay of the last 3 hours 52 minutes\. Nothing to draw from the last 10 minutes\./,
     );
   });
 
@@ -970,7 +970,7 @@ describe('the replay', () => {
     mount(async () => new Promise(() => {}));
     const label = () => screen.getByTestId('security-map-mode').textContent;
     expect(label()).toMatch(
-      /^Replay of the last 24 hours: nothing in the last 10 minutes\. Now showing/,
+      /^Replay of the last 24 hours\. Nothing to draw from the last 10 minutes\. Now showing/,
     );
     const first = label();
     const firstArcs = (lastGlobe().arcs as unknown[]).length;

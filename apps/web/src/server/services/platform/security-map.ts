@@ -51,7 +51,10 @@ import {
  * 770 KB; the view of the whole window is at most about 90 KB and the view of
  * the last ten minutes at most about 40 KB (security-map.test.ts in core
  * measures both), and far less on any ordinary day. A category the map does
- * not show never leaves the server.
+ * not show is in no drawing, no table and no plain feed; its flagged entries
+ * are in the flagged list with no category, and its other events are numbers
+ * for one line of words. The flagged list carries no organization and no
+ * source, and every entry's identity is a key core makes here.
  */
 
 /** How long the read may take before the page gives up on it. */

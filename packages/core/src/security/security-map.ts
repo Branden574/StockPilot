@@ -625,22 +625,68 @@ export type SecurityMapArcRow = readonly [
   events: number,
 ];
 
-/** One feed entry as it travels. The outcome: 0 blocked, 1 flagged, 2 allowed. */
-export type SecurityMapFeedRow = readonly [
+/**
+ * The four parts every kept entry starts with, in both feeds: its key (made
+ * on the server from the entry's identity, securityMapEntryKey), its
+ * minute, its count, and whether the count is a floor ("at least").
+ */
+export type SecurityMapKeptRow = readonly [
+  key: string,
   minute: string,
+  events: number,
+  atLeast: boolean,
+  ...rest: unknown[],
+];
+
+/**
+ * One entry of the plain feed as it travels: every part is drawn. The
+ * outcome: 0 blocked, 1 flagged, 2 allowed. The organization's id is there
+ * for the entry's "Open organization" link, its name for the entry's
+ * Organization line (design VERSION 2, V2.3: the reader is the platform
+ * administrator).
+ */
+export type SecurityMapFeedRow = readonly [
+  key: string,
+  minute: string,
+  events: number,
+  /** The count is a floor: "at least". */
+  atLeast: boolean,
   category: number,
   outcome: 0 | 1 | 2,
   reason: string,
   source: string,
   country: string | null,
   city: string | null,
-  events: number,
-  /** The count is a floor: "at least". */
-  atLeast: boolean,
   organizationId: string | null,
   organizationName: string | null,
   organizations: number,
 ];
+
+/**
+ * One entry of the flagged list as it travels: what the list draws and
+ * nothing else. Always flagged, so no outcome; no source and no
+ * organization, which the list never shows. The category is its place in
+ * SECURITY_EVENT_CATEGORIES when the map shows that kind (its mark's colour),
+ * and null for a kind the map does not show (a neutral mark): such a kind's
+ * name never leaves the server.
+ */
+export type SecurityMapFlaggedRow = readonly [
+  key: string,
+  minute: string,
+  events: number,
+  atLeast: boolean,
+  category: number | null,
+  reason: string,
+  country: string | null,
+  city: string | null,
+];
+
+/**
+ * One tally reason of the window: its code and, only for the reason whose
+ * number the page says, the requests it counted. The page writes one line
+ * per reason and never adds two together (contract VERSION 2, "tallies").
+ */
+export type SecurityMapTallyRow = readonly [reason: string, counted: number | null];
 
 /** One hour of the replay that holds events: where it starts, and its arcs. */
 export type SecurityMapStepRow = readonly [fromMs: number, arcs: readonly SecurityMapArcRow[]];
@@ -681,9 +727,8 @@ export interface SecurityMapWholeView {
   flood: number;
   /** Events of the window from the late sources. */
   late: number;
-  /** The tally rows: requests that were counted, and how many rows say so. In no total. */
-  tallyEvents: number;
-  tallyRows: number;
+  /** The tally reasons of the window, one row each, in the answer's order. In no total. */
+  tallies: readonly SecurityMapTallyRow[];
   /** Events of the categories the map does not show. */
   notDrawnSignInAlerts: number;
   notDrawnOther: number;
@@ -706,9 +751,15 @@ export interface SecurityMapView {
   live: readonly SecurityMapArcRow[];
   /** More than 40 were live, or the database cut the timeline. */
   liveCut: boolean;
+  /**
+   * The last ten minutes hold blocked or flagged events of a shown kind that
+   * the live play cannot draw: no place, a flood, or from the phone app or
+   * the API (the late sources, which the 60-second cells leave out).
+   */
+  liveUndrawn: boolean;
   feed: readonly SecurityMapFeedRow[];
   /** The newest flagged entries, at most 20. */
-  flaggedFeed: readonly SecurityMapFeedRow[];
+  flaggedFeed: readonly SecurityMapFlaggedRow[];
   whole: SecurityMapWholeView | null;
 }
 
@@ -767,16 +818,61 @@ const sumCounts = (
     0,
   );
 
+/** A key is at most 11 characters: 53 bits in base 36. */
+const ENTRY_KEY_RE = /^[0-9a-z]{1,11}$/;
+
 /**
- * The database's answer cut down to what the page draws and says.
+ * A short opaque key for one feed entry, made on the server from the
+ * entry's identity as the contract defines it (minute, category, outcome,
+ * reason, source, country, city, organization). The browser keeps entries
+ * across reads by it, so the flagged list needs neither the source nor the
+ * organization to tell two entries apart. It is a plain hash (53 bits,
+ * cyrb53), not a secret: it hides nothing from someone who already holds
+ * every field it is made of. Two entries of one list sharing a key does not
+ * arise in practice at 53 bits.
+ */
+export function securityMapEntryKey(entry: SecurityMapFeedEntry): string {
+  const identity = JSON.stringify([
+    Date.parse(entry.minute),
+    entry.category,
+    entry.outcome,
+    entry.reason,
+    entry.source,
+    entry.country,
+    entry.city,
+    entry.organization_id,
+  ]);
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < identity.length; i++) {
+    const ch = identity.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** The one tally reason whose number the page says: a count of requests. The others say none. */
+const TALLY_NUMBER_SAID = 'too_many_forms_to_count';
+
+/**
+ * The database's answer cut down to what the page draws and says, and
+ * nothing more (the rule for this page: nothing leaves the server that the
+ * page does not draw, or need for a link it draws).
  *
- * A category that is not shown is taken out of every list here (the arcs, the
- * table, the legend, the feed), so nothing downstream can draw it; its events
- * are two numbers for one line of words. `recent` (a read of the last ten
- * minutes, a poll: the database gives it no 10-minute cells and no groups by
- * country) keeps the live arcs and the two feeds only: its totals are ten
- * minutes' worth and must never stand in for the window's. Cells of two
- * answers are never added together (contract VERSION 2, "timeline").
+ * A category that is not shown is taken out of every drawing and list here
+ * (the arcs, the table, the legend, the plain feed), so nothing downstream
+ * can draw it; its events are two numbers for one line of words. Its
+ * flagged entries are in the flagged list, with no category: a neutral mark
+ * and the reason's own words. `recent` (a read of the last ten minutes, a
+ * poll: the database gives it no 10-minute cells and no groups by country)
+ * keeps the live arcs and the two feeds only: its totals are ten minutes'
+ * worth and must never stand in for the window's. Cells of two answers are
+ * never added together (contract VERSION 2, "timeline").
  */
 export function securityMapViewOf(
   answer: SecurityMapAnswer,
@@ -790,26 +886,52 @@ export function securityMapViewOf(
   // The plain feed holds the shown kinds only. The flagged feed holds every
   // kind: the flagged sign-in alerts are real events even though their
   // category is not drawn, and the flagged list is there for them.
-  const feedRows = (
-    entries: readonly SecurityMapFeedEntry[],
-    every = false,
-  ): SecurityMapFeedRow[] =>
-    entries
-      .filter((entry) => every || shown.includes(entry.category))
-      .map((e) => [
-        e.minute,
-        categoryIndex(e.category),
-        OUTCOMES.indexOf(e.outcome) as 0 | 1 | 2,
-        e.reason,
-        e.source,
-        e.country,
-        e.city,
-        e.events,
-        e.at_least,
-        e.organization_id,
-        e.organization_name,
-        e.organizations,
-      ]);
+  const feed: SecurityMapFeedRow[] = answer.feed
+    .filter((e) => shown.includes(e.category))
+    .map((e) => [
+      securityMapEntryKey(e),
+      e.minute,
+      e.events,
+      e.at_least,
+      categoryIndex(e.category),
+      OUTCOMES.indexOf(e.outcome) as 0 | 1 | 2,
+      e.reason,
+      e.source,
+      e.country,
+      e.city,
+      e.organization_id,
+      e.organization_name,
+      e.organizations,
+    ]);
+  const flaggedFeed: SecurityMapFlaggedRow[] = answer.flagged_feed
+    .filter((e) => e.outcome === 'flagged')
+    .map((e) => [
+      securityMapEntryKey(e),
+      e.minute,
+      e.events,
+      e.at_least,
+      shown.includes(e.category) ? categoryIndex(e.category) : null,
+      e.reason,
+      e.country,
+      e.city,
+    ]);
+  // What the last ten minutes hold that the live play cannot draw. Every read
+  // looks at its feeds' entries of those minutes; a poll's numbers are of
+  // those minutes alone, so a poll looks at them too.
+  const liveFromMs = Date.parse(answer.window.live_from);
+  const undrawn = (e: SecurityMapFeedEntry): boolean =>
+    shown.includes(e.category) &&
+    e.outcome !== 'allowed' &&
+    Date.parse(e.minute) >= liveFromMs &&
+    (e.country === null || isSecurityMapFloodReason(e.reason) || isSecurityMapLateSource(e.source));
+  const liveUndrawn =
+    answer.feed.some(undrawn) ||
+    answer.flagged_feed.some(undrawn) ||
+    (scope === 'recent' &&
+      (sumCounts(answer.no_place, shown, DRAWN) > 0 ||
+        answer.late_sources.some(
+          (row) => shown.includes(row.category) && row.outcome !== 'allowed' && row.events > 0,
+        )));
   const view: SecurityMapView = {
     v: 2,
     scope,
@@ -821,8 +943,9 @@ export function securityMapViewOf(
     generatedAt: answer.generated_at,
     live: liveRows.slice(0, SECURITY_MAP_MAX_ARCS),
     liveCut: liveRows.length > SECURITY_MAP_MAX_ARCS || answer.timeline_truncated,
-    feed: feedRows(answer.feed),
-    flaggedFeed: feedRows(answer.flagged_feed, true),
+    liveUndrawn,
+    feed,
+    flaggedFeed,
     whole: null,
   };
   if (scope === 'recent') return view;
@@ -879,12 +1002,28 @@ export function securityMapViewOf(
     noPlace: sumCounts(answer.no_place, shown, DRAWN),
     flood: sumEvents(drawnFlood),
     late: sumEvents(answer.late_sources),
-    tallyEvents: sumEvents(answer.tallies),
-    tallyRows: answer.tallies.reduce((sum, row) => sum + row.rows, 0),
+    tallies: tallyRows(answer.tallies),
     notDrawnSignInAlerts: signInAlerts,
     notDrawnOther: sumCounts(answer.totals, hidden, OUTCOMES) - signInAlerts,
   };
   return view;
+}
+
+/**
+ * The tally reasons, one row each, in the order they come: the requests a
+ * reason counted are added up over its rows (its hours) and never across two
+ * reasons. Only the reason whose number the page says carries one.
+ */
+function tallyRows(tallies: SecurityMapAnswer['tallies']): SecurityMapTallyRow[] {
+  const byReason = new Map<string, number>();
+  for (const row of tallies) {
+    if (row.rows <= 0) continue;
+    byReason.set(row.reason, (byReason.get(row.reason) ?? 0) + row.events);
+  }
+  return [...byReason].map(([reason, events]) => [
+    reason,
+    reason === TALLY_NUMBER_SAID ? events : null,
+  ]);
 }
 
 /* ─────────────── the view, read again where it arrives ─────────────── */
@@ -901,36 +1040,72 @@ const isArcRow = (v: unknown, shownIndexes: readonly number[]): v is SecurityMap
 const isArcList = (v: unknown, max: number, shownIndexes: readonly number[]): boolean =>
   Array.isArray(v) && v.length <= max && v.every((row) => isArcRow(row, shownIndexes));
 
+/** The four parts both feeds' rows start with. */
+const isKeptHead = (key: unknown, minute: unknown, events: unknown, atLeast: unknown): boolean =>
+  typeof key === 'string' &&
+  ENTRY_KEY_RE.test(key) &&
+  isTime(minute) &&
+  isCount(events) &&
+  typeof atLeast === 'boolean';
+
+const isPlace = (country: unknown, city: unknown): boolean =>
+  (country === null || isCountry(country)) &&
+  (city === null || textWithin(city, SECURITY_MAP_CITY_MAX));
+
 function isFeedRow(v: unknown, shownIndexes: readonly number[]): v is SecurityMapFeedRow {
-  if (!Array.isArray(v) || v.length !== 12) return false;
+  if (!Array.isArray(v) || v.length !== 13) return false;
   const [
+    key,
     minute,
+    events,
+    atLeast,
     category,
     outcome,
     reason,
     source,
     country,
     city,
-    events,
-    atLeast,
     id,
     name,
     orgs,
   ] = v as unknown[];
   return (
-    isTime(minute) &&
+    isKeptHead(key, minute, events, atLeast) &&
     shownIndexes.includes(category as number) &&
     (outcome === 0 || outcome === 1 || outcome === 2) &&
     isReason(reason) &&
     includes(SECURITY_EVENT_SOURCES, source) &&
-    (country === null || isCountry(country)) &&
-    (city === null || textWithin(city, SECURITY_MAP_CITY_MAX)) &&
-    isCount(events) &&
-    typeof atLeast === 'boolean' &&
+    isPlace(country, city) &&
     (id === null || isUuid(id)) &&
     (name === null || textWithin(name, SECURITY_MAP_ORGANIZATION_NAME_MAX)) &&
     isCount(orgs)
   );
+}
+
+/** A flagged list's row: eight parts, a shown kind's place or null, and nothing else. */
+function isFlaggedRow(v: unknown, shownIndexes: readonly number[]): v is SecurityMapFlaggedRow {
+  if (!Array.isArray(v) || v.length !== 8) return false;
+  const [key, minute, events, atLeast, category, reason, country, city] = v as unknown[];
+  return (
+    isKeptHead(key, minute, events, atLeast) &&
+    (category === null || shownIndexes.includes(category as number)) &&
+    isReason(reason) &&
+    isPlace(country, city)
+  );
+}
+
+/** The tally rows: a reason each, never twice; a number only beside the reason whose number is said. */
+function isTallyList(v: unknown): v is readonly SecurityMapTallyRow[] {
+  if (!Array.isArray(v) || v.length > SECURITY_MAP_MAX_COUNTED_ROWS) return false;
+  const seen = new Set<string>();
+  for (const row of v as unknown[]) {
+    if (!Array.isArray(row) || row.length !== 2 || !isReason(row[0])) return false;
+    const reason = row[0] as string;
+    if (seen.has(reason)) return false;
+    seen.add(reason);
+    if (reason === TALLY_NUMBER_SAID ? !isCount(row[1]) : row[1] !== null) return false;
+  }
+  return true;
 }
 
 const WHOLE_KEYS = [
@@ -952,8 +1127,7 @@ const WHOLE_KEYS = [
   'noPlace',
   'flood',
   'late',
-  'tallyEvents',
-  'tallyRows',
+  'tallies',
   'notDrawnSignInAlerts',
   'notDrawnOther',
 ] as const;
@@ -967,12 +1141,11 @@ function isWholeView(v: unknown, shownIndexes: readonly number[]): v is Security
     'noPlace',
     'flood',
     'late',
-    'tallyEvents',
-    'tallyRows',
     'notDrawnSignInAlerts',
     'notDrawnOther',
   ] as const;
   if (!counts.every((key) => isCount(v[key]))) return false;
+  if (!isTallyList(v.tallies)) return false;
   if (typeof v.tableCut !== 'boolean' || typeof v.drawingCut !== 'boolean') return false;
   if (typeof v.blockedSinceDayStartPartial !== 'boolean' || typeof v.lateFloor !== 'boolean') {
     return false;
@@ -1030,6 +1203,7 @@ export function readSecurityMapView(
     'generatedAt',
     'live',
     'liveCut',
+    'liveUndrawn',
     'feed',
     'flaggedFeed',
     'whole',
@@ -1039,7 +1213,9 @@ export function readSecurityMapView(
   for (const key of ['from', 'to', 'liveFrom', 'askedFrom', 'generatedAt'] as const) {
     if (!isTime(raw[key])) return null;
   }
-  if (typeof raw.liveCut !== 'boolean' || typeof raw.shortened !== 'boolean') return null;
+  for (const key of ['liveCut', 'liveUndrawn', 'shortened'] as const) {
+    if (typeof raw[key] !== 'boolean') return null;
+  }
   const shownIndexes = shown.map(categoryIndex);
   if (!isArcList(raw.live, SECURITY_MAP_MAX_ARCS, shownIndexes)) return null;
   if (!Array.isArray(raw.feed) || raw.feed.length > SECURITY_MAP_MAX_FEED) return null;
@@ -1047,9 +1223,8 @@ export function readSecurityMapView(
   if (!Array.isArray(raw.flaggedFeed) || raw.flaggedFeed.length > SECURITY_MAP_MAX_FLAGGED_FEED) {
     return null;
   }
-  // Every kind may be in the flagged feed (a flagged sign-in alert of a kind the map does not draw).
-  const everyIndex = SECURITY_EVENT_CATEGORIES.map((_, i) => i);
-  if (!(raw.flaggedFeed as unknown[]).every((row) => isFeedRow(row, everyIndex) && row[2] === 1)) {
+  // A kind the map does not draw is in the flagged feed with no category at all.
+  if (!(raw.flaggedFeed as unknown[]).every((row) => isFlaggedRow(row, shownIndexes))) {
     return null;
   }
   if (raw.scope === 'recent' ? raw.whole !== null : !isWholeView(raw.whole, shownIndexes)) {
@@ -1157,6 +1332,8 @@ export interface SecurityMapPlan {
   picture: SecurityMapArc[];
   /** Something was left out of the drawing; the page says so. */
   cut: boolean;
+  /** The newest read's last ten minutes hold events the live play cannot draw (its `liveUndrawn`). */
+  liveUndrawn: boolean;
 }
 
 /** How long one hour of the replay stays on the map. */
@@ -1181,8 +1358,16 @@ export function planSecurityMapPlayback(
       ? recent
       : whole;
   const live = (newest?.live ?? []).slice(0, SECURITY_MAP_MAX_ARCS).map(securityMapArcOf);
+  const liveUndrawn = newest?.liveUndrawn ?? false;
   if (live.length > 0) {
-    return { mode: 'live', live, steps: [], picture: live, cut: newest?.liveCut ?? false };
+    return {
+      mode: 'live',
+      live,
+      steps: [],
+      picture: live,
+      cut: newest?.liveCut ?? false,
+      liveUndrawn,
+    };
   }
   const steps: SecurityMapReplayStep[] = (whole?.whole.steps ?? []).map(([fromMs, rows]) => ({
     fromMs,
@@ -1196,35 +1381,25 @@ export function planSecurityMapPlayback(
       steps,
       picture: whole.whole.still.slice(0, SECURITY_MAP_MAX_ARCS).map(securityMapArcOf),
       cut: whole.whole.drawingCut,
+      liveUndrawn,
     };
   }
-  return { mode: 'still', live: [], steps: [], picture: [], cut: false };
-}
-
-/**
- * An entry's identity, as the contract defines an entry: its minute,
- * category, outcome, reason, source, country, city and organization.
- */
-export function securityMapFeedRowKey(row: SecurityMapFeedRow): string {
-  const [minute, c, o, reason, source, country, city, , , id] = row;
-  return [Date.parse(minute), c, o, reason, source, country ?? '', city ?? '', id ?? ''].join('|');
+  return { mode: 'still', live: [], steps: [], picture: [], cut: false, liveUndrawn };
 }
 
 const MINUTE_MS = 60_000;
 
-/** Newest first: the latest minute, inside a minute the largest count, then by identity. */
-function feedOrder(a: SecurityMapFeedRow, b: SecurityMapFeedRow): number {
-  const byTime = Date.parse(b[0]) - Date.parse(a[0]);
+/** Newest first: the latest minute, inside a minute the largest count, then by key. */
+function feedOrder(a: SecurityMapKeptRow, b: SecurityMapKeptRow): number {
+  const byTime = Date.parse(b[1]) - Date.parse(a[1]);
   if (byTime !== 0) return byTime;
-  if (b[7] !== a[7]) return b[7] - a[7];
-  const ka = securityMapFeedRowKey(a);
-  const kb = securityMapFeedRowKey(b);
-  return ka < kb ? -1 : ka > kb ? 1 : 0;
+  if (b[2] !== a[2]) return b[2] - a[2];
+  return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
 }
 
 /** A list of entries kept across reads, and whether entries fell past its cap. */
-export interface SecurityMapKeptFeed {
-  rows: SecurityMapFeedRow[];
+export interface SecurityMapKeptFeed<R extends SecurityMapKeptRow = SecurityMapFeedRow> {
+  rows: R[];
   /** Entries fell off the end, behind newer ones: the list leaves some out. */
   cut: boolean;
 }
@@ -1240,20 +1415,19 @@ export interface SecurityMapKeptFeed {
  * falls past `max` behind newer ones (`cut` then says so), or when the whole
  * window is read again (the caller starts a new list from that read).
  */
-export function securityMapMergeFeed(
-  kept: readonly SecurityMapFeedRow[],
-  incoming: readonly SecurityMapFeedRow[],
+export function securityMapMergeFeed<R extends SecurityMapKeptRow>(
+  kept: readonly R[],
+  incoming: readonly R[],
   fromMs: number,
   max: number,
-): SecurityMapKeptFeed {
-  const byKey = new Map<string, SecurityMapFeedRow>();
-  for (const row of kept) byKey.set(securityMapFeedRowKey(row), row);
+): SecurityMapKeptFeed<R> {
+  const byKey = new Map<string, R>();
+  for (const row of kept) byKey.set(row[0], row);
   for (const row of incoming) {
-    const key = securityMapFeedRowKey(row);
-    const was = byKey.get(key);
-    if (!was || row[7] >= was[7]) byKey.set(key, row);
+    const was = byKey.get(row[0]);
+    if (!was || row[2] >= was[2]) byKey.set(row[0], row);
   }
-  const inWindow = [...byKey.values()].filter((row) => Date.parse(row[0]) + MINUTE_MS > fromMs);
+  const inWindow = [...byKey.values()].filter((row) => Date.parse(row[1]) + MINUTE_MS > fromMs);
   inWindow.sort(feedOrder);
   return { rows: inWindow.slice(0, max), cut: inWindow.length > max };
 }
@@ -1278,11 +1452,11 @@ export function securityMapWindowStartNow(
  */
 export function securityMapFlaggedFeedLeavesOut(
   whole: SecurityMapWholeRead | null,
-  rows: readonly SecurityMapFeedRow[],
+  rows: readonly SecurityMapFlaggedRow[],
 ): boolean {
   if (!whole) return false;
   let listed = 0;
-  for (const row of rows) listed += row[7];
+  for (const row of rows) listed += row[2];
   return listed < whole.whole.flagged;
 }
 
@@ -1292,7 +1466,7 @@ export function securityMapFlaggedFeedLeavesOut(
  */
 export function securityMapFlaggedListWords(
   whole: SecurityMapWholeRead | null,
-  rows: readonly SecurityMapFeedRow[],
+  rows: readonly SecurityMapFlaggedRow[],
   cut: boolean,
 ): string | null {
   if (!whole) {
@@ -1328,6 +1502,15 @@ export const SECURITY_MAP_WHOLE_POLL_MS = 5 * 60_000;
 /** After this many failed reads in a row the page says it is not updating, and the play stops. */
 export const SECURITY_MAP_FAILED_POLLS_BEFORE_STOP = 2;
 const BACK_OFF_MAX_MS = 120_000;
+/**
+ * The browser's own limit on one read (review S1): a read with no answer by
+ * then is counted out, the page says it is not updating, and an answer that
+ * comes later is ignored. The server gives up on the database after 6 s.
+ */
+export const SECURITY_MAP_READ_LIMIT_MS = 20_000;
+/** After a failed read of the whole window the next waits 2, 4, 8, then 10 minutes (review S2). */
+const WHOLE_BACK_OFF_FIRST_MS = 2 * 60_000;
+const WHOLE_BACK_OFF_MAX_MS = 10 * 60_000;
 
 export interface SecurityMapHealth {
   /** Failed reads in a row. */
@@ -1344,17 +1527,26 @@ export const SECURITY_MAP_HEALTH_AT_START: SecurityMapHealth = Object.freeze({
   refused: false,
 });
 
-export type SecurityMapPollOutcome = 'ok' | 'failed' | 'refused';
+export type SecurityMapPollOutcome = 'ok' | 'failed' | 'refused' | 'timed_out';
 
-/** The health after one read. A refusal is also a failure: the page backs off and stops. */
+/**
+ * The health after one read. A refusal is also a failure: the page backs off
+ * and stops. A read that never answered within SECURITY_MAP_READ_LIMIT_MS
+ * stops the play at once: whatever is on the map is older than the page can
+ * vouch for.
+ */
 export function securityMapHealthAfter(
   health: SecurityMapHealth,
   outcome: SecurityMapPollOutcome,
   nowMs: number,
 ): SecurityMapHealth {
   if (outcome === 'ok') return { failures: 0, lastGoodAt: nowMs, refused: false };
+  const failures = health.failures + 1;
   return {
-    failures: health.failures + 1,
+    failures:
+      outcome === 'timed_out'
+        ? Math.max(failures, SECURITY_MAP_FAILED_POLLS_BEFORE_STOP)
+        : failures,
     lastGoodAt: health.lastGoodAt,
     refused: outcome === 'refused',
   };
@@ -1364,6 +1556,17 @@ export function securityMapHealthAfter(
 export function securityMapNextPollDelay(failures: number): number {
   const doubled = SECURITY_MAP_RECENT_POLL_MS * 2 ** Math.max(0, Math.min(failures, 8));
   return Math.min(BACK_OFF_MAX_MS, doubled);
+}
+
+/**
+ * How long after the last ATTEMPT to read the whole window the next may be
+ * sent: 5 minutes when it succeeded; after failures in a row 2, 4, 8, then
+ * 10 minutes. The reads of the last ten minutes go on in between.
+ */
+export function securityMapNextWholeDelay(wholeFailures: number): number {
+  if (!(wholeFailures > 0)) return SECURITY_MAP_WHOLE_POLL_MS;
+  const doubled = WHOLE_BACK_OFF_FIRST_MS * 2 ** Math.min(wholeFailures - 1, 8);
+  return Math.min(WHOLE_BACK_OFF_MAX_MS, doubled);
 }
 
 export type SecurityMapStopReason =
@@ -1597,7 +1800,8 @@ export function securityMapModeWords(
     const hour = step
       ? ` Now showing ${securityMapClock(step.fromMs, timeZone)} to ${securityMapClock(step.toMs, timeZone)}, your time.`
       : '';
-    return `Replay of the ${window}: nothing in the last 10 minutes.${hour} Hours with nothing to draw are skipped.`;
+    const undrawn = plan.liveUndrawn ? ` ${SECURITY_MAP_WORDS.liveUndrawn}` : '';
+    return `Replay of the ${window}. ${SECURITY_MAP_WORDS.liveNothingToDraw}${undrawn}${hour} Hours with nothing to draw are skipped.`;
   }
   return whole
     ? `Nothing to play: no event of the ${window} has a place on the map.`
@@ -1711,11 +1915,7 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
       `Events from the phone app and direct callers are left out of the live play: some of them are added up to about seven hours late, with a country only. They are in the totals and the replay. In the ${window}: ${securityMapCountWords(w.late, w.lateFloor)} such ${plural(w.late, 'event', 'events')} so far.`,
     );
   }
-  if (w.tallyRows > 0) {
-    notes.push(
-      `An hour's refused sign-ins could not all be counted: ${num(w.tallyEvents)} ${plural(w.tallyEvents, 'request was', 'requests were')} counted. That number is in no total here.`,
-    );
-  }
+  for (const [reason, counted] of w.tallies) notes.push(securityMapTallyWords(reason, counted));
   if (w.drawingCut) {
     notes.push(
       'More happened than the map can draw: the largest counts are drawn and the rest are left out of the drawing.',
@@ -1739,6 +1939,22 @@ export function securityMapNotes(whole: SecurityMapWholeRead, timeZone?: string)
   return notes;
 }
 
+/**
+ * One tally reason's line, in its own words (SECURITY_MAP_WORDS). Only the
+ * reason whose number is a count of requests says a number; the two whose
+ * number can repeat other rows say that some could not all be counted, and
+ * no number. Never a sum across reasons.
+ */
+export function securityMapTallyWords(reason: string, counted: number | null): string {
+  if (reason === TALLY_NUMBER_SAID && counted !== null) {
+    return SECURITY_MAP_WORDS.tallyTooManyForms(counted);
+  }
+  if (reason === 'unrecorded_server_form_password')
+    return SECURITY_MAP_WORDS.tallyUnrecordedPassword;
+  if (reason === 'unrecorded_server_form_code') return SECURITY_MAP_WORDS.tallyUnrecordedCode;
+  return SECURITY_MAP_WORDS.tallyOther;
+}
+
 /** The words where the map and the table have nothing to show. Null when they have. */
 export function securityMapEmptyWords(whole: SecurityMapWholeRead | null): string | null {
   if (!whole) return null;
@@ -1758,9 +1974,14 @@ export function securityMapEmptyWords(whole: SecurityMapWholeRead | null): strin
 export function securityMapAsOfWords(
   whole: SecurityMapWholeRead | null,
   timeZone?: string,
+  /** The newest read of the whole window failed: the next waits longer (review S2). */
+  retrying = false,
 ): string {
-  if (!whole) return 'The totals could not be read. They are read again every 5 minutes.';
-  return `Totals and table as of ${securityMapClock(whole.generatedAt, timeZone)}, your time. They are counted again every 5 minutes; the live play and the feed every 30 seconds.`;
+  if (!whole) return SECURITY_MAP_WORDS.wholeUnread;
+  const at = `Totals and table as of ${securityMapClock(whole.generatedAt, timeZone)}, your time.`;
+  return retrying
+    ? `${at} ${SECURITY_MAP_WORDS.wholeRetrying}`
+    : `${at} They are counted again every 5 minutes; the live play and the feed every 30 seconds.`;
 }
 
 export interface SecurityMapFeedWords {
@@ -1800,13 +2021,26 @@ export function securityMapOutcomeWords(outcome: SecurityEventOutcome): string {
 
 /** One feed entry's facts, ready to show. The reason's own words come from securityEventReasonLabel. */
 export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWords {
-  const [minute, c, o, reason, source, country, city, events, atLeast, id, name, organizations] =
-    row;
+  const [
+    key,
+    minute,
+    events,
+    atLeast,
+    c,
+    o,
+    reason,
+    source,
+    country,
+    city,
+    id,
+    name,
+    organizations,
+  ] = row;
   const category = SECURITY_EVENT_CATEGORIES[c] as SecurityEventCategory;
   const outcome = OUTCOMES[o] as SecurityEventOutcome;
   const flood = isSecurityMapFloodReason(reason);
   return {
-    key: securityMapFeedRowKey(row),
+    key,
     time: `${securityMapClock(minute, 'UTC')} UTC`,
     category,
     categoryLabel: securityEventCategoryLabel(category),
@@ -1826,6 +2060,42 @@ export function securityMapFeedWords(row: SecurityMapFeedRow): SecurityMapFeedWo
         : organizations > 1
           ? `${num(organizations)} organizations`
           : 'No organization',
+  };
+}
+
+export interface SecurityMapFlaggedWords {
+  /** The key the server made, stable for an entry across reads. */
+  key: string;
+  /** "21:58 UTC". */
+  time: string;
+  /** The kind, when the map shows it (its mark's colour); null for a kind it does not (a neutral mark). */
+  category: SecurityEventCategory | null;
+  /** What it was, in its own plain words; a neutral name for a code this build does not know. */
+  what: string;
+  country: string | null;
+  city: string | null;
+  /** True for a row that stands for events past a cap: it has no place to show. */
+  flood: boolean;
+  /** "at least 2" or "11". */
+  count: string;
+}
+
+/** One flagged entry's facts, ready to show: time, place, count, and its plain name. Nothing else. */
+export function securityMapFlaggedWords(row: SecurityMapFlaggedRow): SecurityMapFlaggedWords {
+  const [key, minute, events, atLeast, c, reason, country, city] = row;
+  const flood = isSecurityMapFloodReason(reason);
+  return {
+    key,
+    time: `${securityMapClock(minute, 'UTC')} UTC`,
+    category:
+      c === null
+        ? null
+        : ((SECURITY_EVENT_CATEGORIES[c] as SecurityEventCategory | undefined) ?? null),
+    what: securityMapFlaggedReasonWords(reason),
+    country: flood ? null : country,
+    city: flood ? null : city,
+    flood,
+    count: securityMapCountWords(events, atLeast),
   };
 }
 
@@ -1901,6 +2171,21 @@ export const SECURITY_MAP_WORDS = {
   flaggedFeedNoneListed: 'None listed, though this window holds flagged events.',
   flaggedFeedUnread:
     'The whole window could not be read: only entries of the last ten minutes are listed.',
+  liveNothingToDraw: 'Nothing to draw from the last 10 minutes.',
+  liveUndrawn:
+    'Events of the last 10 minutes without a place, or from the phone app and the API, are counted in the numbers, but the live play does not draw them.',
+  tallyTooManyForms: (counted: number): string =>
+    `Refused sign-in requests that could not all be counted one by one: ${num(counted)} ${plural(counted, 'request was', 'requests were')} counted together. That number can repeat requests already counted elsewhere, so it is in no total here.`,
+  tallyUnrecordedPassword:
+    "Refused sign-ins in our server's form could not all be counted: our server has no record of some of them. No number is given for them, and they are in no total here.",
+  tallyUnrecordedCode:
+    "Refused authenticator codes in our server's form could not all be counted: our server has no record of some of them. No number is given for them, and they are in no total here.",
+  tallyOther:
+    'Some other refused requests could not all be counted. No number is given for them, and they are in no total here.',
+  wholeUnread:
+    "The day's picture is incomplete: the totals and the table could not be read. They are tried again within 10 minutes.",
+  wholeRetrying:
+    'The newest count could not be read, so these may be out of date; it is tried again within 10 minutes. The live play and the feed are read every 30 seconds.',
   tableTitle: 'By country',
   tableNote:
     'The same numbers as the map, in full. A country is where a request came from, which can be a relay.',

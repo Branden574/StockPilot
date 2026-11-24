@@ -12,11 +12,11 @@ import {
   securityEventReasonLabel,
   securityEventSourceLabel,
   securityMapFeedWords,
-  securityMapFlaggedReasonWords,
+  securityMapFlaggedWords,
   securityMapTableRows,
   type SecurityMapCounter,
   type SecurityMapFeedRow,
-  type SecurityMapFeedWords,
+  type SecurityMapFlaggedRow,
   type SecurityMapLegendItem,
   type SecurityMapWholeRead,
 } from '@stockpilot/core';
@@ -155,7 +155,7 @@ export function SecurityMapNotes({ lines }: { lines: readonly string[] }) {
 }
 
 /** Where an entry came from: city and country, or why there is no place. Nothing else. */
-function placeOf(w: SecurityMapFeedWords): string {
+function placeOf(w: { flood: boolean; country: string | null; city: string | null }): string {
   if (w.flood) return SECURITY_MAP_WORDS.placeFlood;
   if (w.country === null) return SECURITY_MAP_WORDS.placeUnknown;
   return w.city ? `${w.city}, ${countryName(w.country)}` : countryName(w.country);
@@ -252,7 +252,7 @@ export function SecurityMapFeedList({
       ) : (
         <ul className="border-border bg-card max-h-[34rem] overflow-y-auto rounded-lg border">
           {rows.map((row) => (
-            <FeedEntry key={securityMapFeedWords(row).key} row={row} />
+            <FeedEntry key={row[0]} row={row} />
           ))}
         </ul>
       )}
@@ -267,13 +267,15 @@ export function SecurityMapFeedList({
  * and is named by its reason only, never by its kind. Each with the mark a
  * flagged arc starts from (hollow), its time, what it was in plain words,
  * where it came from (city and country only) and how many. No organization,
- * no source and no kind's name here.
+ * no source and no kind's name here: the rows carry none of them (core's
+ * SecurityMapFlaggedRow), and a kind the map does not show comes with no
+ * category at all.
  */
 export function SecurityMapFlaggedList({
   rows,
   words,
 }: {
-  rows: readonly SecurityMapFeedRow[];
+  rows: readonly SecurityMapFlaggedRow[];
   /** Core's line for what the list leaves out, or why it is empty; null when it says it all. */
   words: string | null;
 }) {
@@ -298,7 +300,7 @@ export function SecurityMapFlaggedList({
       {rows.length === 0 ? null : (
         <ol className="max-h-[30rem] min-w-0 overflow-y-auto">
           {rows.map((row) => {
-            const w = securityMapFeedWords(row);
+            const w = securityMapFlaggedWords(row);
             const look = flaggedLookOf(w.category);
             return (
               <li
@@ -310,9 +312,7 @@ export function SecurityMapFlaggedList({
                   <CategoryMark shape={look.shape} colour={look.hex} hollow />
                 </span>
                 <span className="flex min-w-0 flex-col">
-                  <span className="text-foreground min-w-0 [overflow-wrap:anywhere]">
-                    {securityMapFlaggedReasonWords(w.reason)}
-                  </span>
+                  <span className="text-foreground min-w-0 [overflow-wrap:anywhere]">{w.what}</span>
                   <span className="text-muted-foreground min-w-0 [overflow-wrap:anywhere]">
                     {placeOf(w)}
                   </span>
