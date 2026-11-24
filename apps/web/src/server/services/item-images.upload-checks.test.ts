@@ -33,10 +33,13 @@ vi.mock('./context', async (importOriginal) => {
   return { ...actual, assertPermission: vi.fn() };
 });
 
-import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { ITEM_IMAGE_MAX_BYTES } from '@/lib/upload-size-limits';
 import { recordSecurityEvent } from '@/server/security/events';
-import { UPLOAD_TOO_LARGE_MESSAGE, UPLOAD_WRONG_TYPE_MESSAGE } from '@/server/security/upload-checks';
+import {
+  UPLOAD_REFUSED_MESSAGE,
+  UPLOAD_TOO_LARGE_MESSAGE,
+  UPLOAD_WRONG_TYPE_MESSAGE,
+} from '@/server/security/upload-checks';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 import {
   expectOneRefusal,
@@ -122,7 +125,7 @@ describe('item photo finalize', () => {
 
   it.each([
     ['a web page called a photo', HTML_PAGE, 'upload_wrong_type', UPLOAD_WRONG_TYPE_MESSAGE],
-    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file', THREAT_MESSAGES.appended_payload],
+    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file', UPLOAD_REFUSED_MESSAGE],
   ])('the master is %s: both removed, no row, a plain sentence, one event', async (_what, body, reason, sentence) => {
     const { stub, svc, remove } = world({ [MASTER]: body, [THUMB]: TINY_PNG });
     await expect(svc.record(ITEM, MASTER, true, { thumbPath: THUMB })).rejects.toMatchObject({
@@ -137,7 +140,7 @@ describe('item photo finalize', () => {
   it('the thumbnail is an archive after a picture: both removed, no row, one event', async () => {
     const { stub, svc, remove } = world({ [MASTER]: TINY_JPEG, [THUMB]: PNG_WITH_ARCHIVE });
     await expect(svc.record(ITEM, MASTER, true, { thumbPath: THUMB })).rejects.toMatchObject({
-      message: THREAT_MESSAGES.appended_payload,
+      message: UPLOAD_REFUSED_MESSAGE,
     });
     expect(remove).toHaveBeenCalledWith([MASTER, THUMB]);
     expect(stub.chains.has('item_images.insert')).toBe(false);

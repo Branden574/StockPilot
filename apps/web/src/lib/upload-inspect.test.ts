@@ -2,7 +2,6 @@ import { deflateRawSync, deflateSync } from 'node:zlib';
 
 import { describe, expect, it } from 'vitest';
 
-import { THREAT_MESSAGES } from './document-threat-scan';
 import {
   FAMILY_OF_THREAT,
   inspectOfficeContainer,
@@ -220,7 +219,16 @@ describe('inspectUpload: the scanner verdicts, by family', () => {
   });
 
   it('every scanner verdict has one family, and could-not-check covers the three bounds', () => {
-    expect(Object.keys(FAMILY_OF_THREAT).sort()).toEqual(Object.keys(THREAT_MESSAGES).sort());
+    expect(Object.keys(FAMILY_OF_THREAT).sort()).toEqual([
+      'appended_payload',
+      'pdf_embedded_file',
+      'pdf_encrypted',
+      'pdf_javascript',
+      'pdf_launch_action',
+      'pdf_rich_media',
+      'pdf_scan_limit',
+      'scan_budget',
+    ]);
     expect(FAMILY_OF_THREAT.scan_budget).toBe('could_not_check');
     expect(FAMILY_OF_THREAT.pdf_scan_limit).toBe('could_not_check');
     expect(FAMILY_OF_THREAT.pdf_encrypted).toBe('could_not_check');

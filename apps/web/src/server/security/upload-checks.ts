@@ -2,7 +2,6 @@ import 'server-only';
 
 import { headers as currentHeaders } from 'next/headers';
 
-import { THREAT_MESSAGES, type DocumentThreatCode } from '@/lib/document-threat-scan';
 import { sniffNeedsMoreBytes } from '@/lib/image-signature';
 import {
   fetchObjectWhole,
@@ -16,7 +15,6 @@ import {
   type UploadInspection,
   type UploadInspectOptions,
   type UploadKind,
-  type UploadRefusalCode,
   type UploadRefusalFamily,
 } from '@/lib/upload-inspect';
 
@@ -32,7 +30,9 @@ import { recordSecurityEvent, type SecurityEventHeaders } from './events';
  * through a finalize, is read here by the app's own file checks
  * (lib/upload-inspect.ts: the sniffers, the scanner, the container and text
  * rules). On a refusal this module records ONE security event and hands back
- * the plain sentence for the person:
+ * one of three plain sentences for the person (refused by our checks, could
+ * not be checked, not a kind of file this place takes), none of which says
+ * what the check looks for (lab walk 5, F3):
  *   - category malware, outcome blocked;
  *   - the reason is the verdict's family, one of four, each written out as a
  *     literal below: upload_wrong_type, upload_active_content,
@@ -98,7 +98,11 @@ export interface UploadCheckInput extends UploadInspectOptions {
   organizationId: string | null;
   /** The request's headers, when the caller has them; else the request's own are read. */
   headers?: SecurityEventHeaders | null;
-  /** The path's own sentence for a file of the wrong type, as it always answered. */
+  /**
+   * The path's own sentence for a file that is not a kind it takes, as it
+   * always answered. Only for that: a sentence for any other refusal is one
+   * of this module's three.
+   */
   wrongTypeMessage?: string;
   /**
    * Set only for a file no person sent (a cover picture the server fetched
@@ -111,22 +115,32 @@ export type UploadCheckResult =
   | { ok: true; kind: UploadKind; mime: string; width: number | null; height: number | null }
   | { ok: false; family: UploadRefusalFamily; message: string };
 
-/** The sentence for a file of the wrong type when a path has none of its own. */
-export const UPLOAD_WRONG_TYPE_MESSAGE =
-  'This file could not be uploaded because it failed our security checks.';
+/*
+ * THE SENTENCES A PERSON IS TOLD (lab walk 5, F3). Three, and none says what
+ * the check looks for, so none helps anyone shape a file until it passes:
+ * which rule refused a file stays in the security event's reason, for admins
+ * and the console. Each says what to do next.
+ */
 
-/** A Word or Excel file with a part that can run code. Says what to do, not what was looked at. */
-export const UPLOAD_OFFICE_MACRO_MESSAGE =
-  'This file contains macros or controls that run code, which we do not accept. Save a copy without them and upload that.';
+/** A file our checks refused (something inside it, or something hidden after it). */
+export const UPLOAD_REFUSED_MESSAGE =
+  'This file did not pass our checks, so it was not added. Try exporting or saving the file again, or send it another way.';
+
+/**
+ * A file that could not be checked: the check could not finish it, or
+ * storage did not answer in time. Refused; the person is told to try again.
+ */
+export const UPLOAD_NOT_CHECKED_MESSAGE =
+  'We could not check this file, so it was not added. Try again in a moment. If it happens again, save a new copy of the file (for a PDF, use Print to PDF) and upload that.';
+
+/** A file that is not a kind this place takes, when a path has no sentence of its own for that. */
+export const UPLOAD_WRONG_TYPE_MESSAGE = 'This kind of file cannot be added here. Choose a different file.';
 
 /** The sentence for a refusal of a family, for this path. */
-function messageFor(code: UploadRefusalCode, family: UploadRefusalFamily, input: UploadCheckInput): string {
-  if (Object.prototype.hasOwnProperty.call(THREAT_MESSAGES, code)) {
-    return THREAT_MESSAGES[code as DocumentThreatCode];
-  }
-  if (code === 'office_macro') return UPLOAD_OFFICE_MACRO_MESSAGE;
-  if (family === 'could_not_check') return THREAT_MESSAGES.scan_budget;
-  return input.wrongTypeMessage ?? UPLOAD_WRONG_TYPE_MESSAGE;
+function messageFor(family: UploadRefusalFamily, input: UploadCheckInput): string {
+  if (family === 'wrong_type') return input.wrongTypeMessage ?? UPLOAD_WRONG_TYPE_MESSAGE;
+  if (family === 'could_not_check') return UPLOAD_NOT_CHECKED_MESSAGE;
+  return UPLOAD_REFUSED_MESSAGE;
 }
 
 async function headersOfThisRequest(): Promise<SecurityEventHeaders | null> {
@@ -202,7 +216,7 @@ function judged(inspection: UploadInspection, input: UploadCheckInput): UploadCh
   return {
     ok: false,
     family: inspection.family,
-    message: messageFor(inspection.code, inspection.family, input),
+    message: messageFor(inspection.family, input),
   };
 }
 
@@ -302,14 +316,6 @@ export interface StoredUploadInput extends UploadCheckInput {
 
 /** The sentence for an object over its path's ceiling, when the path has none of its own. */
 export const UPLOAD_TOO_LARGE_MESSAGE = 'This file is too large to upload. Pick a smaller one.';
-
-/**
- * The sentence for a file that could not be checked (lab walk 5): a storage
- * read past its time limit, or a file the check could not finish. Refused;
- * the person is told to try again.
- */
-export const UPLOAD_NOT_CHECKED_MESSAGE =
-  'We could not check this file just now, so it was not added. Try again in a moment. If it happens again, save a new copy of the file and upload that.';
 
 /** The sentence for an empty file (lab walk 5, F1): refused from its size, at once. */
 export const UPLOAD_EMPTY_MESSAGE = 'This file is empty. Choose the file again and upload it.';
@@ -507,7 +513,7 @@ async function refuseStored(
   return {
     ok: false,
     family: inspection.family,
-    message: messageFor(inspection.code, inspection.family, input),
+    message: messageFor(inspection.family, input),
   };
 }
 

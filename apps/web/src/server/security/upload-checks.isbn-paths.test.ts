@@ -49,10 +49,9 @@ vi.mock('@/lib/books/isbn-ai-extract', () => ({
 }));
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { recordSecurityEvent } from '@/server/security/events';
-import { UPLOAD_OFFICE_MACRO_MESSAGE } from '@/server/security/upload-checks';
+import { UPLOAD_REFUSED_MESSAGE } from '@/server/security/upload-checks';
 
 import { POST as textPass } from '@/app/api/books/extract-isbns/route';
 import { POST as aiPass } from '@/app/api/books/extract-isbns-ai/route';
@@ -105,8 +104,8 @@ describe('the text pass', () => {
 
   it.each([
     ['a web page called a PDF', 'pdf', 'application/pdf', HTML_PAGE, 'upload_wrong_type', 'This file is not a PDF we can read. Save it as a PDF and upload it again.'],
-    ['a PDF with a script name in it', 'pdf', 'application/pdf', PDF_WITH_SCRIPT, 'upload_active_content', THREAT_MESSAGES.pdf_javascript],
-    ['a Word file with a macro part', 'docx', DOCX, DOCX_WITH_MACRO_PART, 'upload_active_content', UPLOAD_OFFICE_MACRO_MESSAGE],
+    ['a PDF with a script name in it', 'pdf', 'application/pdf', PDF_WITH_SCRIPT, 'upload_active_content', UPLOAD_REFUSED_MESSAGE],
+    ['a Word file with a macro part', 'docx', DOCX, DOCX_WITH_MACRO_PART, 'upload_active_content', UPLOAD_REFUSED_MESSAGE],
     ['an Excel file called a Word file', 'docx', DOCX, TINY_XLSX, 'upload_wrong_type', 'This file is not a Word document we can read. Save it as .docx and upload it again.'],
     ['a binary file called a CSV', 'csv', 'text/csv', Uint8Array.from([0x00, 0x01, 0x02, 0x03]), 'upload_wrong_type', 'This file is not plain text. Save it as CSV or TXT and upload it again.'],
   ])('%s: 400 with a plain sentence, never parsed, one event without the name', async (_what, ext, type, bytes, reason, sentence) => {

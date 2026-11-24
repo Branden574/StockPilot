@@ -158,7 +158,6 @@ export async function POST(
     accept: ['png', 'jpeg', 'webp'],
     organizationId: ctx.organizationId,
     headers: req.headers,
-    wrongTypeMessage: 'This file could not be uploaded because it failed our security checks.',
   });
   if (!checkedPhoto.ok) {
     return NextResponse.json(

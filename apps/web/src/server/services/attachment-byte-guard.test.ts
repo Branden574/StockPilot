@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
+import { scanDocumentBytes } from '@/lib/document-threat-scan';
 import { recordSecurityEvent } from '@/server/security/events';
+import { UPLOAD_REFUSED_MESSAGE, UPLOAD_WRONG_TYPE_MESSAGE } from '@/server/security/upload-checks';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 // ---------------------------------------------------------------------------
@@ -237,7 +238,7 @@ describe('OrderAttachmentsService.add — finalize byte guard', () => {
     armStorage(PE);
     const { svc } = orderSvc();
     const err = await svc.add(base).catch((e: unknown) => e);
-    expect((err as ServiceError).message).toMatch(/failed our security checks/i);
+    expect((err as ServiceError).message).toBe(UPLOAD_WRONG_TYPE_MESSAGE);
     expect((err as ServiceError).message).not.toMatch(/magic|signature|MZ|sniff/i);
   });
 });
@@ -306,7 +307,7 @@ describe('finalize byte guard — whole-object scan', () => {
     expect((err as ServiceError).code).toBe('validation_error');
     // The SPECIFIC message: the uploader is a manager holding a real invoice,
     // and this one names the problem and the way out.
-    expect((err as ServiceError).message).toBe(THREAT_MESSAGES.pdf_launch_action);
+    expect((err as ServiceError).message).toBe(UPLOAD_REFUSED_MESSAGE);
     // The re-read actually happened, against the same object.
     expect(fetchObjectWholeMock).toHaveBeenCalledWith(expect.anything(), poInput().storagePath, LAUNCH_PDF.byteLength);
     // No row, and the bytes do not survive the rejection.
@@ -382,7 +383,7 @@ describe('finalize byte guard — whole-object scan', () => {
       })
       .catch((e: unknown) => e);
 
-    expect((err as ServiceError).message).toBe(THREAT_MESSAGES.pdf_launch_action);
+    expect((err as ServiceError).message).toBe(UPLOAD_REFUSED_MESSAGE);
     expect(fetchObjectWholeMock).toHaveBeenCalledWith(expect.anything(), path, LAUNCH_PDF.byteLength);
     expect(stub.fromCalls).not.toContain('order_request_attachments');
     expect(remove).toHaveBeenCalledWith([path]);

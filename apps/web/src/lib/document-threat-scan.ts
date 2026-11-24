@@ -75,36 +75,12 @@ export type DocumentThreat = {
   detail: string;
 };
 
-/**
- * What the person who tried to upload actually sees.
- *
- * Every one of these names the specific problem AND the way out, because the
- * uploader is a warehouse manager holding a real invoice they need attached,
- * not an attacker. "Failed our security checks" with no route forward turns a
- * safe refusal into a support ticket. The one exception is the appended-payload
- * case, where there is no innocent explanation to offer.
+/*
+ * No sentence for a person lives here (lab walk 5, F3): what a person is told
+ * is one of three plain sentences in server/security/upload-checks.ts, none
+ * of which says what this scan looks for. The code above stays in the
+ * security event's reason (by its family), for admins and the console.
  */
-/**
- * The four kinds of PDF content we do not accept share one sentence (part 6):
- * it gives the same way forward, and names no single rule that fired.
- */
-const PDF_CONTENT_REFUSED =
-  'This PDF contains something we do not accept, such as a script, a media clip or another file inside it. Open it and use Print to PDF to save a flat copy, then upload that.';
-
-export const THREAT_MESSAGES: Record<DocumentThreatCode, string> = {
-  pdf_javascript: PDF_CONTENT_REFUSED,
-  pdf_launch_action: PDF_CONTENT_REFUSED,
-  pdf_embedded_file: PDF_CONTENT_REFUSED,
-  pdf_rich_media: PDF_CONTENT_REFUSED,
-  pdf_encrypted:
-    'This PDF is password-protected, so we cannot check what is inside it. Open it, use Print to PDF to save an unprotected copy, then upload that.',
-  pdf_scan_limit:
-    'This PDF is too large or too complex for us to check safely. Open it and use Print to PDF to save a simpler copy, then upload that.',
-  appended_payload:
-    'This file has extra data hidden after the end of the image and could not be uploaded.',
-  scan_budget:
-    'We could not finish checking this file safely, so it was not uploaded. Save a simpler copy and upload that.',
-};
 
 // ───────────────────────── bounds ─────────────────────────
 //

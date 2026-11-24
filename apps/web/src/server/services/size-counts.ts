@@ -262,7 +262,6 @@ export class SizeCountsService {
       surface: 'size_count_training',
       accept: ['png', 'jpeg', 'webp'],
       organizationId: this.ctx.organizationId,
-      wrongTypeMessage: 'This file could not be uploaded because it failed our security checks.',
     });
     if (!checked.ok) throw new ServiceError('validation_error', checked.message);
     const sniffed = { kind: checked.kind as 'png' | 'jpeg' | 'webp' };

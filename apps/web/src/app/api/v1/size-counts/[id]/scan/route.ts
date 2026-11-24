@@ -150,7 +150,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     accept: ['png', 'jpeg', 'webp'],
     organizationId: ctx.organizationId,
     headers: req.headers,
-    wrongTypeMessage: 'This file could not be read because it failed our security checks.',
   });
   if (!checked.ok) {
     return NextResponse.json({ error: 'invalid_image', message: checked.message }, { status: 422 });

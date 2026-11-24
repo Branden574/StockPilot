@@ -26,7 +26,6 @@ vi.mock('next/headers', () => ({
   }),
 }));
 
-import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { recordSecurityEvent } from '@/server/security/events';
 import { audit } from '@/server/services/audit';
 
@@ -37,7 +36,7 @@ import {
   checkUploadPrefix,
   UPLOAD_EMPTY_MESSAGE,
   UPLOAD_NOT_CHECKED_MESSAGE,
-  UPLOAD_OFFICE_MACRO_MESSAGE,
+  UPLOAD_REFUSED_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
   UPLOAD_WRONG_TYPE_MESSAGE,
   type StoredUploadBucket,
@@ -146,20 +145,39 @@ describe('checkUploadBytes: one event on a refusal, none on a clean file', () =>
     expect(event).toEqual({ category: 'malware', outcome: 'blocked', reason, source: 'web', organizationId: ORG });
   });
 
-  it('the sentence: the path own for the wrong type, the scanner own for a verdict, no detail of the check', async () => {
+  it('three sentences: refused by our checks, could not be checked, not a kind this place takes (lab walk 5, F3)', async () => {
+    // Not a kind this place takes: the path's own sentence, else the plain one.
     expect(await checkUploadBytes(HTML, { ...base, accept: ['png'] })).toMatchObject({
       message: UPLOAD_WRONG_TYPE_MESSAGE,
     });
     expect(
       await checkUploadBytes(HTML, { ...base, accept: ['png'], wrongTypeMessage: 'Pick a real image file.' }),
     ).toMatchObject({ message: 'Pick a real image file.' });
-    expect(await checkUploadBytes(PDF_SCRIPT, { ...base, accept: ['pdf'] })).toMatchObject({
-      message: THREAT_MESSAGES.pdf_javascript,
+    // Every refusal by the checks is one sentence, whatever the rule; a
+    // path's own wrong-type sentence is never used for one.
+    const own = { ...base, wrongTypeMessage: 'Pick a real image file.' };
+    for (const [bytes, accept] of [
+      [PDF_SCRIPT, ['pdf']],
+      [PNG_WITH_ARCHIVE, ['png']],
+    ] as const) {
+      expect(await checkUploadBytes(bytes, { ...own, accept })).toMatchObject({ message: UPLOAD_REFUSED_MESSAGE });
+    }
+    // A file the check could not finish.
+    expect(await checkUploadBytes(PDF_LOCKED, { ...own, accept: ['pdf'] })).toMatchObject({
+      family: 'could_not_check',
+      message: UPLOAD_NOT_CHECKED_MESSAGE,
     });
-    expect(await checkUploadBytes(PNG_WITH_ARCHIVE, { ...base, accept: ['png'] })).toMatchObject({
-      message: THREAT_MESSAGES.appended_payload,
-    });
-    expect(UPLOAD_OFFICE_MACRO_MESSAGE).not.toMatch(/vba|activex|\.bin|macrosheet/i);
+  });
+
+  it('no sentence says what the check looks for, and each says what to do (lab walk 5, F3)', () => {
+    const sentences = [UPLOAD_REFUSED_MESSAGE, UPLOAD_NOT_CHECKED_MESSAGE, UPLOAD_WRONG_TYPE_MESSAGE];
+    for (const sentence of sentences) {
+      expect(sentence).not.toMatch(
+        /script|media|clip|embedded|inside|hidden|after the end|extra data|macro|control|password|protected|archive|zip|run code|launch|complex/i,
+      );
+      expect(sentence).toMatch(/\b(Try|Choose|save)\b/);
+    }
+    expect(new Set(sentences).size).toBe(3);
   });
 
   it('no organization is recorded as none; a phone request (bearer) is the phone', async () => {
@@ -269,7 +287,7 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
     fetchObjectWholeMock.mockResolvedValue(big);
     const { store, remove } = bucket();
     const out = await checkStoredUpload(store, PATH, stored);
-    expect(out).toMatchObject({ ok: false, family: 'hidden_file', message: THREAT_MESSAGES.appended_payload });
+    expect(out).toMatchObject({ ok: false, family: 'hidden_file', message: UPLOAD_REFUSED_MESSAGE });
     expect(fetchObjectWholeMock).toHaveBeenCalledWith(store, PATH, big.byteLength);
     expect(stillNamed).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
     expect(remove).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);

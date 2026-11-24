@@ -6,8 +6,6 @@ import {
   SCAN_TIME_BUDGET_MS,
   SCAN_WORK_BUDGET_BYTES,
   scanDocumentBytes,
-  THREAT_MESSAGES,
-  type DocumentThreatCode,
 } from './document-threat-scan';
 import { sniffFile } from './file-signature';
 
@@ -398,36 +396,6 @@ describe('the scanner and the sniffer agree on what they are looking at', () => 
       expect(sniffFile(bytes)?.kind, `fixture for ${kind}`).toBe(kind);
     }
   });
-
-  it('every threat code has a message that tells the uploader what to do', () => {
-    const codes: DocumentThreatCode[] = [
-      'pdf_javascript',
-      'pdf_launch_action',
-      'pdf_embedded_file',
-      'pdf_rich_media',
-      'pdf_encrypted',
-      'pdf_scan_limit',
-      'appended_payload',
-      'scan_budget',
-    ];
-    expect(Object.keys(THREAT_MESSAGES).sort()).toEqual([...codes].sort());
-    for (const code of codes) {
-      expect(THREAT_MESSAGES[code], code).toBeTruthy();
-      // The PDF refusals must name a way forward; a dead end turns a safe
-      // refusal into a support ticket.
-      if (code.startsWith('pdf_')) expect(THREAT_MESSAGES[code]).toMatch(/Print to PDF/);
-    }
-  });
-
-  it('the four kinds of PDF content share one sentence, which names no single rule (part 6)', () => {
-    const four = new Set(
-      (['pdf_javascript', 'pdf_launch_action', 'pdf_embedded_file', 'pdf_rich_media'] as const).map(
-        (c) => THREAT_MESSAGES[c],
-      ),
-    );
-    expect(four.size).toBe(1);
-    expect([...four][0]).not.toMatch(/JavaScript|launch|external program|embedded/i);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -532,13 +500,6 @@ describe('scanDocumentBytes: the time and total-work budgets (part 6)', () => {
     const started = performance.now();
     expect(scanDocumentBytes(big, 'pdf')?.code).toBe('pdf_scan_limit');
     expect(performance.now() - started).toBeLessThan(2_000);
-  });
-
-  it('the refusal sentence gives a way forward and no detail of the check', () => {
-    expect(THREAT_MESSAGES.scan_budget).toBe(
-      'We could not finish checking this file safely, so it was not uploaded. Save a simpler copy and upload that.',
-    );
-    expect(THREAT_MESSAGES.scan_budget).not.toMatch(/\d|second|budget|limit|stream/i);
   });
 });
 

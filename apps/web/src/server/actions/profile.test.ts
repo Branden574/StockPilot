@@ -324,7 +324,7 @@ import { revalidatePath, revalidateTag } from 'next/cache';
 
 import { audit } from '@/server/services/audit';
 import { recordSecurityEvent } from '@/server/security/events';
-import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
+import { UPLOAD_REFUSED_MESSAGE } from '@/server/security/upload-checks';
 import { expectOneRefusal, HTML_PAGE, PNG_WITH_ARCHIVE, TINY_PNG } from '@/test/upload-fixtures';
 import {
   ACCOUNT_DELETE_LAST_OWNER_COPY,
@@ -2373,7 +2373,7 @@ describe('avatar and logo finalize: the upload check (part 6)', () => {
 
   it.each([
     ['a web page called a picture', HTML_PAGE, 'upload_wrong_type', 'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.'],
-    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file', THREAT_MESSAGES.appended_payload],
+    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file', UPLOAD_REFUSED_MESSAGE],
   ])('an avatar that is %s: removed, never saved, a plain sentence, one event', async (_what, body, reason, sentence) => {
     objects['user-1/a2.png'] = body;
     const result = await setAvatarUrlAction({ url: `${AVATAR_PREFIX}a2.png` });

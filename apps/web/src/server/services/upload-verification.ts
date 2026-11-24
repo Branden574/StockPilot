@@ -110,13 +110,12 @@ export async function verifyStoredDocumentOrDelete(
     removedBy: { organizationId: ctx.organizationId, userId: ctx.userId },
     unreadableMessage: opts.unreadableMessage ?? 'This file could not be verified.',
     headers: opts.headers ?? null,
-    wrongTypeMessage: 'This file could not be uploaded because it failed our security checks.',
   });
   if (!checked.ok) {
-    // The specific message for a verdict, not the generic one. The uploader
-    // is a warehouse manager holding a real invoice they need attached, and
-    // "failed our security checks" with no route forward is a support ticket.
-    // Every verdict's sentence names the problem and the way out.
+    // The check's own sentence: one of three plain ones (refused by our
+    // checks, could not be checked, not a kind of file this place takes),
+    // each with the way forward and none saying what the check looks for
+    // (lab walk 5, F3).
     throw new ServiceError('validation_error', checked.message);
   }
   return { kind: checked.kind, mime: checked.mime } as SniffedFile;

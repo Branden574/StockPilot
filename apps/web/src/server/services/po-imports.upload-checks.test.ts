@@ -29,8 +29,8 @@ vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: mockExtract, SCAN_
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mockAdmin }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
-import { THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { recordSecurityEvent } from '@/server/security/events';
+import { UPLOAD_REFUSED_MESSAGE } from '@/server/security/upload-checks';
 
 import { PoImportsService } from './po-imports';
 
@@ -116,7 +116,7 @@ describe('PO import file at parse', () => {
       'pdf' as const,
       enc('%PDF-1.7\n1 0 obj\n<< /S /JavaScript >>\nendobj\n%%EOF\n'),
       'upload_active_content',
-      THREAT_MESSAGES.pdf_javascript,
+      UPLOAD_REFUSED_MESSAGE,
     ],
   ])('%s: refused before the parser, removed, one event, the sentence stored', async (_what, type, body, reason, sentence) => {
     const stub = parseStub(type, body);
@@ -258,7 +258,7 @@ describe('PO scan frames', () => {
           },
         ],
       }),
-    ).rejects.toMatchObject({ message: THREAT_MESSAGES.pdf_launch_action });
+    ).rejects.toMatchObject({ message: UPLOAD_REFUSED_MESSAGE });
     expect(record).toHaveBeenCalledTimes(1);
     expect(record.mock.calls[0]![0]).toMatchObject({ reason: 'upload_active_content' });
   });

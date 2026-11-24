@@ -69,6 +69,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { apiReadContext } from '@/server/lib/api-read-context';
 import { recordSecurityEvent } from '@/server/security/events';
+import { UPLOAD_REFUSED_MESSAGE, UPLOAD_WRONG_TYPE_MESSAGE } from '@/server/security/upload-checks';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { SizeCountsService } from '@/server/services/size-counts';
 
@@ -140,14 +141,14 @@ describe('the cycle-count shelf scan', () => {
   });
 
   it.each([
-    ['a web page called a photo', HTML_PAGE, 'upload_wrong_type', /failed our security checks/],
-    ['an archive after the picture', JPEG_WITH_ARCHIVE, 'upload_hidden_file', /hidden|another file|after/i],
+    ['a web page called a photo', HTML_PAGE, 'upload_wrong_type', UPLOAD_WRONG_TYPE_MESSAGE],
+    ['an archive after the picture', JPEG_WITH_ARCHIVE, 'upload_hidden_file', UPLOAD_REFUSED_MESSAGE],
   ])('%s: 422, nothing stored, one event without the name', async (_what, bytes, reason, sentence) => {
     const res = await post(bytes);
     expect(res.status).toBe(422);
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe('invalid_image');
-    expect(body.message).toMatch(sentence);
+    expect(body.message).toBe(sentence);
     expect(h.upload).not.toHaveBeenCalled();
     expectOneRefusal(record, { reason, organizationId: ORG }, [NAME, 'secret']);
   });
@@ -190,12 +191,14 @@ describe('the size-count scan', () => {
   });
 
   it.each([
-    ['a web page called a photo', HTML_PAGE, 'upload_wrong_type'],
-    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file'],
-  ])('%s: 422, no model call, one event without the name', async (_what, bytes, reason) => {
+    ['a web page called a photo', HTML_PAGE, 'upload_wrong_type', UPLOAD_WRONG_TYPE_MESSAGE],
+    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file', UPLOAD_REFUSED_MESSAGE],
+  ])('%s: 422, no model call, one event without the name, a plain sentence', async (_what, bytes, reason, sentence) => {
     const res = await post(bytes);
     expect(res.status).toBe(422);
-    expect(((await res.json()) as { error: string }).error).toBe('invalid_image');
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe('invalid_image');
+    expect(body.message).toBe(sentence);
     expect(claude).not.toHaveBeenCalled();
     expectOneRefusal(record, { reason, organizationId: ORG }, [NAME]);
   });
@@ -233,11 +236,12 @@ describe('the size-count training sample', () => {
   });
 
   it.each([
-    ['a web page called a photo', HTML_PAGE, 'upload_wrong_type'],
-    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file'],
-  ])('%s: refused, nothing stored, one event', async (_what, bytes, reason) => {
+    ['a web page called a photo', HTML_PAGE, 'upload_wrong_type', UPLOAD_WRONG_TYPE_MESSAGE],
+    ['an archive after the picture', PNG_WITH_ARCHIVE, 'upload_hidden_file', UPLOAD_REFUSED_MESSAGE],
+  ])('%s: refused, nothing stored, one event, a plain sentence', async (_what, bytes, reason, sentence) => {
     await expect(service().recordTrainingSample(input(bytes))).rejects.toMatchObject({
       code: 'validation_error',
+      message: sentence,
     });
     expect(h.upload).not.toHaveBeenCalled();
     expectOneRefusal(record, { reason, organizationId: ORG });
