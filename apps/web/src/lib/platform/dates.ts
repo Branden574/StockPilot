@@ -1,4 +1,10 @@
-import { resolveOrgTimezone, zonedParts } from '@stockpilot/core';
+import {
+  clockWords,
+  resolveOrgTimezone,
+  zonedParts,
+  zoneShortName,
+  type ClockStyle,
+} from '@stockpilot/core';
 
 /**
  * Dates on the platform console.
@@ -46,27 +52,24 @@ export function formatDayInZone(input: Instant, timeZone: string | null | undefi
 /**
  * "24 Oct 2026, 18:30 PDT": the wall clock in `timeZone`, with the zone's
  * short name (a GMT offset where the zone has none in English). "—" when
- * there is no instant.
+ * there is no instant. `clock: '12h'` writes "24 Oct 2026, 6:30 PM PDT"
+ * instead (the platform security pages, owner 2026-11-24); every other caller
+ * keeps the 24-hour clock.
  */
-export function formatMomentInZone(input: Instant, timeZone: string | null | undefined): string {
+export function formatMomentInZone(
+  input: Instant,
+  timeZone: string | null | undefined,
+  options: { clock?: ClockStyle } = {},
+): string {
   const ms = toMillis(input);
   if (ms === null) return '—';
   const zone = resolveOrgTimezone(timeZone);
   const p = zonedParts(ms, zone);
-  const hh = String(p.hour).padStart(2, '0');
-  const mm = String(p.minute).padStart(2, '0');
-  return `${p.day} ${MONTHS[p.month - 1]} ${p.year}, ${hh}:${mm} ${zoneName(ms, zone)}`;
+  const clock = clockWords(p.hour, p.minute, options.clock ?? '24h');
+  return `${p.day} ${MONTHS[p.month - 1]} ${p.year}, ${clock} ${zoneName(ms, zone)}`;
 }
 
-/** The zone's short name at that instant ("PDT", "PST", "UTC"), or the zone id. */
+/** The zone's short name at that instant ("PDT", "PST", "UTC"), or the zone id: core's one rule. */
 function zoneName(ms: number, zone: string): string {
-  try {
-    const part = new Intl.DateTimeFormat('en-US', { timeZone: zone, timeZoneName: 'short' })
-      .formatToParts(new Date(ms))
-      .find((x) => x.type === 'timeZoneName');
-    if (part?.value) return part.value;
-  } catch {
-    // An engine without zone names: the zone id still says which zone it is.
-  }
-  return zone;
+  return zoneShortName(ms, zone);
 }

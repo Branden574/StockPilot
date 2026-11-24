@@ -57,6 +57,30 @@ describe('formatMomentInZone', () => {
     expect(formatMomentInZone(PACIFIC_EVENING, 'UTC')).toBe('25 Oct 2026, 01:30 UTC');
   });
 
+  it('the 12-hour clock is an option (the platform security pages); every other caller keeps 24-hour', () => {
+    expect(formatMomentInZone(PACIFIC_EVENING, 'America/Los_Angeles', { clock: '12h' })).toBe(
+      '24 Oct 2026, 6:30 PM PDT',
+    );
+    expect(
+      formatMomentInZone('2026-12-02T07:30:00Z', 'America/Los_Angeles', { clock: '12h' }),
+    ).toBe('1 Dec 2026, 11:30 PM PST');
+    // Midnight and noon on the 12-hour clock.
+    expect(formatMomentInZone('2026-10-25T00:05:00Z', 'UTC', { clock: '12h' })).toBe(
+      '25 Oct 2026, 12:05 AM UTC',
+    );
+    expect(formatMomentInZone('2026-10-25T12:00:00Z', 'UTC', { clock: '12h' })).toBe(
+      '25 Oct 2026, 12:00 PM UTC',
+    );
+    // No option, or the 24-hour one: unchanged.
+    expect(formatMomentInZone(PACIFIC_EVENING, 'America/Los_Angeles', {})).toBe(
+      '24 Oct 2026, 18:30 PDT',
+    );
+    expect(formatMomentInZone(PACIFIC_EVENING, 'America/Los_Angeles', { clock: '24h' })).toBe(
+      '24 Oct 2026, 18:30 PDT',
+    );
+    expect(formatMomentInZone(null, 'UTC', { clock: '12h' })).toBe('—');
+  });
+
   it('prints "—" for no instant', () => {
     expect(formatMomentInZone(undefined, 'UTC')).toBe('—');
     expect(formatMomentInZone('nope', 'UTC')).toBe('—');

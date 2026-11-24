@@ -11,6 +11,7 @@ import {
   readSecurityMapPollResult,
   securityMapHealthAfter,
   securityMapMergeFeed,
+  securityMapNewerThanTotals,
   securityMapWindowStartNow,
   type SecurityMapFeedRow,
   type SecurityMapFlaggedRow,
@@ -46,6 +47,27 @@ import { localDayStart, nextLocalMidnight, nextPoll, replayWantsWhole } from './
  * read is sent at once; after a failed read the wait grows. Every answer is
  * read again in the browser (core's readSecurityMapPollResult): a shape this
  * build does not know is a failed read, never a picture.
+ *
+ * NEW EVENTS PAST THE TOTALS (the coordinator's change of 2026-11-24): when
+ * the kept lists hold an entry, or the newest poll a live cell, newer than
+ * the last good whole read's totals (core's securityMapNewerThanTotals,
+ * which only a poll can make true), the
+ * whole window is read early, but never sooner than 45 seconds after the
+ * last whole read was SENT, and under every rule above (one read at a time,
+ * nothing while hidden, the read limit, the back-off after a failed whole
+ * read). A quiet page reads nothing more; a busy one at most one whole read
+ * per 45 seconds. Until it lands the page says the totals are being counted
+ * again (security-map-client.tsx).
+ *
+ * THAT 45-SECOND FLOOR HOLDS FOR EVERY WHOLE READ AFTER THE ISLAND'S FIRST
+ * (review M1): the 5-minute one, the midnight, the replay's turn, a tab shown
+ * again (map-model.ts nextPoll). The island's first is the read right after
+ * it mounts (Q22), or, when the server's read failed, its try 2 minutes on:
+ * `wholeStartedAt` is null until it is sent, and is never cleared while the
+ * island is mounted.
+ *
+ * The plan is worked out with the kept flagged list as well: its flagged
+ * sign-in alerts are drawn (owner's decision of 2026-11-24).
  */
 
 export interface SecurityMapPollState {
@@ -253,11 +275,13 @@ export function useSecurityMapPoll(
   initial: unknown,
   poll: SecurityMapPoll,
   hidden: boolean,
+  /** The zone the page's times are in: its midnight starts the day the read counts. */
+  zone?: string,
 ): SecurityMapPollResult {
   const [state, setState] = useState(() => initialPollState(initial, Date.now()));
   const plan = useMemo(
-    () => planSecurityMapPlayback(state.whole, state.recent),
-    [state.whole, state.recent],
+    () => planSecurityMapPlayback(state.whole, state.recent, state.flaggedFeed),
+    [state.whole, state.recent, state.flaggedFeed],
   );
   const replaying = plan.mode === 'replay';
   const inFlight = useRef(false);
@@ -270,6 +294,8 @@ export function useSecurityMapPoll(
   // last looked at, and whether that turn asks for the whole window again.
   const wasReplaying = useRef(false);
   const wholeWanted = useRef(false);
+  // When the last read of the whole window was sent: an early one waits 45 s from it.
+  const wholeStartedAt = useRef<number | null>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -299,10 +325,16 @@ export function useSecurityMapPoll(
         lastWholeTryAt: state.lastWholeTryAt,
         wholeFailures: state.wholeFailures,
         dayEndsAt: state.dayStartAsked
-          ? nextLocalMidnight(state.whole?.whole.dayStart ?? null)
+          ? nextLocalMidnight(state.whole?.whole.dayStart ?? null, zone)
           : null,
         wholeWanted: wholeWanted.current,
         dayUnread: !state.dayStartAsked,
+        totalsBehind: securityMapNewerThanTotals(
+          state.whole,
+          [...state.feed, ...state.flaggedFeed],
+          state.recent,
+        ),
+        lastWholeStartAt: wholeStartedAt.current,
       },
       Date.now(),
     );
@@ -311,8 +343,11 @@ export function useSecurityMapPoll(
         if (inFlight.current) return;
         inFlight.current = true;
         const scope = step.scope;
-        if (scope === 'whole') wholeWanted.current = false;
-        const dayStart = scope === 'whole' ? localDayStart(new Date()) : null;
+        if (scope === 'whole') {
+          wholeWanted.current = false;
+          wholeStartedAt.current = Date.now();
+        }
+        const dayStart = scope === 'whole' ? localDayStart(new Date(), zone) : null;
         readId.current += 1;
         const id = readId.current;
         limit.current = setTimeout(() => {
@@ -343,7 +378,7 @@ export function useSecurityMapPoll(
       Math.max(0, step.at - Date.now()),
     );
     return () => clearTimeout(timer);
-  }, [hidden, state, poll, replaying]);
+  }, [hidden, state, poll, replaying, zone]);
 
   return { state, plan };
 }

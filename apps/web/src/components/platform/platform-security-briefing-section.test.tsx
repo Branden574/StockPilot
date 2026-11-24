@@ -290,6 +290,47 @@ describe('all organizations', () => {
     expect(within(section).getByText('38 organizations have nothing to report.')).toBeTruthy();
   });
 
+  it('a sign-in alert kind is named "Sign-in alert", never Phishing or Malware, across all organizations and in one (lab walk 3, F1)', async () => {
+    const alerts = { phishing: { blocked: 0, flagged: 4, allowed: 0 } };
+    h.platform.mockResolvedValue(
+      buildPlatformSecurityBriefing(
+        platformInput({
+          events: {
+            organizations: [{ organizationId: ORG_A, thisWeek: alerts, lastWeek: {} }],
+            truncated: false,
+            noOrganization: { thisWeek: alerts, lastWeek: {} },
+            passkeyUnexplainedSignIns: 0,
+            passkeyCountersWentBack: 0,
+            oldestEventAt: OLD_ENOUGH,
+          },
+        }),
+      ),
+    );
+    const one = organizationBriefing();
+    h.detail.mockResolvedValue({
+      ...one,
+      briefing: buildSecurityBriefing({
+        now: NOW,
+        members: members(),
+        events: { thisWeek: alerts, lastWeek: {}, oldestEventAt: OLD_ENOUGH },
+        changes: {
+          adminsAdded: 0,
+          adminsDemotedOrRemoved: 0,
+          ownershipMoved: 0,
+          policyLoosened: 0,
+          policyTightened: 0,
+          policyChangedOther: 0,
+        },
+      }),
+    });
+    const section = await renderSection();
+    expect(section.textContent).not.toMatch(/phishing|malware/i);
+    cleanup();
+    const org = await renderSection(ORG_A);
+    expect(org.textContent).toContain('Sign-in alert');
+    expect(org.textContent).not.toMatch(/phishing|malware/i);
+  });
+
   it('the Organization column keeps a width of its own, and a long name or an id breaks inside it', async () => {
     const section = await renderSection();
     const table = within(section).getByRole('region', {
@@ -599,7 +640,7 @@ describe('one organization (?org=)', () => {
       ),
     ).toEqual([
       [
-        '22 Nov 2026, 18:04 UTC',
+        '22 Nov 2026, 6:04 PM UTC',
         'Alex Example (alex@example.com) was made an admin by Dana Example (dana@example.com).',
       ],
     ]);

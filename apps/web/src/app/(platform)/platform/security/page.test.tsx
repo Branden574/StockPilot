@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { cloneElement, isValidElement, Suspense, type ReactElement, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -29,6 +29,14 @@ const h = vi.hoisted(() => ({
   gate: vi.fn(),
   report: vi.fn(),
   briefingProps: [] as Array<Record<string, unknown>>,
+  passkeysProps: [] as Array<Record<string, unknown>>,
+  zone: null as string | null,
+}));
+vi.mock('@/lib/platform/viewer-time-zone', () => ({
+  readPlatformViewerTimeZone: async () => {
+    h.order.push('zone');
+    return h.zone;
+  },
 }));
 
 vi.mock('next/link', async () => {
@@ -39,13 +47,18 @@ vi.mock('next/link', async () => {
       prefetch,
       children,
       className,
+      ...rest
     }: {
       href: string;
       prefetch?: boolean | null;
       children: React.ReactNode;
       className?: string;
     }) =>
-      React.createElement('a', { href, className, 'data-prefetch': String(prefetch) }, children),
+      React.createElement(
+        'a',
+        { ...rest, href, className, 'data-prefetch': String(prefetch) },
+        children,
+      ),
   };
 });
 vi.mock('@/lib/auth/platform-admin', () => ({
@@ -74,8 +87,9 @@ vi.mock('@/server/services/platform/security-events', () => ({
 }));
 
 vi.mock('@/components/platform/platform-passkeys-section', () => ({
-  PlatformPasskeysSection: () => {
+  PlatformPasskeysSection: (props: Record<string, unknown>) => {
     h.order.push('passkeys');
+    h.passkeysProps.push(props);
     return <section aria-label="Passkeys section" />;
   },
 }));
@@ -152,6 +166,8 @@ function row(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   h.order = [];
   h.briefingProps = [];
+  h.passkeysProps = [];
+  h.zone = null;
   h.report.mockReset();
   h.gate.mockResolvedValue({ userId: 'p1', email: 'owner@example.com' });
   h.list.mockResolvedValue([row()]);
@@ -162,14 +178,15 @@ describe('the gate', () => {
     await renderPage();
     // The gate first. (The events read is second here only because this
     // test awaits the streamed parts before it draws anything.)
-    expect(h.order).toEqual(['gate', 'read', 'passkeys', 'briefing']);
+    expect(h.order).toEqual(['gate', 'zone', 'read', 'passkeys', 'briefing']);
     expect(h.list).toHaveBeenCalledWith({ limit: 200 });
   });
 
   it('the page body answers its tree without reading the events: nothing above the list waits for them', async () => {
     const tree = await PlatformSecurityEventsPage();
-    // The gate has answered, and the tree is back, with no events read asked.
-    expect(h.order).toEqual(['gate']);
+    // The gate has answered (and the viewer's zone, from the load the gate
+    // made), and the tree is back, with no events read asked.
+    expect(h.order).toEqual(['gate', 'zone']);
     expect(h.list).not.toHaveBeenCalled();
     // The Passkeys section and the briefing are in that tree already.
     const parts = elements(tree).map((e) => e.el.type);
@@ -186,11 +203,17 @@ describe('the gate', () => {
 });
 
 describe('the attack map', () => {
-  it('a plain link to it near the header, never prefetched; the map itself is not on this page', async () => {
+  it('a clear button to it in the header, never prefetched; the map itself is not on this page', async () => {
     await renderPage();
-    const link = screen.getByRole('link', { name: 'Attack map' });
+    // The owner could not find a small text link (2026-11-24): the console's outline
+    // button, as Act as this org on an organization's page, with the button's focus ring.
+    const link = screen.getByRole('link', { name: 'Open attack map' });
     expect(link).toHaveAttribute('href', '/platform/security/map');
     expect(link).toHaveAttribute('data-prefetch', 'false');
+    expect(link).toHaveAttribute('data-glass', 'button');
+    expect(link).toHaveAttribute('data-glass-variant', 'outline');
+    expect(link.className).toContain('focus-visible:ring-2');
+    expect(screen.queryByRole('link', { name: 'Attack map' })).toBeNull();
     // The link is in the header, before the Passkeys section.
     expect(
       link.compareDocumentPosition(screen.getByRole('region', { name: 'Passkeys section' })) &
@@ -236,28 +259,31 @@ describe('the table', () => {
       ),
     ).toEqual([
       [
-        '20 Nov 2026, 10:15 UTC',
+        '20 Nov 2026, 10:15 AM UTC',
         'Request for a settings fileExploit attempts · Blocked',
         'No organization',
         'Leipzig, DE',
         'Website',
         '12',
+        'Stopped: nothing to doHow to respond',
       ],
       [
-        '20 Nov 2026, 10:15 UTC',
+        '20 Nov 2026, 10:15 AM UTC',
         'Wrong password at sign-inPassword guessing · Blocked',
         'Example School District',
         'Fresno, US',
         'Website',
         '3',
+        'Stopped: nothing to doHow to respond',
       ],
       [
-        '20 Nov 2026, 10:15 UTC',
+        '20 Nov 2026, 10:15 AM UTC',
         'More events than could be listedPassword guessing · Blocked',
         ORG,
         '—',
         'Website',
         '4,100',
+        'Look todayHow to respond',
       ],
     ]);
     const links = within(table).getAllByRole('link');
@@ -268,6 +294,226 @@ describe('the table', () => {
     // Opening an organization's page writes an audit row, so its link is
     // never prefetched.
     expect(links.map((a) => a.getAttribute('data-prefetch'))).toEqual(['false', 'false']);
+    // Each row's "How to respond" is named for its event, so a list of them can be told apart.
+    expect(
+      within(table)
+        .getAllByRole('button', { name: /^How to respond: / })
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual([
+      'How to respond: Request for a settings file',
+      'How to respond: Wrong password at sign-in',
+      'How to respond: More events than could be listed',
+    ]);
+  });
+
+  it("each event's How to respond opens its card, with what the row shows on top and its organization in the links", async () => {
+    h.list.mockResolvedValueOnce([
+      row({
+        id: 'e2',
+        category: 'password_guessing',
+        reason: 'wrong_password',
+        organizationId: ORG,
+        organizationName: 'Example School District',
+        country: 'US',
+        city: 'Example Falls',
+        count: 3,
+      }),
+      row({
+        id: 'e3',
+        category: 'password_guessing',
+        reason: 'over_minute_cap',
+        organizationId: null,
+        country: null,
+        city: null,
+        count: 4100,
+      }),
+    ]);
+    await renderPage();
+    const facts = (panel: HTMLElement) =>
+      [...within(panel).getByTestId('security-response-context').querySelectorAll('dt')].map(
+        (dt) => [dt.textContent, dt.nextElementSibling?.textContent],
+      );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'How to respond: Wrong password at sign-in' }),
+    );
+    let panel = await screen.findByRole('dialog');
+    expect(panel).toHaveAttribute('data-card', 'wrong-password');
+    expect(facts(panel)).toEqual([
+      ['Kind', 'Password guessing'],
+      // The country's name, as a card opened from the map says it (lab walk 3, F5).
+      ['Where', 'Example Falls, United States'],
+      ['When', '20 Nov 2026, 10:15 AM UTC'],
+      ['Organization', 'Example School District'],
+    ]);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // A count past a cap has no place; an event of no organization says so.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'How to respond: More events than could be listed' }),
+    );
+    panel = await screen.findByRole('dialog');
+    expect(panel).toHaveAttribute('data-card', 'counts-past-limit');
+    expect(facts(panel)).toEqual([
+      ['Kind', 'Password guessing'],
+      ['When', '20 Nov 2026, 10:15 AM UTC'],
+      ['Organization', 'No organization'],
+    ]);
+  });
+
+  it('a sign-in alert is named "Sign-in alert": no text on the page or in its card says Phishing or Malware (lab walk 3, F1)', async () => {
+    h.list.mockResolvedValueOnce([
+      row(),
+      row({
+        id: 'e4',
+        category: 'phishing',
+        outcome: 'flagged',
+        reason: 'sign_in_new_country',
+        organizationId: ORG,
+        organizationName: 'Example School District',
+        country: 'IT',
+        city: 'Example Piazza',
+        count: 1,
+      }),
+      row({
+        id: 'e5',
+        category: 'phishing',
+        outcome: 'flagged',
+        reason: 'sign_in_not_me',
+        organizationId: ORG,
+        organizationName: 'Example School District',
+        country: 'PT',
+        city: null,
+        count: 1,
+      }),
+    ]);
+    await renderPage();
+    expect(document.body.textContent).not.toMatch(/phishing|malware/i);
+    const table = screen.getByRole('region', { name: 'Security events' });
+    expect(within(table).getAllByText(/^Sign-in alert · Flagged$/)).toHaveLength(2);
+    const facts = (panel: HTMLElement) =>
+      [...within(panel).getByTestId('security-response-context').querySelectorAll('dt')].map(
+        (dt) => [dt.textContent, dt.nextElementSibling?.textContent],
+      );
+    for (const [what, where] of [
+      // The city, then the country's name, as the map's card says it (F5).
+      ['Sign-in from a new country', 'Example Piazza, Italy'],
+      // No city: the country's name alone, never its code.
+      ['A member said a sign-in was not them', 'Portugal'],
+    ] as const) {
+      fireEvent.click(screen.getByRole('button', { name: `How to respond: ${what}` }));
+      const panel = await screen.findByRole('dialog');
+      expect(panel.textContent, what).not.toMatch(/phishing|malware/i);
+      expect(facts(panel).slice(0, 2), what).toEqual([
+        ['Kind', 'Sign-in alert'],
+        ['Where', where],
+      ]);
+      expect(document.body.textContent, what).not.toMatch(/phishing|malware/i);
+      fireEvent.keyDown(panel, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    }
+  });
+
+  it('each row\'s badge and "How to respond" stay on one line, "Stopped: nothing to do" too, so the rows are of one height (lab walk 3, F4)', async () => {
+    h.list.mockResolvedValueOnce([
+      row(),
+      row({
+        id: 'e2',
+        category: 'password_guessing',
+        reason: 'over_minute_cap',
+        country: null,
+        city: null,
+      }),
+      row({ id: 'e3', category: 'phishing', outcome: 'flagged', reason: 'sign_in_not_me' }),
+    ]);
+    await renderPage();
+    const controls = [...document.querySelectorAll('[data-slot="security-response-control"]')];
+    expect(controls.map((c) => c.getAttribute('data-level'))).toEqual(
+      expect.arrayContaining(['stopped', 'look_today']),
+    );
+    expect(controls).toHaveLength(3);
+    for (const c of controls) {
+      const classes = c.className.split(/\s+/);
+      expect(classes, c.getAttribute('data-level')!).toEqual(
+        expect.arrayContaining(['flex-nowrap', 'whitespace-nowrap']),
+      );
+      expect(classes, c.getAttribute('data-level')!).not.toContain('flex-wrap');
+      // The badge never wraps inside itself.
+      expect(within(c as HTMLElement).getByTestId('security-response-level').className).toContain(
+        'whitespace-nowrap',
+      );
+    }
+  });
+
+  it('the times are in the zone the viewer chose, named, with the exact UTC in the title and for screen readers; the sections are handed it', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-24T06:00:00Z'));
+    try {
+      h.zone = 'America/Los_Angeles';
+      h.list.mockResolvedValueOnce([
+        row(),
+        // The night the clocks go back: the same wall clock, PDT then PST.
+        row({ id: 'e2', lastSeenAt: '2026-11-01T08:30:00Z' }),
+        row({ id: 'e3', lastSeenAt: '2026-11-01T09:30:00Z' }),
+      ]);
+      await renderPage();
+      const table = screen.getByRole('region', { name: 'Security events' });
+      const times = [...table.querySelectorAll('tbody time')];
+      expect(times.map((t) => t.firstChild?.textContent)).toEqual([
+        '20 Nov 2026, 2:15 AM PST',
+        '1 Nov 2026, 1:30 AM PDT',
+        '1 Nov 2026, 1:30 AM PST',
+      ]);
+      expect(times.map((t) => t.getAttribute('title'))).toEqual([
+        '20 Nov 2026, 10:15 UTC',
+        '1 Nov 2026, 08:30 UTC',
+        '1 Nov 2026, 09:30 UTC',
+      ]);
+      expect(times[0]!.querySelector('.sr-only')?.textContent).toBe(' (20 Nov 2026, 10:15 UTC)');
+      expect(within(table).getByRole('columnheader', { name: 'When' })).toHaveAttribute(
+        'title',
+        'In Pacific Standard Time (America/Los_Angeles).',
+      );
+      expect(h.passkeysProps).toEqual([{ timeZone: 'America/Los_Angeles' }]);
+      expect(h.briefingProps[0]).toMatchObject({ timeZone: 'America/Los_Angeles' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a zone east of UTC; and with no zone chosen the server prints UTC', async () => {
+    h.zone = 'Europe/Berlin';
+    h.list.mockResolvedValueOnce([row()]);
+    const { unmount } = await renderPage();
+    let cell = screen.getByRole('region', { name: 'Security events' }).querySelector('tbody time')!;
+    expect(cell.firstChild?.textContent).toBe('20 Nov 2026, 11:15 AM GMT+1');
+    unmount();
+    h.zone = null;
+    h.list.mockResolvedValueOnce([row()]);
+    await renderPage();
+    const table = screen.getByRole('region', { name: 'Security events' });
+    cell = table.querySelector('tbody time')!;
+    expect(cell.textContent).toBe('20 Nov 2026, 10:15 AM UTC');
+    expect(cell.querySelector('.sr-only')).toBeNull();
+    expect(within(table).getByRole('columnheader', { name: 'When' })).toHaveAttribute(
+      'title',
+      'In UTC.',
+    );
+  });
+
+  it("a row's card says its time in the viewer's zone, with the exact UTC", async () => {
+    h.zone = 'America/Los_Angeles';
+    h.list.mockResolvedValueOnce([row()]);
+    await renderPage();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'How to respond: Request for a settings file' }),
+    );
+    const panel = await screen.findByRole('dialog');
+    const when = [
+      ...within(panel).getByTestId('security-response-context').querySelectorAll('dt'),
+    ].find((dt) => dt.textContent === 'When')!.nextElementSibling!;
+    expect(when.firstChild?.textContent).toBe('20 Nov 2026, 2:15 AM PST');
+    expect(when).toHaveAttribute('title', '20 Nov 2026, 10:15 UTC');
+    expect(when.querySelector('.sr-only')?.textContent).toBe(' (20 Nov 2026, 10:15 UTC)');
   });
 
   it('nothing recorded: the empty words', async () => {
@@ -422,7 +668,7 @@ describe('the security briefing section', () => {
   it('no ?org=: the section is asked for all organizations only, for the admin the gate answered', async () => {
     await renderPage();
     expect(h.briefingProps).toEqual([
-      { organizationId: null, actor: { userId: 'p1', email: 'owner@example.com' } },
+      { organizationId: null, actor: { userId: 'p1', email: 'owner@example.com' }, timeZone: null },
     ]);
   });
 

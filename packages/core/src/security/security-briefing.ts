@@ -21,7 +21,7 @@
  * wherever a passkey may be meant.
  */
 
-import { SECURITY_EVENT_CATEGORIES, securityEventCategoryLabel } from './security-events';
+import { SECURITY_EVENT_CATEGORIES, securityConsoleCategoryLabel } from './security-events';
 
 /* ───────────────────────────── the rules' numbers ───────────────────────────── */
 
@@ -246,7 +246,7 @@ function categoryRows(events: BriefingEventsInput, now: number): BriefingCategor
     return [
       {
         category,
-        label: securityEventCategoryLabel(category),
+        label: securityConsoleCategoryLabel(category, 'kind'),
         blockedThisWeek: t.blocked,
         blockedLastWeek: l.blocked,
         blockedChange: changeWords(t.blocked, l.blocked, compared),
@@ -296,7 +296,8 @@ function eventItems(
   for (const category of categoriesOf(events)) {
     const t = own(events.thisWeek, category);
     const l = own(events.lastWeek, category);
-    const label = securityEventCategoryLabel(category);
+    // The console's words for a kind (lab walk 3, F1): this briefing is the platform console's.
+    const label = securityConsoleCategoryLabel(category, 'kind');
     if (compared && isRising(t.blocked, l.blocked)) {
       rising.push({
         id: `${words.risingId}:${category}`,
