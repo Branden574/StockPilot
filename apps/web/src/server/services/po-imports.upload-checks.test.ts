@@ -21,6 +21,8 @@ const { mockAudit, mockParsePoFile, mockExtract, mockAdmin, adminRemove, mockUpl
     mockUpload: vi.fn(async () => ({ data: { path: 'p' }, error: null })),
   }),
 );
+/** What the service client's "does another import name this file?" look answers. */
+let othersNamingTheFile: { data: unknown; error: { message: string } | null } = { data: [], error: null };
 vi.mock('./audit', () => ({ audit: mockAudit }));
 vi.mock('@/lib/po-parser', () => ({ parsePoFile: mockParsePoFile }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: mockExtract, SCAN_MODEL_NAME: 'mock' }));
@@ -41,13 +43,15 @@ const enc = (s: string) => Buffer.from(s, 'latin1');
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockAdmin.mockReturnValue({
+  othersNamingTheFile = { data: [], error: null };
+  mockAdmin.mockImplementation(() => ({
     storage: { from: () => ({ remove: adminRemove, upload: mockUpload }) },
-  });
+    from: makeSupabaseStub({ 'po_imports.select': () => othersNamingTheFile }).client.from,
+  }));
   mockParsePoFile.mockResolvedValue({ lines: [], rawText: '' });
 });
 
-function parseStub(sourceType: 'pdf' | 'csv', body: Buffer) {
+function parseStub(sourceType: 'pdf' | 'csv' | 'scan', body: Buffer) {
   const stub = makeSupabaseStub({
     'po_imports.select': {
       data: {
@@ -129,6 +133,45 @@ describe('PO import file at parse', () => {
       organizationId: ORG,
     });
     expect(JSON.stringify(record.mock.calls[0])).not.toContain('po-imports');
+  });
+
+  it('NEW: a refused file another import also names is kept (refused, recorded once, not removed)', async () => {
+    othersNamingTheFile = { data: [{ id: 'imp-cancelled-earlier' }], error: null };
+    const stub = parseStub('csv', Buffer.from([0x00, 0x01, 0x02]));
+    await svcFor(stub).parseImport(IMPORT_ID);
+    expect(mockParsePoFile).not.toHaveBeenCalled();
+    expect(failedWith(stub)).toBe('This file is not a CSV text file. Save it as CSV and upload it again.');
+    expect(adminRemove).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledTimes(1);
+  });
+
+  it('NEW: when that look fails, the refused file is kept and the refusal stands', async () => {
+    othersNamingTheFile = { data: null, error: { message: 'down' } };
+    const stub = parseStub('pdf', enc('just words'));
+    await svcFor(stub).parseImport(IMPORT_ID);
+    expect(mockParsePoFile).not.toHaveBeenCalled();
+    expect(failedWith(stub)).toBe('This file is not a PDF.');
+    expect(adminRemove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a photo', Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0, 5, 0, 4, 0x01, 0x00, 0xff, 0xd9])],
+    ['a PDF', enc('%PDF-1.7\n1 0 obj\n<< /Type /Page >>\nendobj\n%%EOF\n')],
+  ])('Re-parse on a scan import: %s reaches the parser as before, nothing recorded or removed', async (_what, body) => {
+    const stub = parseStub('scan', body);
+    await svcFor(stub).parseImport(IMPORT_ID);
+    expect(mockParsePoFile).toHaveBeenCalledTimes(1);
+    expect(Buffer.compare(mockParsePoFile.mock.calls[0]![0] as Buffer, body)).toBe(0);
+    expect(record).not.toHaveBeenCalled();
+    expect(adminRemove).not.toHaveBeenCalled();
+  });
+
+  it('Re-parse on a scan import whose file is a web page: refused and recorded', async () => {
+    const stub = parseStub('scan', enc('<!DOCTYPE html><p>x</p>'));
+    await svcFor(stub).parseImport(IMPORT_ID);
+    expect(mockParsePoFile).not.toHaveBeenCalled();
+    expect(failedWith(stub)).toBe('This file is not a picture or PDF we can read as a purchase order.');
+    expect(record.mock.calls[0]![0]).toMatchObject({ reason: 'upload_wrong_type' });
   });
 
   it('a recorder that fails: still refused, still removed', async () => {

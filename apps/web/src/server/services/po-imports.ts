@@ -236,12 +236,30 @@ const PO_SCAN_KINDS: readonly UploadKind[] = ['jpeg', 'png', 'webp', 'heic', 'pd
 
 /**
  * A refused import file is removed with the service role (its path was
- * shape-checked when the row was recorded). Best-effort: the refusal stands
- * either way, and nothing serves this bucket.
+ * shape-checked when the row was recorded), UNLESS another import in the
+ * organization names the same object: a scan's file is keyed by its hash and
+ * shared with a cancelled earlier import of the same document, and a
+ * recorded path may name any file in the folder. Removing it then would break
+ * that other import's document link, so it is kept, and it is kept when that
+ * look fails too. Best-effort: the refusal stands either way, and nothing
+ * serves this bucket.
  */
-async function removeRefusedImportFile(path: string): Promise<void> {
+async function removeRefusedImportFile(
+  organizationId: string,
+  importId: string,
+  path: string,
+): Promise<void> {
   try {
-    await createAdminClient().storage.from('po-imports').remove([path]);
+    const admin = createAdminClient();
+    const { data: others, error } = await admin
+      .from('po_imports')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('storage_path', path)
+      .neq('id', importId)
+      .limit(1);
+    if (error || !Array.isArray(others) || others.length > 0) return;
+    await admin.storage.from('po-imports').remove([path]);
   } catch {
     // Deliberately swallowed.
   }
@@ -1350,18 +1368,26 @@ export class PoImportsService {
       // security event, the file is removed (it is never served, and nothing
       // but this parse reads it), and the import fails with the check's
       // sentence.
+      //
+      // A scan's stored picture or PDF passed the scan's own check (the same
+      // kinds) when it came in, before it was stored; Re-parse is offered on
+      // a scan import too, so it is read with those kinds here, and a clean
+      // scan reaches the parser exactly as before rather than being called
+      // the wrong type.
+      const isScan = (header.source_type as string) === 'scan';
       const checked = await checkUploadBytes(new Uint8Array(buffer), {
         surface: 'po_import_file',
-        accept: sourceType === 'pdf' ? ['pdf'] : ['text'],
+        accept: isScan ? PO_SCAN_KINDS : sourceType === 'pdf' ? ['pdf'] : ['text'],
         pdfHeader: 'in_first_kilobyte',
         organizationId: this.ctx.organizationId,
-        wrongTypeMessage:
-          sourceType === 'pdf'
+        wrongTypeMessage: isScan
+          ? 'This file is not a picture or PDF we can read as a purchase order.'
+          : sourceType === 'pdf'
             ? 'This file is not a PDF.'
             : 'This file is not a CSV text file. Save it as CSV and upload it again.',
       });
       if (!checked.ok) {
-        await removeRefusedImportFile(header.storage_path as string);
+        await removeRefusedImportFile(this.ctx.organizationId, id, header.storage_path as string);
         throw new RefusedImportFileError(checked.message);
       }
       const parsed = await parsePoFile(buffer, sourceType);
