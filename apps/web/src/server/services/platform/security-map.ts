@@ -305,16 +305,21 @@ export async function readPlatformSecurityMap(
       return await fail(new Error(error.message), error.code);
     }
     const parsed = platformSecurityMapSchema.safeParse(data);
-    if (!parsed.success) {
-      // Where the shape differs, never a value from the answer.
-      const where = parsed.error.issues
-        .slice(0, 5)
-        .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.code}`)
-        .join('; ');
-      return await fail(new Error(`${FN} answered a shape this build does not know (${where})`));
-    }
     // Core's plain reader is the same contract written a second time.
     const read = readSecurityMapAnswer(data);
+    if (!parsed.success) {
+      // Where the shape differs, never a value from the answer. Core's reader
+      // names the first part that differs (review S6: zod's union names only
+      // the root for a key missing or a value of the wrong kind); zod's own
+      // places only when core's reader took the answer.
+      const where = read.ok
+        ? `zod: ${parsed.error.issues
+            .slice(0, 5)
+            .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.code}`)
+            .join('; ')}`
+        : read.where;
+      return await fail(new Error(`${FN} answered a shape this build does not know (${where})`));
+    }
     if (!read.ok) {
       return await fail(new Error(`${FN}: the two readers of the answer disagree (${read.where})`));
     }

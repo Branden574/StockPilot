@@ -392,11 +392,41 @@ describe('a read that fails is "could not check", reported once, and never throw
     expect(h.reportError).toHaveBeenCalledTimes(1);
     const [report] = reports();
     expect(report?.message).toBe(
-      'platform_security_map answered a shape this build does not know (feed.0: unrecognized_keys)',
+      'platform_security_map answered a shape this build does not know (feed.0.a key this build does not know)',
     );
     const logged = JSON.stringify(h.reportError.mock.calls) + (report?.message ?? '');
     expect(logged).not.toContain('MARKER-NOT-TO-BE-LOGGED');
     expect(logged).not.toContain('Example Falls');
+    expect(logged).not.toContain('source_address');
+  });
+
+  it('a key missing or a value of the wrong kind: the first part that differs is named, never the root alone, and no value', async () => {
+    const { flood_rows: _gone, ...noFloods } = mapAnswer();
+    const cases: Array<[unknown, string]> = [
+      [noFloods, 'flood_rows: missing'],
+      [mapAnswer({ blocked_window: 'MARKER-NOT-TO-BE-LOGGED' }), 'blocked_window: not a count'],
+      [
+        mapAnswer({ feed: [feedEntry({ events: 'MARKER-NOT-TO-BE-LOGGED' })] }),
+        'feed.0.events: not a count',
+      ],
+      [
+        mapAnswer({ flagged_feed: [FLAGGED_ENTRY, { ...FLAGGED_ENTRY, city: 7 }] }),
+        'flagged_feed.1.city: not a short text',
+      ],
+    ];
+    for (const [data, where] of cases) {
+      h.reportError.mockClear();
+      answer = { data, error: null };
+      expect(await readPlatformSecurityMap({ scope: 'whole', dayStart: null }, NOW)).toBe(
+        SECURITY_MAP_POLL_FAILED,
+      );
+      const [report] = reports();
+      expect(report?.message).toBe(
+        `platform_security_map answered a shape this build does not know (${where})`,
+      );
+      expect(report?.message).not.toContain('(root)');
+      expect(JSON.stringify(h.reportError.mock.calls)).not.toContain('MARKER-NOT-TO-BE-LOGGED');
+    }
   });
 
   it("null, a list or text in the answer's place is could not check", async () => {
