@@ -10,11 +10,14 @@ import { PlatformSecurityBriefingSection } from '@/components/platform/platform-
 import { PlatformTable } from '@/components/platform/platform-table';
 import { SecurityResponseButton } from '@/components/platform/security-response/security-response-button';
 import { SecurityResponseHost } from '@/components/platform/security-response/security-response-host';
+import { ConsoleMoment, consoleZoneNote } from '@/components/platform/zoned-time';
 import { Button } from '@/components/ui/button';
 import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 import { isNextControlFlowError, reportError } from '@/lib/error-reporter';
+import { formatMomentInZone } from '@/lib/platform/dates';
 import { formatExactUtc } from '@/lib/platform/last-active';
+import { readPlatformViewerTimeZone } from '@/lib/platform/viewer-time-zone';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import {
   listPlatformSecurityEvents,
@@ -83,6 +86,10 @@ export default async function PlatformSecurityEventsPage({
   const { org: orgParam } = await searchParams;
   const org = (Array.isArray(orgParam) ? orgParam[0] : orgParam) ?? null;
   if (org !== null) notFoundUnlessUuid(org);
+  // After the gate (and a bad ?org=, which reads nothing): the zone the viewer
+  // chose (their organization's Timezone setting), from the load the gate
+  // already made. Null: the tables print UTC.
+  const timeZone = await readPlatformViewerTimeZone();
 
   return (
     <PlatformPage>
@@ -107,7 +114,7 @@ export default async function PlatformSecurityEventsPage({
 
       {/* The passkey switches (part 2, stage 6): read with the service
           client, after the gate above, like the events. */}
-      <PlatformPasskeysSection />
+      <PlatformPasskeysSection timeZone={timeZone} />
 
       {/* The briefing: after the passkey switches, and streamed in on its
           own, so the switches never wait for it. */}
@@ -119,6 +126,7 @@ export default async function PlatformSecurityEventsPage({
         <PlatformSecurityBriefingSection
           organizationId={org}
           actor={{ userId: admin.userId, email: admin.email }}
+          timeZone={timeZone}
         />
       </Suspense>
 
@@ -127,7 +135,7 @@ export default async function PlatformSecurityEventsPage({
       <Suspense
         fallback={<p className="text-muted-foreground text-[13px]">Loading security events...</p>}
       >
-        <PlatformSecurityEventsList />
+        <PlatformSecurityEventsList timeZone={timeZone} />
       </Suspense>
     </PlatformPage>
   );
@@ -141,7 +149,7 @@ export default async function PlatformSecurityEventsPage({
  * database's code and no row) and a notice where the table would be; it
  * never takes the passkey switches or the briefing down with it.
  */
-async function PlatformSecurityEventsList() {
+async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | null }) {
   let rows: PlatformSecurityEventRow[];
   try {
     rows = await listPlatformSecurityEvents({ limit: PLATFORM_SECURITY_EVENT_LIMIT });
@@ -166,7 +174,7 @@ async function PlatformSecurityEventsList() {
       <PlatformTable label="Security events" minWidth={1180}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
-            <TableHead title="In UTC.">When</TableHead>
+            <TableHead title={consoleZoneNote(timeZone)}>When</TableHead>
             <TableHead>What</TableHead>
             <TableHead>Organization</TableHead>
             <TableHead>Where</TableHead>
@@ -199,7 +207,7 @@ async function PlatformSecurityEventsList() {
               return (
                 <TableRow key={r.id}>
                   <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                    {formatExactUtc(r.lastSeenAt) ?? '—'}
+                    <ConsoleMoment at={r.lastSeenAt} timeZone={timeZone} />
                   </TableCell>
                   <TableCell>
                     <span className="text-foreground">{securityEventReasonLabel(r.reason)}</span>
@@ -246,7 +254,10 @@ async function PlatformSecurityEventsList() {
                           context: {
                             kind: securityEventCategoryLabel(r.category),
                             place,
-                            time: formatExactUtc(r.lastSeenAt),
+                            time: Number.isFinite(Date.parse(r.lastSeenAt))
+                              ? formatMomentInZone(r.lastSeenAt, timeZone ?? 'UTC')
+                              : null,
+                            timeUtc: formatExactUtc(r.lastSeenAt),
                             organization:
                               r.organizationId === null
                                 ? 'No organization'
