@@ -52,7 +52,7 @@
 
 begin;
 
-select plan(121);
+select plan(120);
 
 -- Every time below is compared as text; the read writes UTC whatever the
 -- session says (0479/99), and so does this file.
@@ -157,14 +157,21 @@ returns jsonb language sql stable as $$
            'count', p_count));
 $$;
 
--- The three functions as the app calls them, as service_role.
+-- The three functions as the app calls them, as service_role. An error comes
+-- back as {"raised": <SQLSTATE>} (what it wrote undone, the role restored),
+-- so a function that raises fails the test that called it instead of
+-- stopping the file.
 create function pg_temp.rec(p jsonb) returns jsonb language plpgsql as $$
 declare
   v jsonb;
 begin
-  set local role service_role;
-  v := public.record_security_event_samples(p);
-  reset role;
+  begin
+    set local role service_role;
+    v := public.record_security_event_samples(p);
+    reset role;
+  exception when others then
+    v := jsonb_build_object('raised', sqlstate);
+  end;
   return v;
 end;
 $$;
@@ -188,9 +195,13 @@ create function pg_temp.purge() returns jsonb language plpgsql as $$
 declare
   v jsonb;
 begin
-  set local role service_role;
-  v := public.purge_security_event_samples();
-  reset role;
+  begin
+    set local role service_role;
+    v := public.purge_security_event_samples();
+    reset role;
+  exception when others then
+    v := jsonb_build_object('raised', sqlstate);
+  end;
   return v;
 end;
 $$;
@@ -200,9 +211,13 @@ returns jsonb language plpgsql as $$
 declare
   v jsonb;
 begin
-  set local role service_role;
-  v := public.platform_security_event_samples(p_from, p_to, p_reason, p_category, p_country, p_limit);
-  reset role;
+  begin
+    set local role service_role;
+    v := public.platform_security_event_samples(p_from, p_to, p_reason, p_category, p_country, p_limit);
+    reset role;
+  exception when others then
+    v := jsonb_build_object('raised', sqlstate);
+  end;
   return v;
 end;
 $$;
@@ -769,13 +784,17 @@ select is(
   '0479/58: on one row of its hour, counted twice, first and last seen at its time');
 select pg_temp.rec(jsonb_build_array(
   pg_temp.el('php_file', '/example-dup/index.php', 'GET', null, 'US', pg_temp.h(-1) + interval '5 minutes', 3)));
+create temporary table dup_mid as
+  select s.event_count || ':' || pg_temp.mins(s.first_seen_at::text) || ':' || pg_temp.mins(s.last_seen_at::text) as line
+    from public.security_event_samples s;
 select pg_temp.rec(jsonb_build_array(
   pg_temp.el('php_file', '/example-dup/index.php', 'GET', '', 'US', pg_temp.h(-1) + interval '50 minutes')));
 select is(
-  (select array_agg(s.event_count || ':' || pg_temp.mins(s.first_seen_at::text) || ':' || pg_temp.mins(s.last_seen_at::text))
-     from public.security_event_samples s),
-  array['6:-55:-10'],
-  '0479/59: a repeat adds its count (3) and an earlier time moves the first time back; an empty query string is none, so a later repeat with one is the same row and moves the last time on');
+  (select array_agg(line) from dup_mid)
+  || (select array_agg(s.event_count || ':' || pg_temp.mins(s.first_seen_at::text) || ':' || pg_temp.mins(s.last_seen_at::text))
+        from public.security_event_samples s),
+  array['5:-55:-50', '6:-55:-10'],
+  '0479/59: a repeat adds its count (3), and an earlier time moves the first time back and leaves the last; an empty query string is none, so a later repeat with one is the same row and moves the last time on');
 select is(
   pg_temp.rec(jsonb_build_array(
     pg_temp.el('php_file', '/example-dup/index.php', 'POST', null, 'US', pg_temp.h(-1) + interval '20 minutes'),
@@ -919,9 +938,15 @@ select pg_temp.raw(jsonb_build_object('hour', (select a from cutoff), 'target', 
 select pg_temp.raw(jsonb_build_object('hour', pg_temp.h(0), 'target', '/example-purge/now'));
 select pg_temp.raw(jsonb_build_object('hour', (select a from cutoff) - interval '10 hours', 'target', '/example-purge/old/' || i))
   from generate_series(1, 5000) i;
+create temporary table purged (n serial, answer jsonb, b_left boolean);
+insert into purged (answer) select pg_temp.purge();
+update purged set b_left = exists (select 1 from public.security_event_samples where target = '/example-purge/b');
+insert into purged (answer) select pg_temp.purge();
+insert into purged (answer) select pg_temp.purge();
 select is(
-  array[pg_temp.purge(), pg_temp.purge(), pg_temp.purge()],
-  array['{"deleted": 5000}'::jsonb, '{"deleted": 1}'::jsonb, '{"deleted": 0}'::jsonb],
+  (select array_agg(answer || jsonb_build_object('b_left', b_left) order by n) from purged),
+  array['{"deleted": 5000, "b_left": true}'::jsonb, '{"deleted": 1, "b_left": null}'::jsonb,
+        '{"deleted": 0, "b_left": null}'::jsonb],
   '0479/75: the purge takes at most 5,000 rows a call, the oldest first, until none is left to take');
 select is(
   (select array_agg(target order by target) from public.security_event_samples),
@@ -1093,8 +1118,10 @@ select is(
 select is(
   (select array[pg_temp.counts(pg_temp.rd(pg_temp.h(-40), pg_temp.h(-39), null, null, null, 1000)),
                 pg_temp.counts(pg_temp.rd(pg_temp.h(-40), pg_temp.h(-39), null, null, null, 60)),
-                pg_temp.counts(pg_temp.rd(pg_temp.h(-40), pg_temp.h(-39), null, null, null, 2))]),
-  array['60|1830|true', '60|1830|true', '60|1830|true'],
+                pg_temp.counts(pg_temp.rd(pg_temp.h(-40), pg_temp.h(-39), null, null, null, 2)),
+                pg_temp.counts(pg_temp.rd(pg_temp.h(-3), pg_temp.h(-2), null, null, null, 4)),
+                pg_temp.counts(pg_temp.rd(pg_temp.h(-3), pg_temp.h(-2), null, null, null, 3))]),
+  array['60|1830|true', '60|1830|true', '60|1830|true', '4|27|false', '4|27|true'],
   '0479/93: listed_targets and listed_events count every target of the window, and targets_truncated says when some were left out');
 select is(
   (select array[e -> 'targets', e -> 'more_than_listed', to_jsonb(pg_temp.counts(e)), e -> 'window_shortened'] from ans, lateral (select empty as e) x),
@@ -1250,10 +1277,6 @@ select is(
        pg_temp.el('env_file', '/example-one/ok-3') || '{"extra": "ignored", "organization_id": "00000000-0000-4000-8000-000000000000"}']) with ordinality as x(e, o)),
   array['1', '1', '1'],
   '0479/110: these are stored: an empty or null query string (as none), any two capitals as a country, and fields the writer does not know (ignored)');
-select is(
-  (select array[count(*)::int] from public.security_event_samples where target like '/example-one/%'),
-  array[0],
-  '0479/111: (those were undone)');
 
 -- ── 14. The writer and the read under made-up ids ───────────────────────────
 -- A field named like an organization is never stored anywhere: the table has
@@ -1264,11 +1287,11 @@ select is(
   (select count(*)::int from public.security_event_samples s
     where s::text like '%00000000-0000-4000-8000-0000000000aa%' or s::text like '%0000000000bb%' or s::text like '%192.0.2.1%'),
   0,
-  '0479/112: an organization, an account or an address sent beside a sample is stored nowhere');
+  '0479/111: an organization, an account or an address sent beside a sample is stored nowhere');
 select is(
   (select count(*)::int from public.security_event_samples where target = '/example-org/.env'),
   1,
-  '0479/113: while the sample itself is stored');
+  '0479/112: while the sample itself is stored');
 
 -- ── 15. The overflow row and the read ───────────────────────────────────────
 delete from public.security_event_samples;
@@ -1283,17 +1306,17 @@ select is(
           || array[(r -> 'more_than_listed' -> 0 ->> 'events')::int, (r -> 'more_than_listed' -> 0 ->> 'hours')::int]
      from (select pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), 'wordpress', null, null, 50) as r) x),
   array[50, 50, 50, 40, 1],
-  '0479/114: after a flood of one kind, the read lists its first 50 paths and says 40 more requests (twenty paths, two each) could not be listed');
+  '0479/113: after a flood of one kind, the read lists its first 50 paths and says 40 more requests (twenty paths, two each) could not be listed');
 select is(
   (select count(*)::int from jsonb_array_elements(pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), null, null, null, 50) -> 'targets') x
     where x ->> 'target' = '(more than could be listed)'),
   0,
-  '0479/115: the overflow row is never listed as a target');
+  '0479/114: the overflow row is never listed as a target');
 select is(
   (select array[(r -> 'more_than_listed' -> 0 ->> 'events')::int, jsonb_array_length(r -> 'targets')]
      from (select pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), 'wordpress', null, 'DE') as r) x),
   array[40, 0],
-  '0479/116: and its count is given under any country filter, with no listed path from that country');
+  '0479/115: and its count is given under any country filter, with no listed path from that country');
 
 -- ── 16. Size of an answer ───────────────────────────────────────────────────
 -- 50 targets of 200 characters with 6 pairs of 300 characters each: the
@@ -1309,27 +1332,27 @@ select is(
                 (r ->> 'listed_targets')::int]
      from (select pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), null, null, null, 1000) as r) x),
   array[50, 250, 50, 60],
-  '0479/117: at its largest an answer holds 50 targets and 250 pairs');
+  '0479/116: at its largest an answer holds 50 targets and 250 pairs');
 select cmp_ok(
   (select length(pg_temp.rd(pg_temp.h(-1), pg_temp.h(0), null, null, null, 1000)::text)), '<', 120000,
-  '0479/118: and is under 120,000 characters');
+  '0479/117: and is under 120,000 characters');
 
 -- ── 17. Counted as the table counts ─────────────────────────────────────────
 select is(
   (select (pg_temp.rd(pg_temp.h(-1), pg_temp.h(0)) ->> 'listed_events')::bigint),
   (select sum(event_count)::bigint from public.security_event_samples where hour = pg_temp.h(-1)),
-  '0479/119: listed_events is the sum of the window''s listed rows');
+  '0479/118: listed_events is the sum of the window''s listed rows');
 
 -- ── 18. Comments ────────────────────────────────────────────────────────────
 select ok(
   obj_description('public.security_event_samples'::regclass, 'pg_class') like '%text only%'
   and col_description('public.security_event_samples'::regclass, 8) like '%text only%'
   and col_description('public.security_event_samples'::regclass, 9) like '%text only%',
-  '0479/120: the table and its two text columns say the text is shown as text only');
+  '0479/119: the table and its two text columns say the text is shown as text only');
 select ok(
   (select bool_and(obj_description(p.oid, 'pg_proc') like '%service_role only%')
      from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like '%security\_event\_samples'),
-  '0479/121: each function says it is service_role only');
+  '0479/120: each function says it is service_role only');
 
 select * from finish();
 rollback;
