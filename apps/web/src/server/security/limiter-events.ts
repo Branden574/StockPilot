@@ -202,6 +202,7 @@ export const LIMITER_NOT_SECURITY_EVENTS: Readonly<Record<string, string>> = {
   'export-preview:': SIGNED_IN,
   'export:': SIGNED_IN,
   'inventory-staging:': SIGNED_IN,
+  'isbn-extract:user:': SIGNED_IN,
   'isbn-lookup:user:': SIGNED_IN,
   'item-grouping-preview:': SIGNED_IN,
   'item-grouping:': SIGNED_IN,

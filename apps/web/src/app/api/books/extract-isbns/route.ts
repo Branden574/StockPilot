@@ -7,6 +7,7 @@ import {
   ISBN_FILE_WRONG_TYPE_MESSAGE,
   uploadKindsForIsbnFile,
 } from '@/lib/books/isbn-extract';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { checkUploadBytes } from '@/server/security/upload-checks';
 import { ServiceError } from '@/server/services/context';
@@ -31,6 +32,16 @@ const MAX_BYTES = 10 * 1024 * 1024; // 10 MB — generous for textbook order she
 export async function POST(req: Request) {
   const ctx = await withApiContext(req);
   if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  // A per-person limit before the body is read or parsed, closed like the
+  // AI route beside it.
+  const rl = await checkRateLimit(`isbn-extract:user:${ctx.userId}`, 20, 60_000, 'closed');
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: 'rate_limited', message: 'Too many extractions. Try again shortly.' },
+      { status: 429 },
+    );
+  }
 
   let form: FormData;
   try {

@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { withApiContext } from '@/lib/auth/api-context';
 import { extractIsbnsFromFile } from '@/lib/books/isbn-extract';
 import { reportError } from '@/lib/error-reporter';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 import { POST } from './route';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/lib/books/isbn-extract', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/books/isbn-extract')>();
   return { ...actual, extractIsbnsFromFile: vi.fn(actual.extractIsbnsFromFile) };
@@ -35,6 +37,22 @@ describe('POST /api/books/extract-isbns', () => {
       organizationId: 'org-1',
       userId: 'u-1',
     } as never);
+    vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, failed: false } as never);
+  });
+
+  it('a per-person limit, closed, comes before the file is read or parsed', async () => {
+    vi.mocked(checkRateLimit).mockResolvedValue({ allowed: false, failed: true } as never);
+    const req = upload('order.txt', 'text/plain');
+    const formData = vi.spyOn(req, 'formData');
+    const res = await POST(req);
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error: 'rate_limited',
+      message: 'Too many extractions. Try again shortly.',
+    });
+    expect(checkRateLimit).toHaveBeenCalledWith('isbn-extract:user:u-1', 20, 60_000, 'closed');
+    expect(formData).not.toHaveBeenCalled();
+    expect(extractIsbnsFromFile).not.toHaveBeenCalled();
   });
 
   it('reads the ISBNs from a text file', async () => {
