@@ -52,6 +52,8 @@ const RECORDER_NAMES = [
   'recordRefusedSetUpCode',
   'organizationForSignInEmail',
   'recordLimiterRefusal',
+  'recordSecurityEventSample',
+  'flushSecurityEventSamples',
 ];
 
 function isTestFile(rel: string): boolean {
@@ -167,6 +169,10 @@ describe('the security-events recorder stays out of Server Actions', () => {
     expect(read('server/security/account-events.ts')).toMatch(/export function recordSignInBlocked\(/);
     expect(read('server/security/account-events.ts')).toMatch(
       /export function recordAccountCodeBlocked\(/,
+    );
+    expect(read('server/security/event-samples.ts')).toMatch(/export function recordSecurityEventSample\(/);
+    expect(read('server/security/event-samples.ts')).toMatch(
+      /export async function flushSecurityEventSamples\(/,
     );
   });
 

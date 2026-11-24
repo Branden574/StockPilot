@@ -230,6 +230,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Scheduled purge of sign-in alerts older than 90 days, of every account; no active organization.',
   ],
+  'app/api/cron/security-events-retention/route.ts::purge_security_event_samples': [
+    'not_org_data',
+    'Scheduled purge of request samples whose hour began more than 90 days ago; no active organization.',
+  ],
   'app/api/orders/sign/route.ts::confirm_order_signature': [
     'not_org_data',
     'Public sign link: the signature token names the order; no active organization.',
@@ -346,6 +350,10 @@ const REGISTRY: Record<string, Entry> = {
   'server/security/auth-logs.ts::record_security_events': [
     'not_org_data',
     "The hourly job that counts refused sign-ins in Supabase's gateway log, behind the cron secret: the service client stores counts in fixed words with no organization (a log line names no account). No value from a request reaches the call.",
+  ],
+  'server/security/event-samples.ts::record_security_event_samples': [
+    'not_org_data',
+    "The event samples recorder's flush: stores scrubbed probe paths in fixed words with no organization, account or address; the service client; nothing in a request names a row.",
   ],
   'server/security/events.ts::record_security_events': [
     'not_org_data',
