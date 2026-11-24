@@ -44,8 +44,7 @@ import {
   type TrackingProfileCache,
 } from './sports-profiles';
 import { buildPoCharges } from '@/lib/po-imports/charges';
-import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
-import { sniffFile } from '@/lib/file-signature';
+import type { UploadKind } from '@/lib/upload-inspect';
 import {
   isAllowedPoImportUploadMime,
   PO_IMPORT_SCAN_MIME_TYPES,
@@ -56,6 +55,7 @@ import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { isValidStoragePath, poImportPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import {
   encodedInValueLength,
   IN_FILTER_MAX_ENCODED_CHARS,
@@ -220,11 +220,30 @@ export interface PoImportLineRow {
   mapping_confidence: number | null;
 }
 
-/** Bytes recorded as a PDF that are not one (MED-22): the person's file, not a fault. */
-class NotAPdfError extends Error {
-  constructor() {
-    super('not a PDF document');
-    this.name = 'NotAPdfError';
+/**
+ * A file the upload check refused at parse (MED-22, part 6): the person's
+ * file, not a fault. Carries the check's sentence, which is stored as it is.
+ */
+class RefusedImportFileError extends Error {
+  constructor(readonly sentence: string) {
+    super('refused by the upload check');
+    this.name = 'RefusedImportFileError';
+  }
+}
+
+/** The kinds a PO scan frame may be (PO_IMPORT_SCAN_MIME_TYPES; HEIF sniffs as HEIC). */
+const PO_SCAN_KINDS: readonly UploadKind[] = ['jpeg', 'png', 'webp', 'heic', 'pdf'];
+
+/**
+ * A refused import file is removed with the service role (its path was
+ * shape-checked when the row was recorded). Best-effort: the refusal stands
+ * either way, and nothing serves this bucket.
+ */
+async function removeRefusedImportFile(path: string): Promise<void> {
+  try {
+    await createAdminClient().storage.from('po-imports').remove([path]);
+  } catch {
+    // Deliberately swallowed.
   }
 }
 
@@ -1018,23 +1037,31 @@ export class PoImportsService {
     //
     // Sniffing happens BEFORE the dedup hash and the upload, so a rejected
     // frame leaves no object, no row and no vision spend.
-    const files = input.files.map((f) => {
-      const sniffed = sniffFile(f.bytes);
-      if (!sniffed || !PO_IMPORT_SCAN_MIME_TYPES.has(sniffed.mime)) {
+    //
+    // Both are the one upload check (server/security/upload-checks.ts, part
+    // 6), which records a refused frame as a security event. The first frame
+    // refused ends the scan, as before.
+    const files: typeof input.files = [];
+    for (const f of input.files) {
+      const checked = await checkUploadBytes(f.bytes, {
+        surface: 'po_scan',
+        accept: PO_SCAN_KINDS,
+        organizationId: this.ctx.organizationId,
+        wrongTypeMessage: `${f.fileName} is not a file we can read as a purchase order. Use JPEG/PNG/WEBP/HEIC or PDF.`,
+      });
+      if (!checked.ok || !PO_IMPORT_SCAN_MIME_TYPES.has(checked.mime)) {
         throw new ServiceError(
           'validation_error',
-          `${f.fileName} is not a file we can read as a purchase order. Use JPEG/PNG/WEBP/HEIC or PDF.`,
+          checked.ok
+            ? `${f.fileName} is not a file we can read as a purchase order. Use JPEG/PNG/WEBP/HEIC or PDF.`
+            : checked.message,
         );
-      }
-      const threat = scanDocumentBytes(f.bytes, sniffed.kind);
-      if (threat) {
-        throw new ServiceError('validation_error', THREAT_MESSAGES[threat.code]);
       }
       // `mimeType` is REPLACED, not merely validated. Leaving the declared
       // value on the object would let it keep flowing downstream past a check
       // it never satisfied.
-      return { ...f, mimeType: sniffed.mime };
-    });
+      files.push({ ...f, mimeType: checked.mime });
+    }
 
     // Hash the concatenated bytes for dedup.
     const hash = createHash('sha256');
@@ -1315,11 +1342,27 @@ export class PoImportsService {
       // offset 0 on purpose: the spec puts the header first, but real-world
       // PDFs carry leading junk and every reader tolerates it inside that
       // window — pinning offset 0 would reject files that parse fine today.
-      // CSV gets no equivalent check: it has no magic bytes, and "is this
-      // text" is exactly what the CSV parser already decides (it yields zero
-      // lines, which is already surfaced as a failed parse).
-      if (sourceType === 'pdf' && !buffer.subarray(0, 1024).includes('%PDF-')) {
-        throw new NotAPdfError();
+      //
+      // Part 6: the one upload check reads it now. A PDF keeps the first-
+      // kilobyte rule above and is scanned for active content before the
+      // parser opens it; a CSV must be text (no NUL byte, no stray control
+      // byte), never a binary file called .csv. A refusal is recorded as a
+      // security event, the file is removed (it is never served, and nothing
+      // but this parse reads it), and the import fails with the check's
+      // sentence.
+      const checked = await checkUploadBytes(new Uint8Array(buffer), {
+        surface: 'po_import_file',
+        accept: sourceType === 'pdf' ? ['pdf'] : ['text'],
+        pdfHeader: 'in_first_kilobyte',
+        organizationId: this.ctx.organizationId,
+        wrongTypeMessage:
+          sourceType === 'pdf'
+            ? 'This file is not a PDF.'
+            : 'This file is not a CSV text file. Save it as CSV and upload it again.',
+      });
+      if (!checked.ok) {
+        await removeRefusedImportFile(header.storage_path as string);
+        throw new RefusedImportFileError(checked.message);
       }
       const parsed = await parsePoFile(buffer, sourceType);
       canonical = parsed;
@@ -1330,11 +1373,11 @@ export class PoImportsService {
       // S31: parse_error is shown as it is, on the web and the phone. It
       // stored Storage's words or a PDF library's; it is the app's sentence
       // now, and the error's own text is reported.
-      const notPdf = e instanceof NotAPdfError;
-      const msg = notPdf
-        ? 'This file is not a PDF.'
+      const refused = e instanceof RefusedImportFileError;
+      const msg = refused
+        ? e.sentence
         : 'The file could not be read. Upload it again as a PDF or CSV.';
-      if (!notPdf) {
+      if (!refused) {
         void reportError(e instanceof Error ? e : new Error(String(e)), {
           tag: 'po_import.parse',
           organizationId: this.ctx.organizationId,
