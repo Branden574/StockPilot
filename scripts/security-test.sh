@@ -1052,6 +1052,38 @@ PGTAP_TESTS=(
   # changes) say when they cut. 7, 14 and 30 days are 168, 336 and 720 hours,
   # also where a zone changed its clocks inside the window.
   supabase/tests/0477_platform_security_briefing.test.sql
+  # The platform console's attack map (0478): three read-only functions and no
+  # table. anon and authenticated hold EXECUTE on none, service_role on the
+  # public one only, nobody on the two private ones: the grant is the whole
+  # control. No body names a gate word, so if EXECUTE ever reached
+  # authenticated INV-25 would name the function (shown with the grant made
+  # inside a savepoint), and even then the second lock in each body refuses a
+  # signed-in member and a signed-out caller. The counting rules are written
+  # once, in the private units function, with their four lists and the fold's
+  # constant held to the letter: a sign-in event recorded once in each
+  # organization of one account counts once, as a floor (the largest count
+  # among its rows or a fifth of their sum, never their sum), and every number
+  # that holds such a floor is named; a reason that can be a count of other
+  # rows is in no total, cell or feed entry, only in the list of tallies; a row
+  # that stands for events past a cap is counted with no place, whatever the
+  # row holds; the phone and the api are marked late and left out of the
+  # 1-minute cells. Every number of a made-up record is worked out by hand:
+  # totals, events with no country, groups by country, the timeline's cells,
+  # both feeds, blocked since a day start. A row is in the window when its
+  # minute starts at or after the start and before the end; the 10-minute
+  # buckets sit on the UTC clock. A window that holds more than the row
+  # ceiling (400,000) is read from a later whole minute and says so, exactly
+  # at the ceiling it is read as asked, and a newest minute that alone holds
+  # more is refused. The caps (4,000 cells, 2,000 groups, 60 entries) say when
+  # they cut and keep the flagged first; the flagged feed holds the newest 20
+  # flagged entries; a window shorter than 30 minutes has no 10-minute cells
+  # and no groups by country. A window out of order, longer than 26 hours,
+  # ending more than a minute after now or not a time is answered with a fixed
+  # word, never raised, and the answer never repeats the argument. Every object
+  # has exactly its documented keys (no source hash, row key or row id), an
+  # organization's name is cut at 200 characters, and every time is written in
+  # UTC whatever the session's time zone is.
+  supabase/tests/0478_platform_security_map.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
