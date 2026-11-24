@@ -134,3 +134,5 @@ export * from './appearance';
 export * from './security/security-events';
 export * from './security/security-briefing';
 export * from './security/security-map';
+export * from './security/security-response';
+export * from './security/security-response-cards';
