@@ -29,19 +29,43 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+/**
+ * A module loaded for its effect alone: a bare import, an empty import or
+ * re-export list, or a require() whose value is not kept.
+ */
+const EFFECT_ONLY = [
+  /^import\s+['"][^'"]+['"];?\s*$/m,
+  /^(?:import|export)\s*\{\s*\}\s*from\s+['"][^'"]+['"]/m,
+  /^\s*require\(\s*['"][^'"]+['"]\s*\);?\s*$/m,
+];
+
 const files = sourceFiles(SRC).map((abs) => ({
   rel: relative(SRC, abs).split(sep).join('/'),
   text: readFileSync(abs, 'utf8'),
 }));
 
-/** Files with a static import (not `import type`) whose source matches `from`. */
+/**
+ * Every way a file can bring a module's code in without a dynamic import():
+ * `import ... from`, a bare `import '...'`, `export ... from` (a re-export
+ * loads the module too), and `require('...')`. `import type` and
+ * `export type` bring no code and are left out.
+ */
+const STATIC_FORMS = [
+  /^import\s+(?!type\b)[^;]*?from\s+['"]([^'"]+)['"]/gms,
+  /^import\s+['"]([^'"]+)['"]/gm,
+  /^export\s+(?!type\b)[^;]*?from\s+['"]([^'"]+)['"]/gms,
+  /\brequire\(\s*['"]([^'"]+)['"]\s*\)/g,
+];
+
+/** The modules a file brings in statically, in any of the forms above. */
+function staticSources(text: string): string[] {
+  return STATIC_FORMS.flatMap((form) => [...text.matchAll(form)].map((m) => m[1]!));
+}
+
+/** Files with a static import, re-export or require whose source matches `from`. */
 function staticImporters(from: RegExp): string[] {
   return files
-    .filter(({ text }) =>
-      [...text.matchAll(/^import\s+(?!type\b)[^;]*?from\s+['"]([^'"]+)['"]/gms)].some((m) =>
-        from.test(m[1]!),
-      ),
-    )
+    .filter(({ text }) => staticSources(text).some((source) => from.test(source)))
     .map((f) => f.rel)
     .sort();
 }
@@ -57,6 +81,26 @@ function dynamicImporters(from: RegExp): string[] {
 }
 
 describe("three.js stays in the attack map's lazy island", () => {
+  it('the import check sees every static form, and not the type-only ones', () => {
+    const forms = [
+      "import * as THREE from 'three';",
+      "import { WebGLRenderer } from 'three';",
+      "import 'three';",
+      "export { WebGLRenderer } from 'three';",
+      "export * from 'three';",
+      "export * as THREE from 'three';",
+      "const THREE = require('three');",
+      "import THREE = require('three');",
+    ];
+    for (const form of forms) expect(staticSources(form), form).toEqual(['three']);
+    for (const form of [
+      "import type { WebGLRenderer } from 'three';",
+      "export type { X } from 'three';",
+    ]) {
+      expect(staticSources(form), form).toEqual([]);
+    }
+  });
+
   it('three is imported by the globe renderer and by nothing else', () => {
     expect(staticImporters(/^three(\/|$)/)).toEqual([`${DIR}/globe-renderer.ts`]);
     expect(dynamicImporters(/^three(\/|$)/)).toEqual([]);
@@ -109,9 +153,35 @@ describe("three.js stays in the attack map's lazy island", () => {
     // The mark is true only while no core module is imported for its effect.
     const coreSrc = join(SRC, '..', '..', '..', 'packages', 'core', 'src');
     const bare = sourceFiles(coreSrc).filter((abs) =>
-      /^import\s+['"][^'"]+['"];?\s*$/m.test(readFileSync(abs, 'utf8')),
+      EFFECT_ONLY.some((form) => form.test(readFileSync(abs, 'utf8'))),
     );
     expect(bare.map((abs) => relative(coreSrc, abs))).toEqual([]);
+  });
+
+  it('the side-effect check sees a module loaded for its effect in every form', () => {
+    for (const form of [
+      "import './setup';",
+      "import {} from './setup';",
+      "export {} from './setup';",
+      "export { } from './setup';",
+      "require('./setup');",
+    ]) {
+      expect(
+        EFFECT_ONLY.some((re) => re.test(form)),
+        form,
+      ).toBe(true);
+    }
+    for (const form of [
+      "import { a } from './a';",
+      "export * from './a';",
+      "export { a } from './a';",
+      "const a = require('./a');",
+    ]) {
+      expect(
+        EFFECT_ONLY.some((re) => re.test(form)),
+        form,
+      ).toBe(false);
+    }
   });
 
   it('the island is rendered by the map section alone', () => {
