@@ -36,10 +36,10 @@ import {
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { sendSupplierRiskRefusalAway } from '@/lib/supplier-risk/page-gate';
+import { SupplierRiskTime } from '@/components/suppliers/risk/when';
 import {
   SUPPLIER_RISK_SUPPLIER_STATE_WORDS,
   supplierRiskResultWords,
-  supplierRiskWhen,
 } from '@/lib/supplier-risk/words';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { withContext } from '@/server/services/context';
@@ -197,7 +197,9 @@ export default async function SupplierRiskReviewPage({
   } catch (e) {
     sendSupplierRiskRefusalAway(e, here);
   }
-  const orgToday = dayIn(resolveOrgTimezone(timezone));
+  // The organization's zone: every time on the page is written in it.
+  const timeZone = resolveOrgTimezone(timezone);
+  const orgToday = dayIn(timeZone);
   const utcToday = new Date().toISOString().slice(0, 10);
 
   const currentReview = current.state === 'ok' ? current.value : null;
@@ -310,6 +312,7 @@ export default async function SupplierRiskReviewPage({
           <SupplierRiskReviewSummary
             review={earlierReview}
             title={`Version ${earlierReview.version}`}
+            timeZone={timeZone}
           />
           <DetailSection title={`Items of version ${earlierReview.version}`} headingLevel={2}>
             <SupplierRiskItems
@@ -318,6 +321,7 @@ export default async function SupplierRiskReviewPage({
               people={[]}
               canWrite={false}
               orgToday={orgToday}
+              timeZone={timeZone}
             />
           </DetailSection>
           <SupplierRiskAnswersList
@@ -334,6 +338,7 @@ export default async function SupplierRiskReviewPage({
             reviewDue={row.reviewDue}
             dueReminder={row.dueReminder}
             reviewerAccountDeleted={row.reviewerAccountDeleted}
+            timeZone={timeZone}
           />
           <DetailSection title="Items" headingLevel={2}>
             <SupplierRiskItems
@@ -342,6 +347,7 @@ export default async function SupplierRiskReviewPage({
               people={owners}
               canWrite={member && !couldNotCheck}
               orgToday={orgToday}
+              timeZone={timeZone}
             />
           </DetailSection>
           <DetailSection title="Questions to send the vendor" headingLevel={2}>
@@ -379,7 +385,8 @@ export default async function SupplierRiskReviewPage({
           aside={
             draftRow?.updatedAt ? (
               <span className="text-muted-foreground text-[12px]">
-                Draft saved {supplierRiskWhen(draftRow.updatedAt)}
+                Draft saved{' '}
+                <SupplierRiskTime at={draftRow.updatedAt} timeZone={timeZone} clock />
               </span>
             ) : null
           }
@@ -447,7 +454,7 @@ export default async function SupplierRiskReviewPage({
                   <TableCell>
                     {v.reviewedAt ? (
                       <>
-                        {supplierRiskWhen(v.reviewedAt)}
+                        <SupplierRiskTime at={v.reviewedAt} timeZone={timeZone} />
                         {v.reviewerName ? (
                           <>
                             {' by '}

@@ -151,7 +151,7 @@ function adminService() {
     'rpc:supplier_risk_draft_discard': { data: true, error: null },
     'rpc:supplier_risk_review': review('open'),
     'rpc:supplier_risk_item_update': {
-      data: { ...(review('accepted').data as { items: unknown[] }).items[0] },
+      data: { ...(review('accepted').data as { items: Array<Record<string, unknown>> }).items[0] },
       error: null,
     },
   });

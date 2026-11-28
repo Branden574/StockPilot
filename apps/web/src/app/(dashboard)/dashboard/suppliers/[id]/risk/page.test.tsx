@@ -359,3 +359,38 @@ describe('a support (act-as) seat, and a seat that could not be read: no write c
     expect(screen.queryByRole('button', { name: /Change the item/ })).toBeNull();
   });
 });
+
+describe('dates in the organization zone (S3)', () => {
+  it('"Draft saved" is the moment in the organization zone, named, with the exact UTC beside it', async () => {
+    useStub({
+      history: {
+        data: [
+          {
+            review_id: DRAFT,
+            version: 4,
+            status: 'draft',
+            is_current: false,
+            updated_at: '2026-11-28T01:30:00Z',
+          },
+          {
+            review_id: CURRENT,
+            version: 3,
+            status: 'final',
+            is_current: true,
+            reviewed_at: '2026-11-28T01:00:00Z',
+            reviewer_name: 'Rami Example',
+          },
+        ],
+        error: null,
+      },
+    });
+    const { container } = await page();
+    const saved = screen.getByText(/^Draft saved/);
+    expect(saved.textContent).toContain('Draft saved November 27, 2026, 5:30 PM PST');
+    expect(saved.querySelector('time')?.getAttribute('title')).toBe('28 Nov 2026, 01:30 UTC');
+    // The Versions table: the Pacific day of the finish, not the UTC one.
+    const versions = container.querySelector('#supplier-risk-versions')?.closest('section');
+    expect(versions?.textContent).toContain('November 27, 2026');
+    expect(versions?.textContent).not.toContain('November 28, 2026');
+  });
+});

@@ -27,7 +27,6 @@ import {
   SUPPLIER_RISK_OWNER_NOT_ADMIN,
   supplierRiskDay,
   supplierRiskTextProblem,
-  supplierRiskWhen,
 } from '@/lib/supplier-risk/words';
 import { updateSupplierRiskItemAction } from '@/server/actions/supplier-risk';
 import type { SupplierRiskItem, SupplierRiskPerson } from '@/server/services/supplier-risk';
@@ -37,6 +36,7 @@ import { SupplierRiskOutcomeNote } from './outcome-note';
 import { ReasonField } from './reason-field';
 import { NATIVE_SELECT } from './review-form';
 import { sendWithStepUp, supplierRiskOutcomeOf, type SupplierRiskOutcome } from './step-up';
+import { SupplierRiskTime } from './when';
 
 const SEVERITY_TONE = {
   critical: 'destructive',
@@ -51,7 +51,9 @@ const SEVERITY_TONE = {
  * and status, "Accepted by <name>: <reason>" for a risk accepted, and who
  * changed it last. Every name sits in <bdi>; every text is shown exactly as
  * written. With `canWrite` (an owner or admin on their own seat, the current
- * review), each item can be changed; a support seat sees no control.
+ * review), each item can be changed; a support seat sees no control. When it
+ * was last changed is the day in the organization's zone (`timeZone`), drawn
+ * the same on the server and in the browser.
  */
 export function SupplierRiskItems({
   reviewId,
@@ -59,12 +61,15 @@ export function SupplierRiskItems({
   people,
   canWrite,
   orgToday,
+  timeZone,
 }: {
   reviewId: string;
   items: SupplierRiskItem[];
   people: SupplierRiskPerson[];
   canWrite: boolean;
   orgToday: string;
+  /** The organization's zone (resolved), for "Last changed". */
+  timeZone: string;
 }) {
   if (items.length === 0) {
     return <p className="text-ink-2 text-[13px]">No item: every question was answered Yes.</p>;
@@ -79,6 +84,7 @@ export function SupplierRiskItems({
           people={people}
           canWrite={canWrite}
           orgToday={orgToday}
+          timeZone={timeZone}
         />
       ))}
     </ul>
@@ -91,12 +97,14 @@ function ItemRow({
   people,
   canWrite,
   orgToday,
+  timeZone,
 }: {
   reviewId: string;
   item: SupplierRiskItem;
   people: SupplierRiskPerson[];
   canWrite: boolean;
   orgToday: string;
+  timeZone: string;
 }) {
   const [editing, setEditing] = React.useState(false);
   const question = vendorRiskQuestion(item.questionKey);
@@ -149,7 +157,8 @@ function ItemRow({
       ) : null}
       {item.changedByName ? (
         <p className="text-muted-foreground text-[12px]">
-          Last changed by <bdi>{item.changedByName}</bdi> on {supplierRiskWhen(item.changedAt)}.
+          Last changed by <bdi>{item.changedByName}</bdi> on{' '}
+          <SupplierRiskTime at={item.changedAt} timeZone={timeZone} />.
         </p>
       ) : null}
       {canWrite ? (

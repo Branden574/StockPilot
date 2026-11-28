@@ -15,6 +15,7 @@ import {
   SUPPLIER_RISK_DUE_REMINDER_NOT_SENT,
   SUPPLIER_RISK_REVIEW_DUE_WORDS,
   SUPPLIER_RISK_SUPPLIER_STATE_WORDS,
+  supplierRiskDayOf,
   supplierRiskHardStopWords,
   supplierRiskResultWords,
 } from './words';
@@ -26,7 +27,14 @@ import {
  * names, the names they were reviewed as and the reviewers' names are typed
  * by people, so a name like =HYPERLINK(...) arrives as text, never as a
  * formula (CONTRACT.md 6.5). No finding, action, answer or reason is in it.
+ * "Reviewed on" is the day the review was finished in the organization's zone
+ * (`timeZone`), never the UTC day cut from the instant.
  */
+
+export interface SupplierRiskCsvOptions {
+  /** The organization's zone (resolved). */
+  timeZone: string;
+}
 
 export interface SupplierRiskCsvRow {
   supplierName: string;
@@ -69,7 +77,10 @@ export const SUPPLIER_RISK_CSV_HEADER = [
   'Version',
 ] as const;
 
-export function supplierRiskRegisterCsv(rows: readonly SupplierRiskCsvRow[]): string {
+export function supplierRiskRegisterCsv(
+  rows: readonly SupplierRiskCsvRow[],
+  options: SupplierRiskCsvOptions,
+): string {
   return toCsv(
     [...SUPPLIER_RISK_CSV_HEADER],
     rows.map((r) => ({
@@ -89,7 +100,7 @@ export function supplierRiskRegisterCsv(rows: readonly SupplierRiskCsvRow[]): st
       'Next review': r.nextReviewOn ?? '',
       'Review due': SUPPLIER_RISK_REVIEW_DUE_WORDS[r.reviewDue],
       'Due reminder': r.dueReminder === 'not_sent' ? SUPPLIER_RISK_DUE_REMINDER_NOT_SENT : '',
-      'Reviewed on': r.reviewedAt ? r.reviewedAt.slice(0, 10) : '',
+      'Reviewed on': supplierRiskDayOf(r.reviewedAt, options.timeZone) ?? '',
       'Reviewed by': r.reviewerName ?? '',
       Version: r.version ?? '',
     })),

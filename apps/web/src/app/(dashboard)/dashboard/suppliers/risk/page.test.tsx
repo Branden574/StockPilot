@@ -50,6 +50,9 @@ vi.mock('@/server/services/context', async (importOriginal) => {
   return { ...real, withContext: async () => h.ctx };
 });
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
+vi.mock('@/lib/dashboard/request-cache', () => ({
+  getOrgRowForRequest: async () => ({ timezone: 'America/Los_Angeles' }),
+}));
 
 import SupplierRiskRegisterPage from './page';
 

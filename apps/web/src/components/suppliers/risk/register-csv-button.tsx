@@ -14,9 +14,18 @@ import {
  * is read again). Every cell is guarded against spreadsheet formulas
  * (lib/supplier-risk/register-csv.ts).
  */
-export function RegisterCsvButton({ rows }: { rows: SupplierRiskCsvRow[] }) {
+export function RegisterCsvButton({
+  rows,
+  timeZone,
+}: {
+  rows: SupplierRiskCsvRow[];
+  /** The organization's zone (resolved): "Reviewed on" is its day. */
+  timeZone: string;
+}) {
   function download() {
-    const blob = new Blob([supplierRiskRegisterCsv(rows)], { type: 'text/csv;charset=utf-8' });
+    const blob = new Blob([supplierRiskRegisterCsv(rows, { timeZone })], {
+      type: 'text/csv;charset=utf-8',
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

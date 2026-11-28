@@ -18,11 +18,14 @@ import {
   supplierRiskHardStopWords,
   supplierRiskResultTone,
   supplierRiskResultWords,
-  supplierRiskWhen,
 } from '@/lib/supplier-risk/words';
 import type { SupplierDueReminder, SupplierRiskReview } from '@/server/services/supplier-risk';
 
 import type { VendorRiskReviewDue } from '@stockpilot/core';
+
+import { ZonedTime } from '@/components/platform/zoned-time';
+
+import { SupplierRiskTime } from './when';
 
 /**
  * What the review says about its hard stops. The ones that apply are the
@@ -56,9 +59,12 @@ export function SupplierRiskReviewSummary({
   reviewDue,
   dueReminder,
   reviewerAccountDeleted = false,
+  timeZone,
 }: {
   review: SupplierRiskReview;
   title: string;
+  /** The organization's zone (resolved), for when it was reviewed. */
+  timeZone: string;
   reviewDue?: VendorRiskReviewDue | null;
   dueReminder?: SupplierDueReminder | null;
   reviewerAccountDeleted?: boolean;
@@ -145,7 +151,13 @@ export function SupplierRiskReviewSummary({
           {review.residualRisk ? VENDOR_RISK_RISK_WORDS[review.residualRisk] : '—'}
         </KeyValueRow>
         <KeyValueRow label="Reviewed">
-          {supplierRiskWhen(review.reviewedAt)}
+          {/* The day the review was finished, in the organization's zone: the
+              database's own reviewed_on when it gave one. */}
+          {review.reviewedOn && review.reviewedAt ? (
+            <ZonedTime at={review.reviewedAt} shown={supplierRiskDay(review.reviewedOn)} />
+          ) : (
+            <SupplierRiskTime at={review.reviewedAt} timeZone={timeZone} />
+          )}
           {review.reviewerName ? (
             <>
               {' by '}

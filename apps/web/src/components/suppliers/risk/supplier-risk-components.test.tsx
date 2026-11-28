@@ -1,5 +1,7 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import * as React from 'react';
+import { hydrateRoot } from 'react-dom/client';
+import { renderToString } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -332,7 +334,11 @@ function item(over: Partial<SupplierRiskItem> = {}): SupplierRiskItem {
 describe('follow-up 4: names in <bdi>, and text as text', () => {
   it('an override: what the rules gave, "Set by <bdi>name</bdi>: reason" exactly as written, the hard stops named', () => {
     const { container } = render(
-      <SupplierRiskReviewSummary review={review()} title="Current review" />,
+      <SupplierRiskReviewSummary
+        review={review()}
+        title="Current review"
+        timeZone="America/Los_Angeles"
+      />,
     );
     const override = container.querySelector('[data-slot="supplier-risk-override"]')!;
     expect(override.textContent).toMatch(/The rules gave: Do not use/);
@@ -354,6 +360,7 @@ describe('follow-up 4: names in <bdi>, and text as text', () => {
         people={[]}
         canWrite={false}
         orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
       />,
     );
     const names = Array.from(container.querySelectorAll('bdi')).map((b) => b.textContent);
@@ -374,6 +381,7 @@ describe('follow-up 4: names in <bdi>, and text as text', () => {
         people={[]}
         canWrite={false}
         orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
       />,
     );
     expect(screen.queryByRole('button', { name: /Change the item/ })).toBeNull();
@@ -384,6 +392,7 @@ describe('follow-up 4: names in <bdi>, and text as text', () => {
         people={[]}
         canWrite
         orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
       />,
     );
     const change = screen.getByRole('button', { name: /Change the item/ });
@@ -404,6 +413,7 @@ describe('follow-up 4: names in <bdi>, and text as text', () => {
         people={[{ userId: ME, name: 'Avery Example' }]}
         canWrite
         orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: /Change the item/ }));
@@ -444,6 +454,7 @@ describe('the stored summary says what is true about the hard stops (S5)', () =>
           answers: studentAnswers({ data_agreement: { answer: 'not_shown' } }),
         })}
         title="Current review"
+        timeZone="America/Los_Angeles"
       />,
     );
     expect(container.textContent).not.toContain('No hard stop applies.');
@@ -464,9 +475,87 @@ describe('the stored summary says what is true about the hard stops (S5)', () =>
           answers: studentAnswers(),
         })}
         title="Current review"
+        timeZone="America/Los_Angeles"
       />,
     );
     expect(container.textContent).toContain('No hard stop applies.');
     expect(container.textContent).not.toContain(notRuledOut);
+  });
+});
+
+describe('every date in the organization zone, the same on the server and in the browser (S3)', () => {
+  it('"Last changed" is the day in the organization zone, with the exact UTC beside it', () => {
+    const { container } = render(
+      <SupplierRiskItems
+        reviewId="r"
+        items={[item({ changedAt: '2026-11-27T16:30:00Z' })]}
+        people={[]}
+        canWrite={false}
+        orgToday="2026-11-28"
+        timeZone="Asia/Tokyo"
+      />,
+    );
+    expect(container.textContent).toMatch(/Last changed by Blake Example on November 28, 2026/);
+    expect(container.querySelector('time')?.getAttribute('title')).toBe('27 Nov 2026, 16:30 UTC');
+  });
+
+  it('"Reviewed" is the day the review was finished in the organization zone', () => {
+    const { container } = render(
+      <SupplierRiskReviewSummary
+        review={review({ reviewedAt: '2026-11-27T16:30:00Z', reviewedOn: '2026-11-28' })}
+        title="Current review"
+        timeZone="Asia/Tokyo"
+      />,
+    );
+    expect(container.textContent).toContain('November 28, 2026');
+    expect(container.textContent).not.toContain('November 27, 2026');
+  });
+
+  it('a due date is a calendar day: never moved by a zone', () => {
+    const { container } = render(
+      <SupplierRiskItems
+        reviewId="r"
+        items={[item({ dueOn: '2026-12-31' })]}
+        people={[]}
+        canWrite={false}
+        orgToday="2026-11-28"
+        timeZone="Pacific/Kiritimati"
+      />,
+    );
+    expect(container.textContent).toContain('December 31, 2026');
+  });
+
+  it('the items rendered on a server in UTC hydrate in a browser in Los Angeles with no mismatch', async () => {
+    const before = process.env.TZ;
+    const tree = (
+      <SupplierRiskItems
+        reviewId="r"
+        items={[item({ changedAt: '2026-11-28T03:00:00Z' })]}
+        people={[]}
+        canWrite={false}
+        orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
+      />
+    );
+    try {
+      process.env.TZ = 'UTC';
+      const html = renderToString(tree);
+      process.env.TZ = 'America/Los_Angeles';
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      document.body.appendChild(container);
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const recoverable: unknown[] = [];
+      await act(async () => {
+        hydrateRoot(container, tree, { onRecoverableError: (e) => recoverable.push(e) });
+      });
+      expect(recoverable).toEqual([]);
+      expect(errors).not.toHaveBeenCalled();
+      expect(container.textContent).toContain('on November 27, 2026');
+      errors.mockRestore();
+      container.remove();
+    } finally {
+      process.env.TZ = before;
+    }
   });
 });

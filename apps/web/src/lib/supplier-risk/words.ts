@@ -1,7 +1,11 @@
 import {
+  clockWords,
+  resolveOrgTimezone,
   VENDOR_RISK_HARD_STOP_WORDS,
   VENDOR_RISK_RESULT_WORDS,
   vendorRiskTextOk,
+  zonedParts,
+  zoneShortName,
   type VendorRiskResult,
   type VendorRiskReviewDue,
 } from '@stockpilot/core';
@@ -90,16 +94,51 @@ export function supplierRiskDay(isoDay: string | null | undefined): string {
   return isoDay ? supplierRiskDayWords(isoDay) : '—';
 }
 
-/** A moment as its day in words (UTC day of the instant is not used: the browser's own day is). */
-export function supplierRiskWhen(iso: string | null | undefined): string {
-  if (!iso) return '—';
+/*
+ * TIMES on the vendor risk pages are in the ORGANIZATION's zone (its stored
+ * organizations.timezone, resolved by core's resolveOrgTimezone), never the
+ * server's (UTC on Vercel) or the browser's: a review finished at 5 PM in Los
+ * Angeles on the 27th reads the 27th. The words are built from core's
+ * zonedParts and clockWords with the zone as an argument, never from the
+ * runtime's own zone or its locale strings, so a page rendered on the server
+ * and hydrated in a browser in another zone draws the same text (no hydration
+ * mismatch). A calendar DAY the database keeps as a date (a due date, the next
+ * review, the day a review was finished) is never moved by a zone:
+ * supplierRiskDay.
+ */
+
+/** The calendar day ('YYYY-MM-DD') an instant falls on in the organization's zone; null for none. */
+export function supplierRiskDayOf(
+  iso: string | null | undefined,
+  timeZone: string | null | undefined,
+): string | null {
+  if (!iso) return null;
   const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return '—';
-  return new Date(t).toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  if (!Number.isFinite(t)) return null;
+  const p = zonedParts(t, resolveOrgTimezone(timeZone));
+  return `${String(p.year).padStart(4, '0')}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
+}
+
+/** An instant as the day it falls on in the organization's zone ("November 27, 2026"), or an em dash. */
+export function supplierRiskWhen(
+  iso: string | null | undefined,
+  timeZone: string | null | undefined,
+): string {
+  const day = supplierRiskDayOf(iso, timeZone);
+  return day ? supplierRiskDayWords(day) : '—';
+}
+
+/** An instant with its clock and zone ("November 27, 2026, 5:30 PM PST"), or an em dash. */
+export function supplierRiskMoment(
+  iso: string | null | undefined,
+  timeZone: string | null | undefined,
+): string {
+  const day = supplierRiskDayOf(iso, timeZone);
+  if (!day || !iso) return '—';
+  const t = Date.parse(iso);
+  const zone = resolveOrgTimezone(timeZone);
+  const p = zonedParts(t, zone);
+  return `${supplierRiskDayWords(day)}, ${clockWords(p.hour, p.minute, '12h')} ${zoneShortName(t, zone)}`;
 }
 
 export type SupplierRiskTextProblem = 'too_long' | 'blank' | 'hidden' | null;

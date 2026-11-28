@@ -1,5 +1,7 @@
 import type { Metadata } from 'next';
 
+import { resolveOrgTimezone } from '@stockpilot/core';
+
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
@@ -8,6 +10,7 @@ import { RegisterCsvButton } from '@/components/suppliers/risk/register-csv-butt
 import { SupplierRiskRegisterTable } from '@/components/suppliers/risk/register-table';
 import { SupplierRiskLimits } from '@/components/suppliers/risk/rules-and-limits';
 import { Button } from '@/components/ui/button';
+import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { sendSupplierRiskRefusalAway } from '@/lib/supplier-risk/page-gate';
 import { sortSupplierRiskRegister } from '@/lib/supplier-risk/words';
@@ -56,11 +59,21 @@ export default async function SupplierRiskRegisterPage() {
   }
 
   let read: SupplierRiskRead<SupplierRiskRegisterRow[]>;
+  let timezone: string | null | undefined;
   try {
-    read = await new SupplierRiskService(ctx).register();
+    let org;
+    [read, org] = await Promise.all([
+      new SupplierRiskService(ctx).register(),
+      // The organization's zone, for the CSV's "Reviewed on" (already read
+      // for this request by the context; a failed read falls back to core's
+      // documented default zone rather than failing the register).
+      getOrgRowForRequest(ctx.organizationId).catch(() => null),
+    ]);
+    timezone = org?.timezone;
   } catch (e) {
     sendSupplierRiskRefusalAway(e, THIS_PAGE);
   }
+  const timeZone = resolveOrgTimezone(timezone);
   const rows = read.state === 'ok' ? sortSupplierRiskRegister(read.value) : [];
 
   return (
@@ -70,7 +83,9 @@ export default async function SupplierRiskRegisterPage() {
         titleId="supplier-risk-register-title"
         subline="Every supplier's vendor review: the result, the risk left, the open items and when the next review is due. Overdue first."
         back={<PageHeaderBackLink href="/dashboard/suppliers">← Suppliers</PageHeaderBackLink>}
-        actions={read.state === 'ok' ? <RegisterCsvButton rows={rows} /> : null}
+        actions={
+          read.state === 'ok' ? <RegisterCsvButton rows={rows} timeZone={timeZone} /> : null
+        }
       />
 
       {read.state === 'could_not_check' ? (

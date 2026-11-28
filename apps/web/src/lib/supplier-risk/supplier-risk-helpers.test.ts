@@ -91,15 +91,18 @@ function cells(csv: string): string[][] {
 
 describe('the register CSV', () => {
   it('a formula in a typed name arrives as text', () => {
-    const csv = supplierRiskRegisterCsv([
-      csvRow({ supplierName: '=HYPERLINK("https://example.test","Open")' }),
-      csvRow({
-        supplierName: '+1 Supplies',
-        reviewerName: '@Avery',
-        reviewedAsName: '-Old Name',
-        nameChanged: true,
-      }),
-    ]);
+    const csv = supplierRiskRegisterCsv(
+      [
+        csvRow({ supplierName: '=HYPERLINK("https://example.test","Open")' }),
+        csvRow({
+          supplierName: '+1 Supplies',
+          reviewerName: '@Avery',
+          reviewedAsName: '-Old Name',
+          nameChanged: true,
+        }),
+      ],
+      { timeZone: 'UTC' },
+    );
     const [header, a, b] = cells(csv);
     expect(header).toEqual([...SUPPLIER_RISK_CSV_HEADER]);
     expect(a?.[0]).toBe('\'=HYPERLINK("https://example.test","Open")');
@@ -117,17 +120,35 @@ describe('the register CSV', () => {
 
   it('a supplier never reviewed says so, and "Reviewed as" only when the name changed', () => {
     const [, row] = cells(
-      supplierRiskRegisterCsv([
-        csvRow({
-          result: null,
-          computedResult: null,
-          reviewDue: 'not_reviewed',
-          reviewedAsName: 'Old Co',
-        }),
-      ]),
+      supplierRiskRegisterCsv(
+        [
+          csvRow({
+            result: null,
+            computedResult: null,
+            reviewDue: 'not_reviewed',
+            reviewedAsName: 'Old Co',
+          }),
+        ],
+        { timeZone: 'UTC' },
+      ),
     );
     expect(row?.[4]).toBe('Not reviewed');
     expect(row?.[1]).toBe('');
+  });
+
+  it('"Reviewed on" is the day in the organization zone, never the UTC day cut from the instant (S3)', () => {
+    const [, tokyo] = cells(
+      supplierRiskRegisterCsv([csvRow({ reviewedAt: '2026-11-27T16:30:00Z' })], {
+        timeZone: 'Asia/Tokyo',
+      }),
+    );
+    expect(tokyo?.[14]).toBe('2026-11-28');
+    const [, pacific] = cells(
+      supplierRiskRegisterCsv([csvRow({ reviewedAt: '2026-11-28T03:00:00Z' })], {
+        timeZone: 'America/Los_Angeles',
+      }),
+    );
+    expect(pacific?.[14]).toBe('2026-11-27');
   });
 });
 
