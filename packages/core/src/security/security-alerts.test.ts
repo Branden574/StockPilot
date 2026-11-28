@@ -796,6 +796,54 @@ describe('serious flags, first', () => {
     expect(order[0]!.eventKey).toBe('sign_in_not_me|2026-11-24T10:00Z');
   });
 
+  it('several serious flags of one reason and of several, and several retries: every one is claimed, before any volume or record claim', () => {
+    const at = (h: number) => Date.UTC(2026, 10, 24, h);
+    const p = plan({
+      serious: [
+        { reason: 'sign_in_not_me', hour: at(6) },
+        { reason: 'sign_in_not_me', hour: at(7) },
+        { reason: 'passkey_counter_went_back', hour: at(7) },
+        { reason: 'over_buffer_cap', hour: at(8), flood: true },
+        { reason: 'over_minute_cap', hour: at(8), flood: true },
+        { reason: 'unrecorded_server_form_code', hour: at(9) },
+        { reason: 'unrecorded_server_form_code', hour: at(10) },
+        { reason: 'unrecorded_server_form_code', hour: at(11) },
+      ],
+      seriousRetry: [
+        'sign_in_not_me|2026-11-24T05:00Z',
+        'passkey_unexplained_sign_in|2026-11-24T05:00Z',
+        'over_minute_cap|2026-11-24T04:00Z',
+      ],
+      aimed: [{ org: ORG_A, cells: cells(LAST3, 30) }],
+      buckets: { [JUDGED]: { troubleRows: 3, events: 900, sources: 90 } },
+      retry: [{ rule: 'spike', key: key(JUDGED - 6 * BUCKET), phase: 'started' }],
+    });
+    const order = securityAlertClaimOrder(p);
+    const serious = [
+      'sign_in_not_me|2026-11-24T05:00Z',
+      'passkey_unexplained_sign_in|2026-11-24T05:00Z',
+      'over_minute_cap|2026-11-24T04:00Z',
+      'sign_in_not_me|2026-11-24T06:00Z',
+      'sign_in_not_me|2026-11-24T07:00Z',
+      'passkey_counter_went_back|2026-11-24T07:00Z',
+      'over_buffer_cap|2026-11-24T08:00Z',
+      'over_minute_cap|2026-11-24T08:00Z',
+      'unrecorded_server_form_code|2026-11-24T09:00Z',
+      'unrecorded_server_form_code|2026-11-24T10:00Z',
+      'unrecorded_server_form_code|2026-11-24T11:00Z',
+    ];
+    expect(order.slice(0, serious.length).map((c) => [c.rule, c.eventKey])).toEqual(
+      serious.map((k) => ['serious_flag', k]),
+    );
+    const rest = order.slice(serious.length);
+    expect(rest.map((c) => c.rule).sort()).toEqual([
+      'aimed_guessing',
+      'record_trouble',
+      'spike',
+      'spike',
+    ]);
+  });
+
   it("a serious flag is claimed with the inputs' key and its counts; its retry with none", () => {
     const hour = Date.UTC(2026, 10, 24, 9);
     const p = plan({

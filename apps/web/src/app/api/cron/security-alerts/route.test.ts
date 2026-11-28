@@ -544,6 +544,45 @@ describe("the contract's order", () => {
     expect(order.slice(1).every((c) => !c.includes('serious_flag'))).toBe(true);
   });
 
+  it('several serious flags of one reason and of several, and several retries: every one is claimed, before any volume or record claim', async () => {
+    const at = (hour: number) => Date.UTC(2026, 10, 24, hour);
+    const shape: Shape = {
+      serious: [
+        { reason: 'sign_in_not_me', hour: at(6) },
+        { reason: 'sign_in_not_me', hour: at(7) },
+        { reason: 'passkey_counter_went_back', hour: at(7) },
+        { reason: 'over_buffer_cap', hour: at(8), flood: true },
+        { reason: 'unrecorded_server_form_code', hour: at(9) },
+        { reason: 'unrecorded_server_form_code', hour: at(10) },
+      ],
+      seriousRetry: [
+        'sign_in_not_me|2026-11-24T05:00Z',
+        'passkey_unexplained_sign_in|2026-11-24T05:00Z',
+      ],
+      aimed: [{ org: ORG_A, events: 30 }],
+      trouble: true,
+      retry: [{ rule: 'spike', key: key(JUDGED - 6 * BUCKET), phase: 'started' }],
+    };
+    db.inputs = rawInputs(shape);
+    db.seedRetries(shape);
+    const { body } = await run();
+    expect(claims()).toEqual([
+      'claim serious_flag started sign_in_not_me|2026-11-24T05:00Z',
+      'claim serious_flag started passkey_unexplained_sign_in|2026-11-24T05:00Z',
+      'claim serious_flag started sign_in_not_me|2026-11-24T06:00Z',
+      'claim serious_flag started sign_in_not_me|2026-11-24T07:00Z',
+      'claim serious_flag started passkey_counter_went_back|2026-11-24T07:00Z',
+      'claim serious_flag started over_buffer_cap|2026-11-24T08:00Z',
+      'claim serious_flag started unrecorded_server_form_code|2026-11-24T09:00Z',
+      'claim serious_flag started unrecorded_server_form_code|2026-11-24T10:00Z',
+      `claim spike started ${key(JUDGED - 6 * BUCKET)}`,
+      `claim record_trouble started ${key(JUDGED)}`,
+      `claim aimed_guessing 0a0a started ${key(JUDGED - 2 * BUCKET)}`,
+    ]);
+    expect(body.serious).toMatchObject({ claims: 8, new: 6, retry: 2 });
+    expect(body).toMatchObject({ ok: true, finish: 'recorded' });
+  });
+
   it('the claim is sent the rule, subject, key, phase and counts, from the inputs', async () => {
     db.inputs = rawInputs({ aimed: [{ org: ORG_A, events: 30 }] });
     await run();
