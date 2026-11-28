@@ -12,9 +12,9 @@ import { SECURITY_ALERTS_WORDS } from '@stockpilot/core';
  * the attack map's page, and a refused gate renders nothing and reads
  * nothing; the section is inside <Suspense>, whose fallback says the alerts
  * are being checked, so the header never waits for its read; a title and a
- * link back to Security; the page is always rendered on request; it imports
- * no Liquid Glass stylesheet (a page joins glass-scope's list only with the
- * owner's word).
+ * link back to Security; the page is always rendered on request; it is in the
+ * Liquid Glass console frame (the owner's word): it imports exactly
+ * pages/admin.css then pages/platform.css, and no other glass stylesheet.
  */
 
 const h = vi.hoisted(() => ({
@@ -106,8 +106,17 @@ describe('the security alerts page', () => {
     expect(metadata.title).toBe('Security alerts · Platform');
   });
 
-  it('imports no Liquid Glass stylesheet', () => {
+  it('imports exactly the console frame stylesheets, admin.css then platform.css, and no other Liquid Glass stylesheet', () => {
     const source = readFileSync(path.resolve(__dirname, 'page.tsx'), 'utf8');
-    expect(source).not.toMatch(/^import ['"]@\/styles\/liquid-glass/m);
+    // The import statements themselves: a comment naming the files must not count.
+    const glass = [
+      ...source.matchAll(/^import ['"](@\/styles\/liquid-glass\/[^'"]*)['"];?$/gm),
+    ].map((m) => m[1]);
+    expect(glass).toEqual([
+      '@/styles/liquid-glass/pages/admin.css',
+      '@/styles/liquid-glass/pages/platform.css',
+    ]);
+    // Nothing else names a glass stylesheet in any other form (from, require, import()).
+    expect(source.match(/['"]@\/styles\/liquid-glass\//g) ?? []).toHaveLength(2);
   });
 });

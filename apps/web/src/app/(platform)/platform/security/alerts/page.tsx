@@ -8,6 +8,13 @@ import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 
 import { SECURITY_ALERTS_WORDS } from '@stockpilot/core';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css), then the console's own frame (pages/platform.css): every
+// rule is scoped to this area's [data-glass-page] root and to glass, so Classic
+// never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+import '@/styles/liquid-glass/pages/platform.css';
+
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Security alerts · Platform' };
 
@@ -24,9 +31,8 @@ export const metadata: Metadata = { title: 'Security alerts · Platform' };
  * readPlatformSecurityAlertsAction, which asks the console's own rule again
  * (checkPlatformConsoleRead).
  *
- * Not in the Liquid Glass console frame yet: the glass stylesheets are
- * imported by the pages glass-scope.guard.test.ts lists, and a page joins
- * that list only with the owner's word.
+ * In the Liquid Glass console frame, as the other console pages (the owner's
+ * word, 2026-11-28): glass-scope.guard.test.ts lists it.
  */
 export default async function PlatformSecurityAlertsPage() {
   await requirePlatformAdmin();

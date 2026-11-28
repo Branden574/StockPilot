@@ -206,6 +206,8 @@ const MODULES: Record<string, ModuleRule> = {
       '@/components/platform/platform-page',
       '@/components/platform/platform-security-alerts-section',
       '@/lib/auth/platform-admin',
+      '@/styles/liquid-glass/pages/admin.css',
+      '@/styles/liquid-glass/pages/platform.css',
       '@stockpilot/core',
     ],
     rpc: [],
@@ -568,9 +570,14 @@ function resolveLocal(from: string, spec: string): string | null {
   if (spec.startsWith('@/')) base = spec.slice(2);
   else if (spec.startsWith('.')) base = path.posix.join(path.posix.dirname(from), spec);
   else return null;
-  for (const ext of ['.ts', '.tsx', '/index.ts', '/index.tsx']) {
-    if (existsSync(path.join(WEB_SRC, base + ext))) return base + ext;
-  }
+  const code = ['.ts', '.tsx', '/index.ts', '/index.tsx'].find((ext) =>
+    existsSync(path.join(WEB_SRC, base + ext)),
+  );
+  if (code !== undefined) return base + code;
+  // A stylesheet holds no code, so it is not followed; it must still be on the
+  // module's exact import list. Only a .css file that exists, with no code file
+  // behind the same name (checked just above).
+  if (base.endsWith('.css') && existsSync(path.join(WEB_SRC, base))) return null;
   return `${base} (not found)`;
 }
 
@@ -886,11 +893,7 @@ describe('the guard reads what it says it reads', () => {
       "const fn = 'platform_security_alert_set';\nawait admin.rpc(fn);",
       'calls .rpc without a function named in a literal',
     ],
-    [
-      'the rpc door taken as a value',
-      'const door = admin.rpc;',
-      'takes .rpc as a value',
-    ],
+    ['the rpc door taken as a value', 'const door = admin.rpc;', 'takes .rpc as a value'],
     [
       'a write by another name',
       "await admin.from('platform_security_alerts').upsert({});",
@@ -1023,6 +1026,25 @@ describe('the guard reads what it says it reads', () => {
     };
     expect(oneLevelDeepProblems(modules, ONE_LEVEL_DEEP, readSrc)).toEqual([
       `${JOB} imports server/security/alerts-job-delivery (not found), which this guard does not follow (judge it, then list it)`,
+    ]);
+  });
+
+  it('one level deep: only a stylesheet that exists is left unfollowed; any other .css name is still judged', () => {
+    const modules = {
+      ...MODULES,
+      [JOB]: {
+        ...MODULES[JOB]!,
+        imports: [...MODULES[JOB]!.imports, '@/styles/liquid-glass/pages/not-a-sheet.css'],
+      },
+    };
+    expect(oneLevelDeepProblems(modules, ONE_LEVEL_DEEP, readSrc)).toEqual([
+      `${JOB} imports styles/liquid-glass/pages/not-a-sheet.css (not found), which this guard does not follow (judge it, then list it)`,
+    ]);
+    // And a stylesheet is still held to the exact import list of its module.
+    const page = 'app/(platform)/platform/security/alerts/page.tsx';
+    const text = `${readSrc(page)}\nimport '@/styles/liquid-glass/pages/inventory.css';`;
+    expect(problemsIn(page, text, MODULES[page]!)).toEqual([
+      'imports @/styles/liquid-glass/pages/inventory.css (not on its list)',
     ]);
   });
 });
