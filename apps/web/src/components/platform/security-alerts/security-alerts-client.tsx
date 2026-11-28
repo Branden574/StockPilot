@@ -41,6 +41,8 @@ import {
   type SecurityAlertsView,
 } from '@stockpilot/core';
 
+import { SecurityAlertsRecordOnlyBanner } from './record-only-banner';
+
 /**
  * THE SECURITY ALERTS, as the console shows them (part 5, stage 4a: RECORD
  * ONLY). The first read comes from the section on the server; "Check again"
@@ -68,6 +70,15 @@ export interface SecurityAlertsClientProps {
 /** A time on this page in words, in the viewer's zone. */
 const at = (iso: string, timeZone: string | null) =>
   formatMomentInZone(iso, timeZone ?? 'UTC', SECURITY_PAGES_CLOCK);
+
+/**
+ * Every table here sits in its own scroll box (PlatformTable, overflow-x:
+ * auto), and each holds a screen-reader-only header (an absolutely placed
+ * span). In Classic that box is not positioned, so the hidden span's
+ * containing block was the page and it widened the body at 400 px. Making the
+ * box the positioned ancestor keeps the hidden text inside its scroll.
+ */
+const TABLE_BOX = 'relative';
 
 export function SecurityAlertsClient({ initial, timeZone }: SecurityAlertsClientProps) {
   const [result, setResult] = React.useState<SecurityAlertsResult>(initial);
@@ -97,17 +108,7 @@ export function SecurityAlertsClient({ initial, timeZone }: SecurityAlertsClient
 
   return (
     <div className="flex min-w-0 flex-col gap-6" data-slot="security-alerts">
-      <div
-        role="note"
-        data-slot="security-alerts-record-only"
-        className="border-warning/40 bg-warning-wash rounded-lg border px-4 py-3"
-      >
-        <p className="text-foreground text-[14px] font-semibold">{W.recordOnlyBanner}</p>
-        <p className="text-ink-2 mt-1 text-[13px]">{W.recordOnlyNote}</p>
-        {result.ok && !result.view.state.recordOnly ? (
-          <p className="text-ink-2 mt-1 text-[13px]">{W.channelOnNote}</p>
-        ) : null}
-      </div>
+      <SecurityAlertsRecordOnlyBanner channelOn={result.ok && !result.view.state.recordOnly} />
 
       {result.ok ? (
         <AlertsView view={result.view} timeZone={timeZone} again={again} />
@@ -286,7 +287,7 @@ function AlertsSection({
       </div>
       {/* The how-to-respond panel's host: one for the list. */}
       <SecurityResponseHost>
-        <PlatformTable label="Latest alerts" minWidth={1100}>
+        <PlatformTable label="Latest alerts" minWidth={1100} className={TABLE_BOX}>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
               <TableHead title={zoneNote}>{W.columns.when}</TableHead>
@@ -421,7 +422,7 @@ function ThresholdsSection({ view }: { view: SecurityAlertsView }) {
         <h2 className="text-foreground text-[15px] font-semibold">{W.thresholdsHeading}</h2>
         <p className="text-muted-foreground text-[12.5px]">{W.thresholdsNote}</p>
       </div>
-      <PlatformTable label="Thresholds" minWidth={640}>
+      <PlatformTable label="Thresholds" minWidth={640} className={TABLE_BOX}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead>{W.columns.setting}</TableHead>
@@ -487,7 +488,7 @@ function ChangesSection({
   return (
     <section className="flex min-w-0 flex-col gap-3">
       <h2 className="text-foreground text-[15px] font-semibold">{heading}</h2>
-      <PlatformTable label={label} minWidth={760}>
+      <PlatformTable label={label} minWidth={760} className={TABLE_BOX}>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead title={zoneNote}>{W.columns.when}</TableHead>

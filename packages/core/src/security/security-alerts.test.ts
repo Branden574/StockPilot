@@ -60,7 +60,9 @@ import {
   securityAlertChangeLabel,
   securityAlertChangeValueWords,
   securityAlertClaimOrder,
+  SECURITY_ALERTS_WORDS,
   securityAlertCountsWords,
+  securityAlertPlural,
   securityAlertDispositionWords,
   securityAlertPhaseLabel,
   securityAlertSendingLines,
@@ -2276,5 +2278,36 @@ describe('the readers take a key they do not know, and still refuse a needed one
     expect(readSecurityAlertList({ ...l, alerts: [drop(l.alerts[0]!, 'disposition')] }).ok).toBe(
       false,
     );
+  });
+
+  describe('counts say the right form for one (F3)', () => {
+    it('securityAlertPlural: 0 and 2 are plural, 1 is singular', () => {
+      expect(securityAlertPlural(0, 'event', 'events')).toBe('events');
+      expect(securityAlertPlural(1, 'event', 'events')).toBe('event');
+      expect(securityAlertPlural(2, 'event', 'events')).toBe('events');
+    });
+
+    it('the counts line: 1 flood row, 1 event, 1 source, 1 minute; 0 and 2 plural', () => {
+      expect(securityAlertCountsWords({ rows: 1, events: 1, sources: 1, minutes: 1 })).toBe(
+        '1 flood row · 1 event · 1 source · 1 minute',
+      );
+      expect(securityAlertCountsWords({ rows: 0, events: 2, quiet_minutes: 1 })).toBe(
+        '0 flood rows · 2 events · 1 quiet minute',
+      );
+    });
+
+    it('the sentences with a count in them', () => {
+      expect(SECURITY_ALERTS_WORDS.failures(1)).toBe('1 check in a row was missed or failed.');
+      expect(SECURITY_ALERTS_WORDS.failures(2)).toBe('2 checks in a row were missed or failed.');
+      expect(SECURITY_ALERTS_WORDS.changesTruncated(1)).toBe('The newest 1 change is listed.');
+      expect(SECURITY_ALERTS_WORDS.changesTruncated(50)).toBe('The newest 50 changes are listed.');
+      expect(SECURITY_ALERTS_WORDS.alertsTruncated(1)).toMatch(/^The newest 1 is listed\./);
+      const one = SECURITY_ALERTS_WORDS.spikeBaseline('T', 1, 1, 1);
+      expect(one).toContain('1 event and 1 source in 10 minutes');
+      expect(one).toContain('1 day old');
+      const many = SECURITY_ALERTS_WORDS.spikeBaseline('T', 0, 2, 7);
+      expect(many).toContain('0 events and 2 sources');
+      expect(many).toContain('7 days old');
+    });
   });
 });

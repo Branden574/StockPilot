@@ -96,6 +96,18 @@ describe('the security alerts page', () => {
     expect(screen.getByRole('status')).toHaveTextContent(SECURITY_ALERTS_WORDS.loading);
   });
 
+  it('the loading fallback carries the record-only banner too (F2)', async () => {
+    const tree = elements(await Page());
+    const section = tree.find((e) => e.el.type === PlatformSecurityAlertsSection);
+    const boundary = section!.inside.find((e) => e.type === Suspense) as ReactElement<{
+      fallback: ReactNode;
+    }>;
+    render(<>{boundary.props.fallback}</>);
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent(SECURITY_ALERTS_WORDS.recordOnlyBanner);
+    expect(screen.getByRole('status')).toHaveTextContent(SECURITY_ALERTS_WORDS.loading);
+  });
+
   it('links back to Security; always rendered on request; its own title', async () => {
     render(await Page());
     expect(screen.getByRole('link', { name: /Security/ })).toHaveAttribute(

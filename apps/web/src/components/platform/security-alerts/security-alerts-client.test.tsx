@@ -389,4 +389,23 @@ describe('refused, could not check, and Check again', () => {
     });
     await waitFor(() => expect(screen.getByText(W.refused)).toBeInTheDocument());
   });
+
+  it('every state carries the record-only banner: loaded, refused, could not check (F2)', () => {
+    for (const initial of [ok(), SECURITY_ALERTS_REFUSED, SECURITY_ALERTS_FAILED]) {
+      const { unmount } = render(<SecurityAlertsClient initial={initial} timeZone={LA} />);
+      expect(screen.getByRole('note')).toHaveTextContent(W.recordOnlyBanner);
+      unmount();
+    }
+  });
+
+  it('each table scroll box is a positioned container, so a hidden header cannot widen the page (F1)', () => {
+    render(<SecurityAlertsClient initial={ok()} timeZone={LA} />);
+    const boxes = screen.getAllByRole('region').filter((r) => r.dataset.slot === 'platform-table');
+    expect(boxes.length).toBeGreaterThanOrEqual(2);
+    for (const box of boxes) {
+      expect(box.className).toMatch(/\boverflow-x-auto\b/);
+      expect(box.className).toMatch(/(^|\s)relative(\s|$)/);
+      expect(box.contains(box.querySelector('.sr-only'))).toBe(true);
+    }
+  });
 });

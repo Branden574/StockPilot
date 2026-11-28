@@ -3,6 +3,7 @@ import { Suspense } from 'react';
 
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PlatformPage } from '@/components/platform/platform-page';
+import { SecurityAlertsRecordOnlyBanner } from '@/components/platform/security-alerts/record-only-banner';
 import { PlatformSecurityAlertsSection } from '@/components/platform/platform-security-alerts-section';
 import { requirePlatformAdmin } from '@/lib/auth/platform-admin';
 
@@ -50,9 +51,12 @@ export default async function PlatformSecurityAlertsPage() {
       />
       <Suspense
         fallback={
-          <p role="status" className="text-muted-foreground text-[13px]">
-            {SECURITY_ALERTS_WORDS.loading}
-          </p>
+          <div className="flex min-w-0 flex-col gap-6" data-slot="security-alerts-loading">
+            <SecurityAlertsRecordOnlyBanner />
+            <p role="status" className="text-muted-foreground text-[13px]">
+              {SECURITY_ALERTS_WORDS.loading}
+            </p>
+          </div>
         }
       >
         <PlatformSecurityAlertsSection />

@@ -244,9 +244,7 @@ const MODULES: Record<string, ModuleRule> = {
       '@/components/platform/security-response/security-response-button': [
         'SecurityResponseButton',
       ],
-      '@/components/platform/security-response/security-response-host': [
-        'SecurityResponseHost',
-      ],
+      '@/components/platform/security-response/security-response-host': ['SecurityResponseHost'],
       '@/components/platform/zoned-time': [
         'ConsoleMoment',
         'consoleZoneNote',
@@ -280,7 +278,13 @@ const MODULES: Record<string, ModuleRule> = {
         'SecurityAlertsResult',
         'SecurityAlertsView',
       ],
+      './record-only-banner': ['SecurityAlertsRecordOnlyBanner'],
     },
+    rpc: [],
+    tables: [],
+  },
+  'components/platform/security-alerts/record-only-banner.tsx': {
+    imports: { '@stockpilot/core': ['SECURITY_ALERTS_WORDS'] },
     rpc: [],
     tables: [],
   },
@@ -291,6 +295,9 @@ const MODULES: Record<string, ModuleRule> = {
       '@/components/patterns/page-header': ['PageHeader', 'PageHeaderBackLink'],
       '@/components/platform/platform-page': ['PlatformPage'],
       '@/components/platform/platform-security-alerts-section': ['PlatformSecurityAlertsSection'],
+      '@/components/platform/security-alerts/record-only-banner': [
+        'SecurityAlertsRecordOnlyBanner',
+      ],
       '@/lib/auth/platform-admin': ['requirePlatformAdmin'],
       '@/styles/liquid-glass/pages/admin.css': [],
       '@/styles/liquid-glass/pages/platform.css': [],
@@ -523,7 +530,8 @@ function takenFrom(name: string, text: string): Map<string, Set<string>> {
       if (clause?.name) take(spec, 'default');
       const bindings = clause?.namedBindings;
       if (bindings && ts.isNamespaceImport(bindings)) take(spec, '*');
-      else if (bindings) for (const e of bindings.elements) take(spec, (e.propertyName ?? e.name).text);
+      else if (bindings)
+        for (const e of bindings.elements) take(spec, (e.propertyName ?? e.name).text);
     } else if (
       ts.isExportDeclaration(node) &&
       node.moduleSpecifier &&
@@ -1214,7 +1222,10 @@ describe('the guard reads what it says it reads', () => {
   it("one level deep: a new helper put on a module's list is not followed until it is listed", () => {
     const modules = {
       ...MODULES,
-      [JOB]: { ...MODULES[JOB]!, imports: { ...MODULES[JOB]!.imports, './alerts-job-delivery': [] } },
+      [JOB]: {
+        ...MODULES[JOB]!,
+        imports: { ...MODULES[JOB]!.imports, './alerts-job-delivery': [] },
+      },
     };
     expect(oneLevelDeepProblems(modules, ONE_LEVEL_DEEP, readSrc)).toEqual([
       `${JOB} imports server/security/alerts-job-delivery (not found), which this guard does not follow (judge it, then list it)`,

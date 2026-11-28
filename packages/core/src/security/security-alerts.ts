@@ -1224,9 +1224,7 @@ export function alertRestartAsk(
   refused: AlertClaimAsk,
 ): AlertClaimAsk | null {
   if (refused.phase !== 'started') return null;
-  const held = plan.startHeld.find(
-    (h) => h.rule === refused.rule && h.subject === refused.subject,
-  );
+  const held = plan.startHeld.find((h) => h.rule === refused.rule && h.subject === refused.subject);
   if (!held) return null;
   const eventKey = nextStartKey(
     refused.eventKey,
@@ -1858,13 +1856,15 @@ export const SECURITY_ALERTS_WORDS = {
   heartbeatHeading: 'The alert job',
   alertsHeading: 'Latest alerts',
   noAlerts: 'No alert has been recorded yet.',
-  alertsTruncated: (n: number) => `The newest ${n} are listed. Older alerts are kept for 400 days.`,
+  alertsTruncated: (n: number) =>
+    `The newest ${n} ${securityAlertPlural(n, 'is', 'are')} listed. Older alerts are kept for 400 days.`,
   thresholdsHeading: 'Thresholds',
   thresholdsNote:
     'Read only in this release. A value that is not its default is marked, and so is one that could keep its rule from ever firing.',
   changesHeading: 'Change history',
   noChanges: 'No switch, threshold or planned check has been changed.',
-  changesTruncated: (n: number) => `The newest ${n} changes are listed.`,
+  changesTruncated: (n: number) =>
+    `The newest ${n} ${securityAlertPlural(n, 'change is', 'changes are')} listed.`,
   latestChangesHeading: 'Who set each value in force',
   columns: {
     when: 'When',
@@ -1891,13 +1891,14 @@ export const SECURITY_ALERTS_WORDS = {
     'The latest check could not check fully: its read was cut short or one of its lists was full. Serious flags dated before the start of that read could not be checked, and no alert was ended by it.',
   missed: (time: string) =>
     `Checks are being missed: the latest one started at ${time}, and the job should run every 10 minutes.`,
-  failures: (n: number) => `${n} checks in a row were missed or failed.`,
+  failures: (n: number) =>
+    `${n} ${securityAlertPlural(n, 'check', 'checks')} in a row ${securityAlertPlural(n, 'was', 'were')} missed or failed.`,
   failureReported: (time: string) => `That was last reported at ${time}.`,
   // The spike rule.
   spikeNoBaseline:
     'Spike rule: no baseline has been computed yet, so the spike rule is not judged. The baseline is computed once a day.',
   spikeBaseline: (time: string, events: number, sources: number, days: number) =>
-    `Spike baseline, computed at ${time}: the week's high mark is ${events.toLocaleString('en-US')} events and ${sources.toLocaleString('en-US')} sources in 10 minutes. The spike rule is not judged until the record is ${days} days old.`,
+    `Spike baseline, computed at ${time}: the week's high mark is ${events.toLocaleString('en-US')} ${securityAlertPlural(events, 'event', 'events')} and ${sources.toLocaleString('en-US')} ${securityAlertPlural(sources, 'source', 'sources')} in 10 minutes. The spike rule is not judged until the record is ${days} ${securityAlertPlural(days, 'day', 'days')} old.`,
   spikeShortened:
     'That week held more rows than the baseline reads, so it was read from a later start.',
   // The budget.
@@ -1963,6 +1964,11 @@ export function securityAlertEventsFromMs(
   if (alert.rule === 'serious_flag') return parseAlertSeriousKey(alert.eventKey)?.hourMs ?? null;
   if (alert.phase === 'reminder') return parseAlertReminderKey(alert.eventKey)?.stateMs ?? null;
   return alertBucketKeyMs(alert.eventKey);
+}
+
+/** The right form for a count: one of a thing, or many (0 and 2 and up take the plural). */
+export function securityAlertPlural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
 }
 
 const DISPOSITION_WORDS: Readonly<Record<AlertDisposition, string>> = {
@@ -2087,15 +2093,15 @@ function wouldHaveLines(alert: SecurityAlertRow): string[] {
   return out;
 }
 
-const COUNT_KEY_WORDS: Readonly<Record<string, string>> = {
-  events: 'events',
-  sources: 'sources',
-  rows: 'flood rows',
-  minutes: 'minutes',
-  held: 'held',
-  event_mark: 'event mark',
-  source_mark: 'source mark',
-  quiet_minutes: 'quiet minutes',
+const COUNT_KEY_WORDS: Readonly<Record<string, readonly [string, string]>> = {
+  events: ['event', 'events'],
+  sources: ['source', 'sources'],
+  rows: ['flood row', 'flood rows'],
+  minutes: ['minute', 'minutes'],
+  held: ['held', 'held'],
+  event_mark: ['event mark', 'event mark'],
+  source_mark: ['source mark', 'source mark'],
+  quiet_minutes: ['quiet minute', 'quiet minutes'],
 };
 const COUNT_FLAG_WORDS: Readonly<Record<string, string>> = {
   at_least: 'at least (a floor)',
@@ -2111,9 +2117,13 @@ export function securityAlertCountsWords(counts: AlertCounts): string {
       if (value) parts.push(COUNT_FLAG_WORDS[key] ?? key.replace(/_/g, ' '));
       continue;
     }
-    const label = COUNT_KEY_WORDS[key] ?? key.replace(/_/g, ' ');
-    if (typeof value === 'number') parts.push(`${value.toLocaleString('en-US')} ${label}`);
-    else if (typeof value === 'string') parts.push(`${label}: ${value.replace(/_/g, ' ')}`);
+    const words = COUNT_KEY_WORDS[key];
+    const fallback = key.replace(/_/g, ' ');
+    const label = words ? words[1] : fallback;
+    if (typeof value === 'number') {
+      const noun = words ? securityAlertPlural(value, words[0], words[1]) : fallback;
+      parts.push(`${value.toLocaleString('en-US')} ${noun}`);
+    } else if (typeof value === 'string') parts.push(`${label}: ${value.replace(/_/g, ' ')}`);
     else if (Array.isArray(value)) parts.push(`${label}: ${value.join(', ')}`);
     else
       parts.push(
