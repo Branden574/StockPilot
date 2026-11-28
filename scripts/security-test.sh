@@ -1163,9 +1163,9 @@ PGTAP_TESTS=(
   # two-session checks are scripts/db-concurrency/0480_platform_security_alerts_race.sh.
   supabase/tests/0480_platform_security_alerts.test.sql
   # Vendor risk reviews (0481): no API role reads or writes
-  # supplier_risk_reviews or supplier_risk_items directly (RLS on, no
-  # policy, no privilege for anon, authenticated or service_role; every
-  # direct read and write refused); the eight admin functions are
+  # supplier_risk_reviews, supplier_risk_items or supplier_risk_events
+  # directly (RLS on, no policy, no privilege for anon, authenticated or
+  # service_role; every direct read and write refused); the nine admin functions are
   # authenticated only and open with has_org_role(organization, 'admin') and
   # 0472's authenticator check, so a manager, a staff member, a viewer, an
   # admin of another organization, a disabled admin, an invitation, an expired
@@ -1181,7 +1181,15 @@ PGTAP_TESTS=(
   # the insurance needs its date, never later than tomorrow in UTC;
   # one current review and one draft per supplier; a final review and an
   # item's finding are kept as written on every path; an account deleted
-  # keeps the name and loses the link; the reminder claim stamps once. The
+  # keeps the name and loses the link; the reminder claim stamps once. Every
+  # finish, override, discarded draft and item change (a risk accepted, an
+  # acceptance withdrawn) keeps one row of supplier_risk_events in its own
+  # transaction, after its checks (a refused call none), with fixed keys per
+  # kind and never an answer or a question key; no API role reads, writes,
+  # changes, deletes or truncates it, a trigger refuses every change and
+  # delete but an account deletion's SET NULL and the organization's own
+  # deletion, and only owners and admins read it (not managers, who read the
+  # shared audit log, where nothing about vendor risk is written). The
   # two-session checks are scripts/db-concurrency/0481_supplier_risk_reminder_race.sh.
   supabase/tests/0481_supplier_risk_reviews.test.sql
   # The request context reads the caller's own rows by index (0471): the same
