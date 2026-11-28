@@ -1,7 +1,11 @@
 import {
+  evaluateVendorRisk,
   VENDOR_RISK_DATA_LEVEL_WORDS,
   VENDOR_RISK_EVIDENCE_WORDS,
+  VENDOR_RISK_HARD_STOP_SUMMARY_WORDS,
   VENDOR_RISK_RISK_WORDS,
+  vendorRiskHardStopSummary,
+  type VendorRiskHardStopSummary,
 } from '@stockpilot/core';
 
 import { DetailSection } from '@/components/patterns/detail-section';
@@ -21,9 +25,28 @@ import type { SupplierDueReminder, SupplierRiskReview } from '@/server/services/
 import type { VendorRiskReviewDue } from '@stockpilot/core';
 
 /**
+ * What the review says about its hard stops. The ones that apply are the
+ * database's (it stores only those); when none applies, the answers are asked
+ * whether a hard-stop question was answered Not shown to us (core's rules on
+ * the review's own day), so the page never says "No hard stop applies" beside
+ * one that is not ruled out.
+ */
+function hardStopSummary(
+  review: SupplierRiskReview,
+): VendorRiskHardStopSummary | { kind: 'found'; stops: string[] } {
+  if (review.hardStops.length > 0) return { kind: 'found', stops: review.hardStops };
+  if (!review.dataLevel) return { kind: 'none', stops: [] };
+  const e = evaluateVendorRisk(review.dataLevel, review.answers, {
+    reviewedOn: review.reviewedOn,
+  });
+  return vendorRiskHardStopSummary({ hardStops: [], pendingHardStops: e.pendingHardStops });
+}
+
+/**
  * One finished review: the result in force, and beside it every reason the
  * rules gave (what they hold and the starting risk, the evidence and what it
- * means, the risk left, the hard stops by name), and an override as "Set by
+ * means, the risk left, the hard stops by name, or the ones not ruled out
+ * when a hard-stop question was not shown to us), and an override as "Set by
  * <name>: <reason>" next to what the rules gave. Names sit in <bdi>; a reason
  * is shown exactly as written, as text.
  */
@@ -43,6 +66,7 @@ export function SupplierRiskReviewSummary({
   const level = review.dataLevel ? VENDOR_RISK_DATA_LEVEL_WORDS[review.dataLevel] : null;
   const evidence = review.evidence ? VENDOR_RISK_EVIDENCE_WORDS[review.evidence] : null;
   const overridden = review.overrideResult !== null;
+  const stops = hardStopSummary(review);
   return (
     <DetailSection
       title={title}
@@ -78,19 +102,35 @@ export function SupplierRiskReviewSummary({
             </p>
           </div>
         ) : null}
-        {review.hardStops.length > 0 ? (
+        {stops.kind === 'found' ? (
           <div data-slot="supplier-risk-hard-stops">
             <p className="text-foreground text-[13px] font-medium">
-              Hard stops (each one alone means Do not use)
+              {VENDOR_RISK_HARD_STOP_SUMMARY_WORDS.found}
             </p>
             <ul className="text-ink-2 mt-1 list-disc space-y-0.5 pl-5 text-[13px] leading-5">
-              {review.hardStops.map((stop) => (
+              {stops.stops.map((stop) => (
+                <li key={stop}>{supplierRiskHardStopWords(stop)}</li>
+              ))}
+            </ul>
+          </div>
+        ) : stops.kind === 'not_ruled_out' ? (
+          <div data-slot="supplier-risk-hard-stops-pending">
+            <p className="text-foreground text-[13px] font-medium">
+              {VENDOR_RISK_HARD_STOP_SUMMARY_WORDS.not_ruled_out}
+            </p>
+            <p className="text-ink-2 mt-1 text-[13px]">
+              {VENDOR_RISK_HARD_STOP_SUMMARY_WORDS.not_ruled_out_each}
+            </p>
+            <ul className="text-ink-2 mt-1 list-disc space-y-0.5 pl-5 text-[13px] leading-5">
+              {stops.stops.map((stop) => (
                 <li key={stop}>{supplierRiskHardStopWords(stop)}</li>
               ))}
             </ul>
           </div>
         ) : (
-          <p className="text-muted-foreground text-[13px]">No hard stop applies.</p>
+          <p className="text-muted-foreground text-[13px]">
+            {VENDOR_RISK_HARD_STOP_SUMMARY_WORDS.none}
+          </p>
         )}
       </div>
       <KeyValueList>

@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
+import { vendorRiskQuestionsFor, type VendorRiskAnswer } from './questions';
 import {
+  evaluateVendorRisk,
   VENDOR_RISK_HIDDEN_CHARACTERS,
   VENDOR_RISK_OVERRIDE_REASON_MIN,
   vendorRiskCleanText,
+  vendorRiskHardStopSummary,
   vendorRiskOverrideReasonOk,
   vendorRiskReasonCount,
   vendorRiskTextOk,
+  type VendorRiskAnswers,
 } from './rules';
+import { VENDOR_RISK_HARD_STOP_SUMMARY_WORDS } from './words';
 
 /**
  * The two helpers the vendor risk pages use (added for the web half; review
@@ -134,5 +139,79 @@ describe('vendorRiskReasonCount', () => {
   it('too long is said, by the database count', () => {
     expect(vendorRiskReasonCount('abcdef'.repeat(334)).tooLong).toBe(true);
     expect(vendorRiskReasonCount('abcdef'.repeat(333)).tooLong).toBe(false);
+  });
+});
+
+describe('vendorRiskHardStopSummary: what a finished review says about its hard stops', () => {
+  /** Every student-data question answered `answer`, with `over` on top (dates where a Yes needs one). */
+  function student(answer: VendorRiskAnswer, over: VendorRiskAnswers = {}): VendorRiskAnswers {
+    const out: VendorRiskAnswers = {};
+    for (const q of vendorRiskQuestionsFor('student')) {
+      out[q.key] = answer === 'yes' && q.date ? { answer, date: '2026-10-01' } : { answer };
+    }
+    return { ...out, ...over };
+  }
+  const opts = { reviewedOn: '2026-11-27' };
+
+  it('a hard-stop question answered Not shown to us is not ruled out: never "no hard stop applies"', () => {
+    const e = evaluateVendorRisk(
+      'student',
+      student('yes', { data_agreement: { answer: 'not_shown' } }),
+      opts,
+    );
+    // The rules' outcome is untouched: More information needed.
+    expect(e.result).toBe('more_information');
+    expect(e.hardStops).toEqual([]);
+    const summary = vendorRiskHardStopSummary(e);
+    expect(summary).toEqual({ kind: 'not_ruled_out', stops: ['student_data_no_agreement'] });
+    expect(VENDOR_RISK_HARD_STOP_SUMMARY_WORDS[summary.kind]).toBe(
+      'A hard-stop question is not answered yet: more information is needed.',
+    );
+  });
+
+  it('a hard stop that applies is named, and one not ruled out beside it does not hide it', () => {
+    const e = evaluateVendorRisk(
+      'student',
+      student('yes', {
+        no_ai_training: { answer: 'no' },
+        data_agreement: { answer: 'not_shown' },
+      }),
+      opts,
+    );
+    expect(e.result).toBe('do_not_use');
+    expect(vendorRiskHardStopSummary(e)).toEqual({
+      kind: 'found',
+      stops: e.hardStops,
+    });
+    expect(e.hardStops.length).toBe(1);
+  });
+
+  it('every answer Yes: none applies, and the words say so', () => {
+    const e = evaluateVendorRisk('student', student('yes'), opts);
+    expect(e.result).toBe('approve');
+    const summary = vendorRiskHardStopSummary(e);
+    expect(summary).toEqual({ kind: 'none', stops: [] });
+    expect(VENDOR_RISK_HARD_STOP_SUMMARY_WORDS[summary.kind]).toBe('No hard stop applies.');
+  });
+
+  it('without student data no question is a hard stop, whatever is not shown', () => {
+    const answers: VendorRiskAnswers = {};
+    for (const q of vendorRiskQuestionsFor('staff')) answers[q.key] = { answer: 'not_shown' };
+    const e = evaluateVendorRisk('staff', answers, opts);
+    expect(vendorRiskHardStopSummary(e)).toEqual({ kind: 'none', stops: [] });
+  });
+
+  it('over every one answer of the seven hard-stop questions, the summary follows the lists and the result is unchanged', () => {
+    for (const q of vendorRiskQuestionsFor('student').filter((x) => x.hardStop)) {
+      for (const a of ['yes', 'no', 'not_shown'] as const) {
+        const e = evaluateVendorRisk('student', student('yes', { [q.key]: { answer: a } }), opts);
+        const s = vendorRiskHardStopSummary(e);
+        const expected = a === 'yes' ? 'none' : a === 'no' ? 'found' : 'not_ruled_out';
+        expect(s.kind, `${q.key} ${a}`).toBe(expected);
+        expect(e.result, `${q.key} ${a}`).toBe(
+          a === 'yes' ? 'approve' : a === 'no' ? 'do_not_use' : 'more_information',
+        );
+      }
+    }
   });
 });

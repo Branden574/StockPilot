@@ -333,6 +333,31 @@ export function evaluateVendorRisk(
   };
 }
 
+/**
+ * What a finished review says about its hard stops, beside its result: the
+ * ones that apply (a No), else the ones not ruled out (a hard-stop question
+ * answered Not shown to us, or not answered), else none. The database stores
+ * only the hard stops that apply, so a page that reads a stored review must
+ * ask this of its answers before it says "none": a data agreement not shown
+ * to us is More information needed, never "No hard stop applies". It reads
+ * the evaluation's own lists and changes no rule. Words:
+ * VENDOR_RISK_HARD_STOP_SUMMARY_WORDS[kind].
+ */
+export type VendorRiskHardStopSummary =
+  | { kind: 'found'; stops: VendorRiskHardStop[] }
+  | { kind: 'not_ruled_out'; stops: VendorRiskHardStop[] }
+  | { kind: 'none'; stops: [] };
+
+export function vendorRiskHardStopSummary(
+  evaluation: Pick<VendorRiskEvaluation, 'hardStops' | 'pendingHardStops'>,
+): VendorRiskHardStopSummary {
+  if (evaluation.hardStops.length > 0) return { kind: 'found', stops: [...evaluation.hardStops] };
+  if (evaluation.pendingHardStops.length > 0) {
+    return { kind: 'not_ruled_out', stops: [...evaluation.pendingHardStops] };
+  }
+  return { kind: 'none', stops: [] };
+}
+
 /** The result in force: the admin's override when there is one, else the computed result. */
 export function vendorRiskResultInForce(
   computed: VendorRiskResult,

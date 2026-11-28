@@ -55,6 +55,19 @@ export const VENDOR_RISK_ITEM_STATUS_WORDS: Readonly<Record<VendorRiskItemStatus
 export const VENDOR_RISK_KEY_PAPERS_WORDS =
   'the signed data agreement, the time for telling us about a breach, and the security report';
 
+/**
+ * What a finished review says about its hard stops (vendorRiskHardStopSummary),
+ * by kind. `not_ruled_out` is said when no hard stop applies but a hard-stop
+ * question was answered Not shown to us: "no hard stop" would not be true.
+ * `not_ruled_out_each` leads the list of those questions' hard stops.
+ */
+export const VENDOR_RISK_HARD_STOP_SUMMARY_WORDS = {
+  found: 'Hard stops (each one alone means Do not use)',
+  not_ruled_out: 'A hard-stop question is not answered yet: more information is needed.',
+  not_ruled_out_each: 'Not shown to us, so not ruled out:',
+  none: 'No hard stop applies.',
+} as const;
+
 /** The rules, in the order they apply, for the page to show beside the result (never hidden). */
 export const VENDOR_RISK_RULES_TEXT: readonly string[] = [
   'The questions asked depend on what they hold: none with no data of ours, nine with staff contact details, all fourteen with student data.',

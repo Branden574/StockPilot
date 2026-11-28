@@ -2,7 +2,11 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { vendorRiskReasonCount, type VendorRiskAnswers } from '@stockpilot/core';
+import {
+  vendorRiskQuestionsFor,
+  vendorRiskReasonCount,
+  type VendorRiskAnswers,
+} from '@stockpilot/core';
 
 import type { SupplierRiskItem, SupplierRiskReview } from '@/server/services/supplier-risk';
 
@@ -415,5 +419,54 @@ describe('follow-up 4: names in <bdi>, and text as text', () => {
       status: 'accepted',
       reason: 'Accepted until the new contract starts.',
     });
+  });
+});
+
+describe('the stored summary says what is true about the hard stops (S5)', () => {
+  function studentAnswers(over: VendorRiskAnswers = {}): VendorRiskAnswers {
+    const out: VendorRiskAnswers = {};
+    for (const q of vendorRiskQuestionsFor('student')) {
+      out[q.key] = q.date ? { answer: 'yes', date: '2026-10-01' } : { answer: 'yes' };
+    }
+    return { ...out, ...over };
+  }
+  const notRuledOut = 'A hard-stop question is not answered yet: more information is needed.';
+
+  it('a hard-stop question answered Not shown to us: never "No hard stop applies."', () => {
+    const { container } = render(
+      <SupplierRiskReviewSummary
+        review={review({
+          hardStops: [],
+          overrideResult: null,
+          overrideReason: null,
+          computedResult: 'more_information',
+          result: 'more_information',
+          answers: studentAnswers({ data_agreement: { answer: 'not_shown' } }),
+        })}
+        title="Current review"
+      />,
+    );
+    expect(container.textContent).not.toContain('No hard stop applies.');
+    const pending = container.querySelector('[data-slot="supplier-risk-hard-stops-pending"]');
+    expect(pending?.textContent).toContain(notRuledOut);
+    expect(pending?.textContent).toMatch(/no signed data agreement/);
+  });
+
+  it('every answer Yes: no hard stop applies', () => {
+    const { container } = render(
+      <SupplierRiskReviewSummary
+        review={review({
+          hardStops: [],
+          overrideResult: null,
+          overrideReason: null,
+          computedResult: 'approve',
+          result: 'approve',
+          answers: studentAnswers(),
+        })}
+        title="Current review"
+      />,
+    );
+    expect(container.textContent).toContain('No hard stop applies.');
+    expect(container.textContent).not.toContain(notRuledOut);
   });
 });
