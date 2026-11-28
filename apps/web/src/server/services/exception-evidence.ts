@@ -22,7 +22,7 @@ import {
 
 import { reportError } from '@/lib/error-reporter';
 import { reencodeWithoutMetadata } from '@/lib/image-reencode';
-import { isSniffedKindAllowedInBucket, MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
+import { MIME_FOR_KIND, SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   exceptionEvidencePathShape,
@@ -30,7 +30,10 @@ import {
   exceptionEvidenceUploadNames,
   isValidStoragePath,
 } from '@/lib/storage-path';
+import { withOwnSignal } from '@/lib/storage-steps';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { uploadKindsForMimes } from '@/lib/upload-inspect';
+import { checkUploadBytes, removeAndAudit } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, type ServiceContext } from './context';
@@ -334,15 +337,20 @@ export class ExceptionEvidenceService {
     const whole = await downloadWhole(store, path);
     if (!whole || whole.byteLength === 0 || whole.byteLength > EXCEPTION_EVIDENCE_MAX_PHOTO_BYTES)
       return reject();
-    const sniffed = sniffImage(whole);
-    if (
-      !sniffed ||
-      MIME_FOR_KIND[sniffed.kind] !== input.declaredMime ||
-      !isSniffedKindAllowedInBucket(sniffed.kind, 'exception-evidence')
-    ) {
-      return reject();
-    }
-    const kind = sniffed.kind as 'jpeg' | 'png' | 'webp';
+    //    Part 6: the sniff, the declared type and the bucket's kinds are the
+    //    one upload check's, which also looks for a file hidden after the
+    //    picture (the re-encode below would drop it from the stored copy,
+    //    but says nothing about the original) and records a refusal as a
+    //    security event in this organization. The person reads the same
+    //    sentence as before.
+    const checked = await checkUploadBytes(whole, {
+      surface: 'exception_evidence',
+      accept: uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['exception-evidence']),
+      declaredMime: input.declaredMime,
+      organizationId: this.ctx.organizationId,
+    });
+    if (!checked.ok) return reject();
+    const kind = checked.kind as 'jpeg' | 'png' | 'webp';
 
     // 2. Re-encoded without its metadata (EXIF, GPS), with a thumbnail made
     //    from the same pixels (lib/image-reencode.ts).
@@ -466,11 +474,16 @@ export class ExceptionEvidenceService {
     } catch {
       return err;
     }
+    // Part 6: every removal of a refused upload leaves one audit line.
+    const by = { organizationId: this.ctx.organizationId, userId: this.ctx.userId };
     if (row && row.storage_path === path) {
-      if (thumb && row.thumbnail_path !== thumb) await removeQuietly(store, [thumb]);
+      if (thumb && row.thumbnail_path !== thumb) {
+        await removeAndAudit(store, [thumb], 'exception_evidence', 'path_refusal', by);
+      }
       return recordedWins ? alreadyRecordedError() : err;
     }
-    await removeQuietly(store, thumb ? [path, thumb] : [path]);
+    const removing = thumb ? [path, thumb] : [path];
+    await removeAndAudit(store, removing, 'exception_evidence', 'path_refusal', by);
     return err;
   }
 
@@ -588,23 +601,17 @@ export function normalizeCapturedAt(
   return new Date(at).toISOString();
 }
 
+/**
+ * The whole object, or null when it cannot be read. With a signal of its own,
+ * so Next's fetch keeps no second copy of it (review round 3, R3-6).
+ */
 async function downloadWhole(store: AdminStore, path: string): Promise<Uint8Array | null> {
   try {
-    const { data, error } = await store.download(path);
+    const { data, error } = await withOwnSignal((signal) => store.download(path, undefined, { signal }));
     if (error || !data) return null;
     return new Uint8Array(await data.arrayBuffer());
   } catch {
     return null;
-  }
-}
-
-/** Best-effort on purpose: a failed cleanup must not turn a clear refusal
- *  into an internal error (upload-verification.ts's removeQuietly). */
-async function removeQuietly(store: AdminStore, paths: string[]): Promise<void> {
-  try {
-    await store.remove(paths);
-  } catch {
-    // Deliberately swallowed.
   }
 }
 

@@ -459,10 +459,12 @@ describe('the web fixes release (B20a and S45)', () => {
     expect(action).toContain(
       'That logo is too large to print (${size.width} by ${size.height} pixels). Save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.',
     );
+    // Part 6: the kind is the one upload check's answer (checked), as the sniff's was.
     expect(action).toContain(
-      "if (sniffed.kind === 'png' || sniffed.kind === 'jpeg' || sniffed.kind === 'webp') {",
+      "if (checked.kind === 'png' || checked.kind === 'jpeg' || checked.kind === 'webp') {",
     );
-    expect(action).toContain('await logos.remove([objectPath]);');
+    // Part 6 review: the refused logo is removed unless a record still names it, with its audit line.
+    expect(action).toContain("await removeUnlessNamed(logos, [objectPath], logoStillNamed, 'org_logo', 'too_large', {");
     const decode = source('lib/image-decode.ts');
     for (const kind of ['png', 'jpeg', 'webp']) {
       expect(decode).toContain(`  ${kind}: 50_000_000,`);

@@ -312,6 +312,29 @@ export function orgLogoPathShape(organizationId: string): RegExp {
 }
 
 /**
+ * `user-avatars` object key: `{userId}/{file}`, exactly what the avatar
+ * uploader writes (a fresh UUID and a short ASCII extension). The avatar's
+ * finalize derives the key from a public URL that only passed a PREFIX
+ * check, so the key is shape-checked before any storage call is made with
+ * it (the HI-8 rule, as for the logo).
+ */
+export function userAvatarPathShape(userId: string): RegExp {
+  return anchored(`${escapeRegExpLiteral(userId)}/${OBJECT_FILENAME_SEGMENT}`);
+}
+
+/**
+ * `support-attachments` object key: `{userId}/{file}`, the ONLY shape a
+ * support screenshot is minted as, on either platform (web
+ * `${userId}/${crypto.randomUUID()}.${ext}`, phone `${user.id}/${base36}.${ext}`).
+ * Shared by the web action and the phone route (part 6: the phone route had
+ * only a prefix check, the SP-142 hole the web action closed), and checked
+ * before the screenshot is read.
+ */
+export function supportAttachmentPathShape(userId: string): RegExp {
+  return anchored(`${escapeRegExpLiteral(userId)}/${OBJECT_FILENAME_SEGMENT}`);
+}
+
+/**
  * BOUNDARY schema guard for zod `.refine()` on an action/route input.
  *
  * Deliberately weaker than the shape checks above — a schema does not

@@ -10,7 +10,6 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { resolveAiProvider } from '@/lib/ai/provider';
 import { env } from '@/lib/env';
-import { MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
   answerModuleState,
@@ -18,6 +17,7 @@ import {
   unreadableRequestResponse,
   VISION_FAILED_MESSAGE,
 } from '@/server/lib/api-error-response';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import { assertModuleEnabled, ServiceError } from '@/server/services/context';
 
 export const runtime = 'nodejs';
@@ -184,19 +184,23 @@ export async function POST(req: NextRequest) {
   // Bucket allowlists (isSniffedKindAllowedInBucket) are deliberately NOT
   // consulted: this photo is never stored, it is base64'd straight to the
   // model, so "is it an image at all" is the whole question here.
-  const sniffed = sniffImage(new Uint8Array(bytes));
-  if (!sniffed) {
-    return NextResponse.json(
-      {
-        error: 'invalid_image',
-        message: 'That photo could not be read as an image.',
-      },
-      { status: 422 },
-    );
+  //
+  // Part 6: the one upload check, which now also scans for a file hidden
+  // after the end of the picture (it sniffed only, before), and records a
+  // refusal as a security event in this organization.
+  const checked = await checkUploadBytes(new Uint8Array(bytes), {
+    surface: 'identify_photo',
+    accept: ['png', 'jpeg', 'webp', 'avif', 'heic'],
+    organizationId: ctx.organizationId,
+    headers: req.headers,
+    wrongTypeMessage: 'That photo could not be read as an image.',
+  });
+  if (!checked.ok) {
+    return NextResponse.json({ error: 'invalid_image', message: checked.message }, { status: 422 });
   }
   // The sniffed mime from here on. A JPEG announced as image/png would
   // otherwise be handed to the provider under the wrong media type.
-  mimeType = MIME_FOR_KIND[sniffed.kind];
+  mimeType = checked.mime;
 
   const base64 = Buffer.from(bytes).toString('base64');
   const responseSchema: ResponseSchema = {

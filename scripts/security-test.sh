@@ -1291,6 +1291,38 @@ WEB_TESTS=(
   # the finalize limiter fails closed, and a recorded photo's files are never
   # rewritten or deleted by a later finalize.
   src/server/services/maintenance-attachments.metadata.test.ts
+  # Every upload path's one check (security tools part 6, stage 6a): the
+  # verdict from the bytes (kind, active content, a hidden file, could not be
+  # checked within the scanner's time and work budgets); one malware / blocked
+  # event per refusal with the organization and no file name, path or byte; a
+  # recorder failure changes no answer; a clean file unchanged; a refused
+  # stored copy removed (kept when another record names it or that look
+  # fails), with an audit line for each removal; each stored file read within
+  # its bucket's size ceiling (pinned to the migrations), a video from its
+  # first window only. The registry guard lists every way a file comes in
+  # (a mint, a form, a raw, base64 or remote read, bytes handed to a model,
+  # a recorded object path, a stored-object read, a storage copy or write, a
+  # signed-URL write) with the check that covers it, or a later stage by
+  # reference, and pins a producer for each reason. Blocked activity names
+  # the kind "Refused file".
+  src/lib/upload-inspect.test.ts
+  src/server/security/upload-checks.test.ts
+  src/lib/upload-size-limits.test.ts
+  src/server/services/upload-still-named.test.ts
+  src/server/security/upload-checks.registry.guard.test.ts
+  src/server/security/upload-checks.capture-paths.test.ts
+  src/server/security/upload-checks.support-paths.test.ts
+  src/server/security/upload-checks.isbn-paths.test.ts
+  src/server/services/item-images.upload-checks.test.ts
+  src/server/services/po-imports.upload-checks.test.ts
+  src/server/services/procedure-videos.upload-checks.test.ts
+  # The finalize check with the real storage reader through Next's fetch over
+  # a socket, and every storage step's time limit and each check's one
+  # deadline (review round 3).
+  src/server/security/upload-checks.seam.test.ts
+  src/lib/storage-steps.test.ts
+  src/app/api/orders/sign/route.test.ts
+  src/server/services/security-events.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts

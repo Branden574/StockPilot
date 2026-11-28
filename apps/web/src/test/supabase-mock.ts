@@ -597,7 +597,8 @@ export function makeSupabaseStub(results: ResultMap = {}): SupabaseStub {
           data: { arrayBuffer: async () => MOCK_PNG_BYTES().buffer },
           error: null,
         })),
-        remove: vi.fn(async () => ({ data: null, error: null })),
+        // As storage answers: the objects it deleted.
+        remove: vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null })),
       })),
     },
     channel: vi.fn(() => ({
