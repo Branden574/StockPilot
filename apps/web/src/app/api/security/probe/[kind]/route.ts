@@ -1,6 +1,7 @@
 import { isSecurityProbeKind } from '@stockpilot/core';
 
-import { logProbeMeasurement } from '@/lib/security/probe-measure';
+import { probeSampleOf } from '@/lib/security/probe-sample';
+import { recordSecurityEventSample } from '@/server/security/event-samples';
 import { recordSecurityEvent } from '@/server/security/events';
 
 export const runtime = 'nodejs';
@@ -17,8 +18,18 @@ export const dynamic = 'force-dynamic';
  * and day-keyed source hash, never its path or address. A request made to
  * this route directly with any other kind records nothing.
  *
- * No session is read and nothing of any organization: the event has no
- * organization.
+ * WHAT WAS ASKED FOR (security tools part 5, stage 3): beside the event, a
+ * sample of the request is recorded (server/security/event-samples.ts): its
+ * method, its path and its query string as the client sent them, scrubbed
+ * (@stockpilot/core request-scrub.ts), and its country. Never its address, a
+ * header value, a cookie or a body. lib/security/probe-sample.ts decides
+ * whether there is one at all: only when the rule Next applied to the path is
+ * of this kind (so a direct call to this route keeps nothing), and never
+ * under a path that can carry a token or key. The sample never changes the
+ * answer and is never waited on.
+ *
+ * No session is read and nothing of any organization: neither the event nor
+ * the sample has an organization.
  */
 type ProbeContext = { params: Promise<{ kind: string }> };
 
@@ -31,9 +42,14 @@ async function answer(req: Request, { params }: ProbeContext): Promise<Response>
       { category: 'exploit', outcome: 'blocked', reason: kind, source: 'web' },
       req.headers,
     );
-    // Measurement only (lib/security/probe-measure.ts): one log line of
-    // booleans, never throws, never changes the answer below.
-    logProbeMeasurement(req, kind);
+    // What was asked for: never throws, returns nothing to wait on, and
+    // nothing here can change the answer below.
+    try {
+      const sample = probeSampleOf(req, kind);
+      if (sample !== null) recordSecurityEventSample(sample, req.headers);
+    } catch {
+      // A sample is never the caller's problem.
+    }
   }
   return new Response(req.method === 'HEAD' ? null : 'Not found', {
     status: 404,

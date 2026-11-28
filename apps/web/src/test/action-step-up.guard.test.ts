@@ -259,6 +259,11 @@ const REVIEWED: Record<string, Reviewed> = {
     reason:
       "The attack map's poll, a read: checkPlatformConsoleRead first, which is the console page's own rule (the verified allowlisted email and aal2 outright, with or without an authenticator on the account) and answers one fixed refusal.",
   },
+  'server/actions/platform/security-event-samples.ts#readSecurityEventSamplesAction': {
+    kind: 'platform',
+    reason:
+      "What was asked for, a read for the how-to-respond panel: checkPlatformConsoleRead first, which is the console page's own rule (the verified allowlisted email and aal2 outright, with or without an authenticator on the account) and answers one fixed refusal.",
+  },
   'server/actions/platform/permission-exceptions.ts#setOrderItemsAccessAction': {
     kind: 'platform',
     reason: 'Platform admins only, with a fresh step-up (checkPlatformAdmin requireStepUp).',

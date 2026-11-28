@@ -36,6 +36,7 @@ import {
   securityEventPlaceLabel,
   securityEventReasonLabel,
   securityEventSourceLabel,
+  isSecurityProbeKind,
   securityResponseCardIdFor,
   SECURITY_RESPONSE_WORDS,
 } from '@stockpilot/core';
@@ -286,6 +287,16 @@ async function PlatformSecurityEventsList({ timeZone }: { timeZone: string | nul
                                 : (r.organizationName ?? r.organizationId),
                           },
                           organizationId: r.organizationId,
+                          // An exploit attempt of a probe kind: what was asked for in its hour.
+                          asked:
+                            r.category === 'exploit' && isSecurityProbeKind(r.reason)
+                              ? {
+                                  reason: r.reason,
+                                  at: Date.parse(r.minute),
+                                  country: r.country,
+                                  timeZone: timeZone ?? 'UTC',
+                                }
+                              : null,
                         }}
                       />
                     ) : null}

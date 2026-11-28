@@ -51,7 +51,7 @@ const ENV_FILE = '\\.env(?:\\.[A-Za-z0-9_-]{1,32})?';
 /** A segment that is either a plain segment or `..` (path_traversal only). */
 const TRAVERSAL_SEGMENT = `\\.\\.|${SEGMENT}`;
 
-type ProbeRule = { readonly kind: ProbeKind; readonly source: string };
+export type ProbeRule = { readonly kind: ProbeKind; readonly source: string };
 
 /**
  * The rules, most specific first (a request takes the first rule it matches,

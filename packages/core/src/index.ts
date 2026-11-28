@@ -137,6 +137,8 @@ export * from './security/security-briefing';
 export * from './security/security-map';
 export * from './security/security-response';
 export * from './security/security-response-cards';
+export * from './security/request-scrub';
+export * from './security/security-event-samples';
 export * from './vendor-risk/questions';
 export * from './vendor-risk/rules';
 export * from './vendor-risk/words';

@@ -653,8 +653,8 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
       'A program asked for a file or a page StockPilot does not have, such as a settings file, source control files, a WordPress page or a database admin tool. Programs ask every public site for these.',
     alreadyDid: [
       'Blocked: the answer was a plain Not found with nothing in it.',
-      'These paths are on a fixed list of well-known probes, and each is answered by a small page that records the kind and nothing more.',
-      'The exact path, the query and the body are not kept.',
+      'These paths are on a fixed list of well-known probes, and each is answered by a small page that records the kind.',
+      'The path and the query string are kept for a limited time, with anything that looked like an email address, an id, a long value or a secret removed. The body is never kept.',
     ],
     doNow: [
       {
@@ -665,7 +665,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
       { text: 'Nothing was served, so nothing got through from this kind of request.' },
     ],
     cannotTell:
-      'A kind is all that is kept: not the path, the network address or the program. Only the probes on the list are noticed here; a request to a page that exists is not.',
+      'Who sent it: the network address and the program are not kept. Only the probes on the list are noticed here; a request to a page that exists is not.',
   },
   {
     id: 'public-forms-paused',

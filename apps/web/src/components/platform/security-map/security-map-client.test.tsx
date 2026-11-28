@@ -47,6 +47,12 @@ import {
 const h = vi.hoisted(() => ({
   globeProps: [] as Array<Record<string, unknown>>,
   globeFails: null as null | 'unavailable' | 'lost',
+  samples: vi.fn(async (..._a: unknown[]) => ({ ok: false, reason: 'could_not_check' })),
+}));
+
+// The panel's "What was asked for" reads through its own Server Action.
+vi.mock('@/server/actions/platform/security-event-samples', () => ({
+  readSecurityEventSamplesAction: (...a: unknown[]) => h.samples(...a),
 }));
 
 vi.mock('@/server/actions/platform/security-map', () => ({
@@ -1883,6 +1889,34 @@ describe('how to respond, from the map', () => {
     );
     expect(panel).toHaveAttribute('data-card', 'sign-in-new-country');
     expect(panel.textContent).not.toMatch(/phishing|malware/i);
+  });
+
+  it("an exploit entry's card reads what was asked for in its hour, kind and country; the legend's exploit card the last 24 hours; another kind's card nothing", async () => {
+    h.samples.mockClear();
+    mount(async () => wholeRead());
+    let panel = await openCard(respond('Request for a settings file'));
+    const region = within(panel).getByRole('region', { name: 'What was asked for' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(region.textContent).toContain('Could not check what was asked for.');
+    expect(h.samples.mock.calls).toEqual([
+      [{ reason: 'env_file', hour: '2026-11-23T21:00:00.000Z', country: 'DE' }],
+    ]);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    const exploit = document.querySelector('[data-legend="exploit"]') as HTMLElement;
+    panel = await openCard(
+      within(exploit).getByRole('button', { name: 'How to respond: Exploit attempts' }),
+    );
+    expect(within(panel).getByRole('region', { name: 'What was asked for' })).toBeTruthy();
+    expect(h.samples.mock.calls[1]).toEqual([{ reason: null, hour: null, country: null }]);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    const guessing = document.querySelector('[data-legend="password_guessing"]') as HTMLElement;
+    panel = await openCard(within(guessing).getByRole('button'));
+    expect(within(panel).queryByRole('region', { name: 'What was asked for' })).toBeNull();
+    expect(h.samples).toHaveBeenCalledTimes(2);
   });
 
   it('Escape closes the panel and focus goes back to the control that opened it', async () => {

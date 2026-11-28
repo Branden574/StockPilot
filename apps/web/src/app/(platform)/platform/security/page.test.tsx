@@ -31,6 +31,11 @@ const h = vi.hoisted(() => ({
   briefingProps: [] as Array<Record<string, unknown>>,
   passkeysProps: [] as Array<Record<string, unknown>>,
   zone: null as string | null,
+  samples: vi.fn(),
+}));
+// The panel's "What was asked for" reads through its own Server Action.
+vi.mock('@/server/actions/platform/security-event-samples', () => ({
+  readSecurityEventSamplesAction: (...a: unknown[]) => h.samples(...a),
 }));
 vi.mock('@/lib/platform/viewer-time-zone', () => ({
   readPlatformViewerTimeZone: async () => {
@@ -171,6 +176,8 @@ beforeEach(() => {
   h.report.mockReset();
   h.gate.mockResolvedValue({ userId: 'p1', email: 'owner@example.com' });
   h.list.mockResolvedValue([row()]);
+  h.samples.mockReset();
+  h.samples.mockResolvedValue({ ok: false, reason: 'could_not_check' });
 });
 
 describe('the gate', () => {
@@ -514,6 +521,43 @@ describe('the table', () => {
     expect(when.firstChild?.textContent).toBe('20 Nov 2026, 2:15 AM PST');
     expect(when).toHaveAttribute('title', '20 Nov 2026, 10:15 UTC');
     expect(when.querySelector('.sr-only')?.textContent).toBe(' (20 Nov 2026, 10:15 UTC)');
+  });
+
+  it("an exploit row's card reads what was asked for in its hour, kind and country, once; another row's card reads nothing", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-11-20T12:00:00Z'));
+    try {
+      h.zone = 'America/Los_Angeles';
+      h.list.mockResolvedValueOnce([
+        row(),
+        row({ id: 'e2', category: 'password_guessing', reason: 'wrong_password' }),
+      ]);
+      await renderPage();
+      fireEvent.click(
+        screen.getByRole('button', { name: 'How to respond: Request for a settings file' }),
+      );
+      const panel = await screen.findByRole('dialog');
+      const region = await within(panel).findByRole('region', { name: 'What was asked for' });
+      await waitFor(() =>
+        expect(region.textContent).toContain('Could not check what was asked for.'),
+      );
+      expect(region.textContent).toContain(
+        'In the hour from 20 Nov 2026, 2:00 AM PST to 20 Nov 2026, 3:00 AM PST.',
+      );
+      expect(h.samples.mock.calls).toEqual([
+        [{ reason: 'env_file', hour: '2026-11-20T10:00:00.000Z', country: 'DE' }],
+      ]);
+      fireEvent.keyDown(panel, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      fireEvent.click(
+        screen.getByRole('button', { name: 'How to respond: Wrong password at sign-in' }),
+      );
+      const other = await screen.findByRole('dialog');
+      expect(within(other).queryByRole('region', { name: 'What was asked for' })).toBeNull();
+      expect(h.samples).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('nothing recorded: the empty words', async () => {

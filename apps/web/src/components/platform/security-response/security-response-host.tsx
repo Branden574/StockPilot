@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import * as React from 'react';
 
-import type { SecurityResponseCardId } from '@stockpilot/core';
+import type { SecurityEventSamplesEntry, SecurityResponseCardId } from '@stockpilot/core';
 
 /**
  * THE HOW-TO-RESPOND PANEL'S HOST: one per page (the attack map's island, the
@@ -47,6 +47,13 @@ export interface SecurityResponseRequest {
    * (the attack map's feeds). More than one: no id, and the panel says so.
    */
   organizations?: number;
+  /**
+   * An exploit-attempt entry of a probe kind (or the exploit kind in the map's
+   * legend): what its "What was asked for" section reads when the panel opens.
+   * What the entry shows already (its kind, its instant, its country, its
+   * list's zone), never a path. None: no section.
+   */
+  asked?: SecurityEventSamplesEntry | null;
 }
 
 export interface SecurityResponsePanelProps {

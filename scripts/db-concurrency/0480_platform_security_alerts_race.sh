@@ -33,6 +33,18 @@
 #   8. The alerts and the security events never wait on each other: an open
 #      claim does not hold up the events' writer, and an open call of the
 #      events' writer does not hold up a claim.
+#   9. A serious flag's retry comes first: a serious flag claimed 30 minutes
+#      ago with no result, its hour now 9 hours back (out of the read's
+#      window), beside 101 volume alerts due their retry; twenty sessions at
+#      once each start a run, read the inputs and claim the first serious
+#      flag listed: no start marks anything not_sent, every read that lists
+#      it lists the volume alerts apart (100, truncated), exactly one session
+#      gets the retry (attempt 2) and none a refusal.
+#  10. The held notice is made once: with email alone on, the summary off and
+#      the day's 24 volume emails spent, twenty guessing alerts for twenty
+#      organizations at once are each held with a notice, and exactly one of
+#      the twenty answers carries the notice (one alerts_held row, by email,
+#      counting the one alert held when it was made).
 #
 # LOCAL stack only (docker container supabase_db_stockpilot by default;
 # CONTAINER=<name> for another local stack, the migration scratch stack is
@@ -41,7 +53,8 @@
 # this script claims carries the counts key race_check_0480, every security
 # events row it writes a dedupe key made from a0480-race-, every events
 # writer call a reason that starts with race_alerts_; all of them are
-# removed at the end. Exit status 0 = every check passed.
+# removed at the end, and so is each notice the script made (by its id).
+# Exit status 0 = every check passed.
 #
 # Usage: bash scripts/db-concurrency/0480_platform_security_alerts_race.sh
 
@@ -100,6 +113,10 @@ case "$SAVED" in
 esac
 cleanup_rows() {
   q "delete from public.platform_security_alerts where counts ? 'race_check_0480'" > /dev/null
+  if [ -s "$TMP/notice_ids" ]; then
+    q "delete from public.platform_security_alerts
+        where rule = 'alerts_held' and id::text in ($(sed "s/.*/'&'/" "$TMP/notice_ids" | paste -sd, -))" > /dev/null
+  fi
   q "delete from public.security_events
       where dedupe_key in (select md5('a0480-race-' || g) from generate_series(1, 20) g)
          or reason like 'race\\_alerts\\_%'" > /dev/null
@@ -345,6 +362,104 @@ except Exception: print(t)')"
   fi
 fi
 wait "$H8B"
+
+# ── 9. A serious flag's retry comes first ─────────────────────────────────
+known_state
+K9="$(key_h unrecorded_server_form_password 9)"
+q "insert into public.platform_security_alerts (rule, class, subject, event_key, phase, counts, disposition, email_planned, claimed_at)
+   select 'aimed_guessing', 'volume', 'a0480000-0000-4000-8000-' || lpad(g::text, 12, '0'), '$BUCKET', 'started',
+          '$MARK'::jsonb, 'sent', true, now() - interval '25 minutes'
+     from generate_series(1, 101) g" > /dev/null
+q "insert into public.platform_security_alerts (rule, class, subject, event_key, phase, counts, disposition, push_planned,
+                                                email_planned, push_counted, claimed_at)
+   values ('serious_flag', 'serious', '', '$K9', 'started', '$MARK'::jsonb, 'sent', true, true, true,
+           now() - interval '30 minutes')" > /dev/null
+K9_SQL="set role service_role;
+  with i as (select public.platform_security_alert_inputs() as a)
+  select coalesce((select public.platform_security_alert_claim(e ->> 'rule', e ->> 'subject', e ->> 'event_key', e ->> 'phase', '$MARK')
+                     from jsonb_array_elements(i.a -> 'serious_retry_due') e limit 1)::text, '{\"outcome\": \"none\"}')
+         || ' ' || jsonb_array_length(i.a -> 'serious_retry_due') || ':' || jsonb_array_length(i.a -> 'retry_due')
+         || ':' || (i.a ->> 'retry_due_truncated')
+    from i;"
+PIDS=()
+for i in $(seq 1 20); do
+  ( { q "set role service_role; select public.platform_security_alert_heartbeat('start') ->> 'marked_not_sent'"; q "$K9_SQL"; } > "$TMP/r9.$i" ) &
+  PIDS+=($!)
+done
+for p in "${PIDS[@]}"; do wait "$p"; done
+R9="$(python3 - "$TMP" <<'PY9'
+import glob, json, sys
+marked = set(); lists = set(); bad = 0
+for f in glob.glob(sys.argv[1] + '/r9.*'):
+    lines = [l for l in open(f).read().split('\n') if l.strip()]
+    if len(lines) != 2:
+        bad += 1
+        continue
+    marked.add(lines[0].strip())
+    answer, _, seen = lines[1].rpartition(' ')
+    n_serious, n_volume, truncated = seen.split(':')
+    if n_serious == '1':
+        lists.add(n_volume + ':' + truncated)
+    open(f.replace('/r9.', '/9.'), 'w').write(answer + '\n')
+print('marked=' + ','.join(sorted(marked)) + ' volume=' + ','.join(sorted(lists)) + ' bad=%d' % bad)
+PY9
+)"
+T9="$(tally 9)"
+ROW="$(q "select disposition || ':' || attempts || ':' || (resulted_at is null) from public.platform_security_alerts where rule = 'serious_flag' and event_key = '$K9' and counts ? 'race_check_0480'")"
+IFS=: read -r N9 RT9 D9 NS9 RF9 O9 _ _ <<< "$T9"
+if [ "$R9" = "marked=0 volume=100:true bad=0" ] && [ "$N9" = "0" ] && [ "$RT9" = "1" ] && [ "$NS9" = "0" ] && [ "$RF9" = "0" ] \
+   && [ $((D9 + O9)) -eq 19 ] && [ "$ROW" = "sent:2:true" ]; then
+  ok "9: a serious flag's retry with its hour out of the window beside 101 volume alerts due theirs: twenty runs at once marked nothing not_sent, listed it apart from the volume alerts (100, truncated), one got the retry (attempt 2), $D9 duplicates, $O9 found it already taken"
+else
+  bad "9: reads $R9 (expected marked=0 volume=100:true bad=0); new:retry:duplicate:not_sent:refused:other:pushes:emails $T9; row $ROW (expected sent:2:true)"
+fi
+cleanup_rows
+
+# ── 10. The held notice is made once ──────────────────────────────────────
+known_state
+q "update public.platform_security_alert_state set push_on = false, summary_on = false" > /dev/null
+PRIOR="$(q "select count(*) from public.platform_security_alerts where rule = 'alerts_held' and claimed_at > now() - interval '6 hours'")"
+if [ "$PRIOR" != "0" ]; then
+  bad "10: a held notice made in the last 6 hours is already on this stack ($PRIOR), so no new one can be made: not checked"
+else
+  q "insert into public.platform_security_alerts (rule, class, subject, event_key, phase, counts, disposition, email_planned, claimed_at)
+     select 'aimed_guessing', 'volume', 'a0480000-0000-4000-8000-' || lpad(g::text, 12, '0'), '$BUCKET', 'started',
+            '$MARK'::jsonb, 'sent', true, now() - interval '1 hour'
+       from generate_series(101, 124) g" > /dev/null
+  PIDS=()
+  for i in $(seq 1 20); do
+    ORG="$(printf 'a0480000-0000-4000-8000-%012d' "$i")"
+    ( q "$(claim_sql "'aimed_guessing'" "'$ORG'" "$BUCKET")" > "$TMP/10.$i" ) &
+    PIDS+=($!)
+  done
+  for p in "${PIDS[@]}"; do wait "$p"; done
+  T10="$(tally 10)"
+  N10="$(python3 - "$TMP" <<'PY10'
+import glob, json, sys
+notices = []; held = 0
+for f in glob.glob(sys.argv[1] + '/10.*'):
+    try:
+        a = json.loads(open(f).read().strip())
+    except ValueError:
+        continue
+    held += 1 if a.get('disposition') == 'held_with_notice' else 0
+    if isinstance(a.get('notice'), dict):
+        notices.append(a['notice'])
+with open(sys.argv[1] + '/notice_ids', 'a') as out:
+    for n in notices:
+        out.write(n['id'] + '\n')
+print('held=%d notices=%d channels=%s' % (held, len(notices), ','.join('%s/%s' % (n.get('push'), n.get('email')) for n in notices)))
+PY10
+)"
+  ROWS="$(q "select count(*) || ':' || coalesce(string_agg(disposition || '/' || push_planned || '/' || email_planned || '/' || (counts ->> 'held'), ','), '-')
+              from public.platform_security_alerts where rule = 'alerts_held' and claimed_at > now() - interval '6 hours'")"
+  if [ "$T10" = "20:0:0:0:0:0:0:0" ] && [ "$N10" = "held=20 notices=1 channels=False/True" ] && [ "$ROWS" = "1:sent/false/true/1" ]; then
+    ok "10: twenty guessing alerts at once past the day's 24 volume emails, the summary off: all twenty held with a notice, exactly one answer carries it, one notice row (by email, counting 1 held)"
+  else
+    bad "10: new:retry:duplicate:not_sent:refused:other:pushes:emails $T10 (expected 20:0:0:0:0:0:0:0); answers $N10 (expected held=20 notices=1 channels=False/True); notice rows $ROWS (expected 1:sent/false/true/1)"
+  fi
+fi
+cleanup_rows
 
 echo "hour of the run: ${HOUR0}Z"
 if [ "$FAILS" -eq 0 ]; then
