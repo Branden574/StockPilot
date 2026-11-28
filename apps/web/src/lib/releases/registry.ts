@@ -165,7 +165,9 @@ export const RELEASES: Release[] = [
     // code release below is dated 2026-11-23T06:30:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-upload-checks (2026-11-28; was: '2026-11-23T06:30:00Z'): the upload
     // checks release below is dated 2026-11-28T06:57:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-28T06:57:00Z',
+    // Moved again by docs/whats-new-vendor-risk (2026-11-28; was: '2026-11-28T06:57:00Z'): the vendor
+    // risk reviews release below is dated 2026-11-28T11:30:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-28T11:30:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -250,6 +252,54 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'vendor-risk-reviews-2026-11',
+    revision: 1,
+    // Vendor risk reviews (part 7 of the security tools; PR #662 with migration 0481). Owners and
+    // admins only, on the Suppliers page and its Vendor risk register. publishedAt is the whole
+    // minute the release went live.
+    // Left out on purpose: how the result is worked out beyond "from the answers", the exact
+    // questions and limits, and anything the review does not check.
+    // Who is told: both entries owners and admins with the suppliers module, the pages' own rule.
+    // No claim that anything was emailed: the reminder is an in-app notice.
+    status: 'published',
+    title: 'Vendor risk reviews for owners and admins',
+    summary:
+      'Owners and admins can now review each supplier as a vendor: what they hold of your data, what they have shown you, a result with its reasons, follow-up items with an owner and a due date, and a reminder when the next review is due. The Suppliers page has a Risk column, and a Vendor risk register lists every supplier in one place.',
+    publishedAt: '2026-11-28T11:30:00Z',
+    entries: [
+      {
+        id: 'vendor-risk-reviews',
+        category: 'new',
+        area: 'Suppliers',
+        title: 'Review a supplier as a vendor',
+        whatChanged:
+          'The Suppliers page has a Risk column and a Review link for each supplier, and a Vendor risk register lists every supplier with its result, the risk left, its open items and when its next review is due, overdue first. A review asks what the supplier holds of your data, then questions in four groups, each answered Yes, No or Not shown to us. The result is worked out from the answers, with every reason shown. Each gap becomes an item with an owner, a due date and a status.',
+        whyItMatters:
+          'You can see in one place which suppliers hold staff or student data, what they have shown you and what is still to follow up. Earlier reviews are kept, and a History section on each review shows who finished it, set its result, changed an item or accepted a risk, and when.',
+        howItAffectsYou:
+          'Answer Yes only for something you have seen: a supplier saying so is not enough, and Not shown to us counts as a gap. A security report or proof of insurance needs the date on it, and one more than 12 months old counts as Not shown to us. An admin can set a different result than the rules give, with a written reason, and it then shows as set by an admin wherever the result appears. An item can be marked as an accepted risk, with a reason. The register can be downloaded as a CSV. StockPilot does not check a supplier, read their documents or give legal advice.',
+        whatToDo:
+          'Open the Vendor risk register and start with the suppliers that hold your data. Where a review shows gaps, ask the supplier for what is missing.',
+        link: { href: '/dashboard/suppliers/risk', label: 'Open the Vendor risk register' },
+        audience: { roles: ['owner', 'admin'], modules: ['suppliers'] },
+      },
+      {
+        id: 'vendor-risk-review-reminders',
+        category: 'new',
+        area: 'Suppliers',
+        title: 'A reminder when a vendor review is due',
+        whatChanged:
+          'Owners and admins get a notification 30 days before a vendor review is due, and again on the day it is due or once it is overdue. It opens the Vendor risk register.',
+        whyItMatters: 'A review that is not repeated on time no longer goes unnoticed.',
+        howItAffectsYou:
+          'The next review date is 12 months after a review, or 6 months when the supplier holds student data, unless you choose another date. The reminder is a notice in StockPilot, not an email.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/suppliers/risk', label: 'Open the Vendor risk register' },
+        audience: { roles: ['owner', 'admin'], modules: ['suppliers'] },
       },
     ],
   },

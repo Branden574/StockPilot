@@ -30,6 +30,7 @@ const SIGNIN_ID = 'sign-in-alerts-2026-11';
 const PHONE_LARGE_ID = 'phone-large-text-2026-11';
 const RECOVERY_ID = 'recovery-code-signs-out-other-devices-2026-11';
 const UPLOAD_ID = 'upload-checks-2026-11';
+const VENDOR_ID = 'vendor-risk-reviews-2026-11';
 const signInRead = {
   release_id: SIGNIN_ID,
   revision: 1,
@@ -50,6 +51,13 @@ const recoveryRead = {
   dismissed_at: null,
   opened_at: '2026-11-23T06:31:00Z',
   read_at: '2026-11-23T06:31:00Z',
+};
+const vendorRead = {
+  release_id: VENDOR_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-28T11:36:00Z',
+  read_at: '2026-11-28T11:36:00Z',
 };
 const uploadRead = {
   release_id: UPLOAD_ID,
@@ -78,19 +86,23 @@ describe('the Blocked activity current password and set-up code release', () => 
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[1]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[2]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    expect(RELEASES[4]?.id).toBe(SIGNIN_ID);
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: RELEASES[4]): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[5]?.id).toBe(SIGNIN_ID);
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[2]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[3]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    expect(RELEASES[5]?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: RELEASES[5]): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[6]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[2]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[3]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    expect(RELEASES[5]?.status).toBe('published');
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: RELEASES[5]): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[6]?.status).toBe('published');
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[3]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[4]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    expect(RELEASES[6]?.id).toBe(BLOCKED_ID);
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: RELEASES[6]): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[7]?.id).toBe(BLOCKED_ID);
     expect(releaseSchema.safeParse(release()).success).toBe(true);
   });
 
@@ -99,7 +111,8 @@ describe('the Blocked activity current password and set-up code release', () => 
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(3)): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(4)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    for (const r of RELEASES.slice(6)) {
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: RELEASES.slice(6)): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(7)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -114,11 +127,14 @@ describe('the Blocked activity current password and set-up code release', () => 
       expect(e.audience).toEqual({ roles: ['owner', 'admin'] });
     }
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    expect(buildReleaseList(RELEASES, owner, [uploadRead, recoveryRead, phoneLargeRead, signInRead], null).latestUnread?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: without it): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so the read state takes it too.
+    expect(buildReleaseList(RELEASES, owner, [vendorRead, uploadRead, recoveryRead, phoneLargeRead, signInRead], null).latestUnread?.id).toBe(ID);
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    expect(buildReleaseList(RELEASES, admin, [uploadRead, recoveryRead, phoneLargeRead, signInRead], null).latestUnread?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: without it): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so the read state takes it too.
+    expect(buildReleaseList(RELEASES, admin, [vendorRead, uploadRead, recoveryRead, phoneLargeRead, signInRead], null).latestUnread?.id).toBe(ID);
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
-    expect(buildReleaseList(RELEASES, manager, [uploadRead, recoveryRead, phoneLargeRead, signInRead], null).latestUnread?.id).not.toBe(ID);
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: without it): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so the read state takes it too.
+    expect(buildReleaseList(RELEASES, manager, [vendorRead, uploadRead, recoveryRead, phoneLargeRead, signInRead], null).latestUnread?.id).not.toBe(ID);
   });
 
   it('promises nothing a member cannot see: no organization-less rows, nothing about how refusals are found', () => {

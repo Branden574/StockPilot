@@ -14,7 +14,8 @@ describe('the upload checks release', () => {
   it('is published once, at revision 1, directly below the Liquid Glass draft', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(RELEASES[0]?.id).toBe('liquid-glass-2026-11');
-    expect(RELEASES[1]?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-vendor-risk (2026-11-28; was: RELEASES[1]): the vendor risk reviews release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[2]?.id).toBe(ID);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
   });
