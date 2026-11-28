@@ -89,30 +89,37 @@ interface Shape {
   openStates?: Array<{ rule: string; key: string; subject?: string; reminders?: string[] }>;
   shortened?: boolean;
   truncated?: 'aimed' | 'open' | 'seriousRetry' | 'retry';
+  /** The database's now (default NOW): the window, its buckets and the judged one are of that time. */
+  at?: number;
+  /** Flood rows of the record in a bucket, by the bucket's start (beside `trouble`). */
+  troubleRows?: Record<number, number>;
+  thresholds?: Partial<Record<keyof typeof ALERT_THRESHOLD_DEFAULTS, number>>;
 }
 
 /** platform_security_alert_inputs() as the contract shapes it. */
 function rawInputs(o: Shape = {}): Record<string, unknown> {
-  const askedFrom = Math.floor((NOW - 8 * HOUR) / BUCKET) * BUCKET + BUCKET;
+  const now = o.at ?? NOW;
+  const judged = Math.floor(now / BUCKET) * BUCKET - BUCKET;
+  const askedFrom = Math.floor((now - 8 * HOUR) / BUCKET) * BUCKET + BUCKET;
   const from = o.shortened ? askedFrom + 2 * HOUR + 3 * MIN : askedFrom;
   const buckets = [];
   for (
     let b = Math.floor(from / BUCKET) * BUCKET;
-    b <= Math.floor(NOW / BUCKET) * BUCKET;
+    b <= Math.floor(now / BUCKET) * BUCKET;
     b += BUCKET
   ) {
-    const trouble = o.trouble && b === JUDGED ? 2 : 0;
+    const trouble = o.troubleRows?.[b] ?? (o.trouble && b === judged ? 2 : 0);
     buckets.push({
       bucket_start: pg(b),
       bucket_key: key(b),
-      partial: b < from || b + BUCKET > NOW,
+      partial: b < from || b + BUCKET > now,
       events: 0,
       sources: 0,
       trouble_rows: trouble,
       trouble_events: trouble * 9,
     });
   }
-  const last3 = [JUDGED - 2 * BUCKET, JUDGED - BUCKET, JUDGED];
+  const last3 = [judged - 2 * BUCKET, judged - BUCKET, judged];
   return {
     serious: (o.serious ?? []).map((s) => ({
       reason: s.reason,
@@ -136,7 +143,7 @@ function rawInputs(o: Shape = {}): Record<string, unknown> {
       rule: s.rule,
       subject: s.subject ?? '',
       event_key: s.key,
-      started_claimed_at: pg(NOW - 2 * HOUR),
+      started_claimed_at: pg(now - 2 * HOUR),
       held: false,
       reminders: s.reminders ?? [],
     })),
@@ -146,7 +153,7 @@ function rawInputs(o: Shape = {}): Record<string, unknown> {
       subject: '',
       event_key: k,
       phase: 'started',
-      claimed_at: pg(NOW - 7 * MIN),
+      claimed_at: pg(now - 7 * MIN),
     })),
     serious_retry_due_truncated: o.truncated === 'seriousRetry',
     retry_due: (o.retry ?? []).map((r) => ({
@@ -154,16 +161,16 @@ function rawInputs(o: Shape = {}): Record<string, unknown> {
       subject: r.subject ?? '',
       event_key: r.key,
       phase: r.phase,
-      claimed_at: pg(NOW - 6 * MIN),
+      claimed_at: pg(now - 6 * MIN),
     })),
     retry_due_truncated: o.truncated === 'retry',
-    window: { from: pg(from), to: pg(NOW + MIN), asked_from: pg(askedFrom) },
+    window: { from: pg(from), to: pg(now + MIN), asked_from: pg(askedFrom) },
     shortened: from > askedFrom,
     refused: null,
-    generated_at: pg(NOW),
+    generated_at: pg(now),
     bucket_seconds: 600,
-    oldest_event_at: pg(NOW - 3 * DAY),
-    thresholds: { ...ALERT_THRESHOLD_DEFAULTS },
+    oldest_event_at: pg(now - 3 * DAY),
+    thresholds: { ...ALERT_THRESHOLD_DEFAULTS, ...o.thresholds },
     baseline: {
       event_high: null,
       source_high: null,
@@ -800,6 +807,126 @@ describe('every refusal of the claim is an answer', () => {
     const { body } = await run();
     expect(claims()).toEqual([`claim record_trouble started ${key(JUDGED)}`]);
     expect(body).toMatchObject({ ok: true, leftToNextRun: 1 });
+  });
+
+  /**
+   * Record trouble's states as the claim answers them (CONTRACT.md, the
+   * claim): one open state; a start under the key of a state that ended is
+   * refused state_ended; an end closes its state. Every other answer is
+   * FakeDb's. `ended`: states that ended before the test.
+   */
+  function troubleStates(ended: string[] = []) {
+    const states = ended.map((k) => ({ key: k, ended: true }));
+    const refusal = (word: string, openKey: string | null = null) => ({
+      data: {
+        outcome: 'refused',
+        refused: word,
+        id: null,
+        disposition: null,
+        push: false,
+        email: false,
+        attempt: null,
+        open_key: openKey,
+        notice: null,
+      },
+      error: null,
+    });
+    h.answer = vi.fn((fn: string, raw: unknown) => {
+      const args = raw as Record<string, unknown>;
+      if (fn === 'platform_security_alert_claim' && args.p_rule === 'record_trouble') {
+        const k = String(args.p_event_key);
+        if (args.p_phase === 'started') {
+          const open = states.find((s) => !s.ended);
+          if (open) return refusal('already_open', open.key);
+          if (states.some((s) => s.key === k)) return refusal('state_ended');
+          states.push({ key: k, ended: false });
+        } else if (args.p_phase === 'ended') {
+          const state = states.find((s) => s.key === k);
+          if (!state) return refusal('no_open_state');
+          state.ended = true;
+        }
+      }
+      return db.answer(fn, args);
+    });
+    return {
+      openStates: () =>
+        states.filter((s) => !s.ended).map((s) => ({ rule: 'record_trouble', key: s.key })),
+    };
+  }
+  const claimCounts = () =>
+    h.calls.filter((c) => c.fn === 'platform_security_alert_claim').map((c) => c.args?.p_counts);
+
+  it('a threshold raised for one run and lowered again: one start and one end for a one-row burst, never a second state on a quiet bucket', async () => {
+    // One flood row of the record at 12:20, nothing after. Runs at 12:35:30
+    // (judges 12:00 to 12:20), 12:45:30 with record_trouble_rows raised to 5,
+    // 12:55:30 with it back at 1, and 13:05:30.
+    const burst = Date.UTC(2026, 10, 24, 12, 20);
+    const states = troubleStates();
+    const bodies: Array<Record<string, unknown>> = [];
+    for (const [i, rows] of [1, 5, 1, 1].entries()) {
+      db.inputs = rawInputs({
+        at: burst + BUCKET + 5 * MIN + 30_000 + i * BUCKET,
+        troubleRows: { [burst]: 1 },
+        thresholds: { record_trouble_rows: rows },
+        openStates: states.openStates(),
+      });
+      bodies.push((await run()).body);
+    }
+    expect(claims()).toEqual([
+      `claim record_trouble started ${key(burst)}`,
+      `claim record_trouble ended ${key(burst)}`,
+      // The condition is back under the key of the state that ended, and no
+      // newer bucket holds it (12:30 and 12:40 have no row): nothing more.
+      `claim record_trouble started ${key(burst)}`,
+    ]);
+    expect(bodies.map((b) => b.leftToNextRun)).toEqual([0, 0, 1, 0]);
+    expect(bodies.map((b) => b.ok)).toEqual([true, true, true, true]);
+  });
+
+  it('a start refused state_ended while the condition still holds: one new state, keyed by the newest bucket where it holds, with its counts, never a quiet bucket', async () => {
+    // The state keyed two buckets back ended; the condition is back there and
+    // one bucket back; the judged bucket is quiet.
+    const states = troubleStates([key(JUDGED - 2 * BUCKET)]);
+    const rows = { [JUDGED - 2 * BUCKET]: 3, [JUDGED - BUCKET]: 4 };
+    db.inputs = rawInputs({ troubleRows: rows, openStates: states.openStates() });
+    const first = await run();
+    expect(claims()).toEqual([
+      `claim record_trouble started ${key(JUDGED - 2 * BUCKET)}`,
+      `claim record_trouble started ${key(JUDGED - BUCKET)}`,
+    ]);
+    expect(claimCounts()).toEqual([
+      { rows: 3, events: 27 },
+      { rows: 4, events: 36 },
+    ]);
+    expect(first.body).toMatchObject({ ok: true, leftToNextRun: 0 });
+    // The next run: that state is open and the condition goes on. No second
+    // start, and no reminder before its hour.
+    h.calls = [];
+    db.inputs = rawInputs({
+      at: NOW + BUCKET,
+      troubleRows: { ...rows, [JUDGED + BUCKET]: 2 },
+      openStates: states.openStates(),
+    });
+    const second = await run();
+    expect(states.openStates()).toEqual([{ rule: 'record_trouble', key: key(JUDGED - BUCKET) }]);
+    expect(claims()).toEqual([]);
+    expect(second.body).toMatchObject({ ok: true, leftToNextRun: 0 });
+  });
+
+  it('a start refused state_ended when every newer bucket holds: the newest, with its own counts', async () => {
+    troubleStates([key(JUDGED - 2 * BUCKET)]);
+    db.inputs = rawInputs({
+      troubleRows: { [JUDGED - 2 * BUCKET]: 3, [JUDGED - BUCKET]: 4, [JUDGED]: 5 },
+    });
+    await run();
+    expect(claims()).toEqual([
+      `claim record_trouble started ${key(JUDGED - 2 * BUCKET)}`,
+      `claim record_trouble started ${key(JUDGED)}`,
+    ]);
+    expect(claimCounts()).toEqual([
+      { rows: 3, events: 27 },
+      { rows: 5, events: 45 },
+    ]);
   });
 
   it('a start answered already_open takes open_key as the state: its due reminder', async () => {

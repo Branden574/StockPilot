@@ -12,8 +12,8 @@ import {
 import {
   ADMIN_EMAILS_MOST,
   ALERT_EXPECTED_CLAIM_REFUSALS,
+  alertRestartAsk,
   dueReminderStep,
-  nextStartKey,
   planSecurityAlerts,
   readSecurityAlertClaim,
   readSecurityAlertHeartbeatFinish,
@@ -49,9 +49,12 @@ import {
  *   4. The volume and record retries (the held notices' among them).
  *   5. and 6. The rules (core's planSecurityAlerts, from the inputs alone):
  *      for each condition a start, its due reminder or its end. Never an end
- *      from a partial read. A start answered state_ended is claimed again
- *      only with a newer judged bucket, never with the refused key; a start
- *      answered already_open takes open_key as the state (its due reminder).
+ *      from a partial read. A start answered state_ended opens a new state
+ *      only under the newest bucket of the look-back, newer than the refused
+ *      key, where the condition holds (core's alertRestartAsk): never the
+ *      refused key, never a quiet bucket; with none it is left to the next
+ *      run. A start answered already_open takes open_key as the state (its
+ *      due reminder).
  *   7. What the claim hands out is CLOSED AS RECORD ONLY: in this release
  *      nothing is sent, so for each channel an alert was handed out for (only
  *      possible with a switch on) the result is recorded as `skipped` for
@@ -175,7 +178,7 @@ export interface SecurityAlertsRunSummary {
   notices: number;
   /** Claim refusals this build does not expect, and answers it could not read, by word. */
   unexpected: Record<string, number>;
-  /** States whose start was refused state_ended and had no newer bucket: left to the next run. */
+  /** Starts refused state_ended with no newer bucket where the condition holds: left to the next run. */
   leftToNextRun: number;
   spikeHeld: AlertSpikeHeld;
   judgedBucket: string | null;
@@ -572,12 +575,13 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
         if (answer === null) return false;
         if (ask.phase !== 'started' || answer.outcome !== 'refused') return true;
         if (answer.refused === 'state_ended') {
-          const newer = nextStartKey(ask.eventKey, plan.judgedBucketKey);
-          if (newer === null) {
+          // Only under a newer bucket where the condition holds, with its counts; never a quiet one.
+          const again = alertRestartAsk(plan, ask);
+          if (again === null) {
             summary.leftToNextRun += 1;
             return true;
           }
-          return (await claim({ ...ask, eventKey: newer }, summary.conditions)) !== null;
+          return (await claim(again, summary.conditions)) !== null;
         }
         if (answer.refused === 'already_open' && answer.openKey !== null) {
           // The open state is open_key's: its due reminder, if any (a duplicate when claimed already).

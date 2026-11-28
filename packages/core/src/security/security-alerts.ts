@@ -36,7 +36,10 @@
  *   - a key from the events: a serious flag's is its reason and the event's
  *     UTC hour (as the inputs give it); a state's start is the oldest bucket
  *     of the look-back where the condition holds (its own bucket); a
- *     reminder is the state's key and its step.
+ *     reminder is the state's key and its step;
+ *   - a start refused state_ended (its bucket's state ended) opens a new
+ *     state only under a newer bucket of the look-back where the condition
+ *     holds (the newest), never under a quiet one (alertRestartAsk).
  */
 
 import { securityEventReasonLabel, SECURITY_EVENT_REASON_RE } from './security-events';
@@ -1079,6 +1082,13 @@ export interface AlertClaimAsk {
 /** Why the spike rule is not judged: no baseline yet, or a record younger than the learning days. */
 export type AlertSpikeHeld = 'no_baseline' | 'learning' | null;
 
+/** A start's condition: the buckets of the look-back where it holds, oldest first, with its counts in each. */
+export interface AlertStartHeld {
+  rule: AlertStateRule;
+  subject: string;
+  buckets: Array<{ key: string; counts: AlertCounts }>;
+}
+
 export interface SecurityAlertPlan {
   /**
    * A partial read: the window was cut, or a list was full. The plan holds no
@@ -1090,11 +1100,17 @@ export interface SecurityAlertPlan {
   shortenedFrom: string | null;
   spikeHeld: AlertSpikeHeld;
   /**
-   * The latest whole bucket the run judged (the newest of its look-back; a
-   * start refused state_ended is claimed again with it); null when the read
-   * holds none.
+   * The latest whole bucket the run judged (the newest of its look-back);
+   * null when the read holds none. Shown in the run's log line only: a start
+   * refused state_ended is claimed again by alertRestartAsk, never with it.
    */
   judgedBucketKey: string | null;
+  /**
+   * For each start in `conditions`, by its rule and subject: the buckets of
+   * the look-back where its condition holds, oldest first, each with its
+   * counts there (the start's own key is the first). Read by alertRestartAsk.
+   */
+  startHeld: AlertStartHeld[];
   /** Step 3a, then 3b: every serious flag before anything else. */
   seriousRetries: AlertClaimAsk[];
   serious: AlertClaimAsk[];
@@ -1170,14 +1186,61 @@ export function dueReminderStep(
 
 /**
  * The key to claim a start again with, after the claim answered state_ended
- * for `refusedKey` (the condition is back): the latest whole bucket the run
- * judged, when it is newer; else null (an overlapping run in the same
- * bucket: left to the next run). Never the refused key.
+ * for `refusedKey`: the NEWEST of `heldKeys` (the buckets of the look-back
+ * where the condition holds) that is newer than the refused key; else null
+ * (left to the next run). Never the refused key, never a key not given (so
+ * never a quiet bucket).
  */
-export function nextStartKey(refusedKey: string, judgedBucketKey: string | null): string | null {
+export function nextStartKey(refusedKey: string, heldKeys: readonly string[]): string | null {
   const refused = alertBucketKeyMs(refusedKey);
-  const judged = alertBucketKeyMs(judgedBucketKey);
-  return refused !== null && judged !== null && judged > refused ? judgedBucketKey : null;
+  if (refused === null) return null;
+  let newest: string | null = null;
+  let newestMs = refused;
+  for (const k of heldKeys) {
+    const at = alertBucketKeyMs(k);
+    if (at !== null && at > newestMs) {
+      newest = k;
+      newestMs = at;
+    }
+  }
+  return newest;
+}
+
+/**
+ * A START REFUSED state_ended (its key is that of a state that ended, and
+ * the condition holds there again): the start to claim instead, or null.
+ *
+ * A new state is opened only under a bucket of this run's look-back where
+ * the rule's condition HOLDS and that is newer than the refused key: the
+ * newest such bucket, with its own counts. With none (the condition holds
+ * only in the bucket of the state that ended, for example after a threshold
+ * was raised for one run and lowered again), nothing is claimed: the next
+ * run judges again. Never the refused key, never a quiet bucket, and at most
+ * one more claim (nothing holds newer than the newest, so a second refusal
+ * leaves nothing to try).
+ */
+export function alertRestartAsk(
+  plan: SecurityAlertPlan,
+  refused: AlertClaimAsk,
+): AlertClaimAsk | null {
+  if (refused.phase !== 'started') return null;
+  const held = plan.startHeld.find(
+    (h) => h.rule === refused.rule && h.subject === refused.subject,
+  );
+  if (!held) return null;
+  const eventKey = nextStartKey(
+    refused.eventKey,
+    held.buckets.map((b) => b.key),
+  );
+  const bucket = held.buckets.find((b) => b.key === eventKey);
+  if (eventKey === null || !bucket) return null;
+  return {
+    rule: refused.rule,
+    subject: refused.subject,
+    eventKey,
+    phase: 'started',
+    counts: bucket.counts,
+  };
 }
 
 /** One whole bucket of the look-back: whether the condition holds there, and its counts there. */
@@ -1199,13 +1262,15 @@ interface Condition {
  * open, it holds in a bucket of the look-back: keyed by the OLDEST such
  * bucket, with that bucket's counts), the due reminder (open, it still holds
  * in the look-back: the newest such bucket's counts), or an end (open, quiet
- * in every bucket of a full look-back, and the read is whole).
+ * in every bucket of a full look-back, and the read is whole). Each start's
+ * held buckets go into `startHeld` (for alertRestartAsk).
  */
 function stateClaims(
   inputs: SecurityAlertInputs,
   conditions: readonly Condition[],
   rules: readonly AlertStateRule[],
   canEnd: boolean,
+  startHeld: AlertStartHeld[],
 ): AlertClaimAsk[] {
   const out: AlertClaimAsk[] = [];
   const byKey = new Map<string, Condition>();
@@ -1265,6 +1330,11 @@ function stateClaims(
         phase: 'started',
         counts: held[0]!.counts,
       });
+      startHeld.push({
+        rule,
+        subject,
+        buckets: held.map((l) => ({ key: l.key, counts: l.counts })),
+      });
     }
   }
   return out;
@@ -1315,6 +1385,7 @@ export function planSecurityAlerts(inputs: SecurityAlertInputs): SecurityAlertPl
   }));
 
   const conditions: AlertClaimAsk[] = [];
+  const startHeld: AlertStartHeld[] = [];
   // Record trouble first: the record itself flooding hides everything else.
   conditions.push(
     ...stateClaims(
@@ -1334,6 +1405,7 @@ export function planSecurityAlerts(inputs: SecurityAlertInputs): SecurityAlertPl
         : [],
       ['record_trouble'],
       canEnd,
+      startHeld,
     ),
   );
   if (spikeHeld === null) {
@@ -1360,6 +1432,7 @@ export function planSecurityAlerts(inputs: SecurityAlertInputs): SecurityAlertPl
           : [],
         ['spike'],
         canEnd,
+        startHeld,
       ),
     );
   }
@@ -1379,7 +1452,7 @@ export function planSecurityAlerts(inputs: SecurityAlertInputs): SecurityAlertPl
             }),
           }))
         : [];
-    conditions.push(...stateClaims(inputs, aimed, ['aimed_guessing'], canEnd));
+    conditions.push(...stateClaims(inputs, aimed, ['aimed_guessing'], canEnd, startHeld));
   }
 
   return {
@@ -1387,6 +1460,7 @@ export function planSecurityAlerts(inputs: SecurityAlertInputs): SecurityAlertPl
     shortenedFrom: inputs.shortened ? inputs.window.from : null,
     spikeHeld,
     judgedBucketKey: judgedKey,
+    startHeld,
     seriousRetries,
     serious,
     retries,

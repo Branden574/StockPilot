@@ -39,6 +39,7 @@ import {
   alertBucketKey,
   alertBucketKeyMs,
   alertReminderKey,
+  alertRestartAsk,
   alertSeriousKey,
   dueReminderStep,
   isAlertCounts,
@@ -1141,13 +1142,6 @@ describe('the state: one start, reminders at 1, 6 and 24 hours, one end', () => 
     expect(p.conditions.map((c) => c.phase)).toEqual(['started']);
   });
 
-  it('a state_ended start is claimed again only with a newer judged bucket, never with the refused key', () => {
-    expect(nextStartKey('2026-11-24T11:40Z', '2026-11-24T11:50Z')).toBe('2026-11-24T11:50Z');
-    expect(nextStartKey('2026-11-24T11:50Z', '2026-11-24T11:50Z')).toBeNull();
-    expect(nextStartKey('2026-11-24T11:50Z', '2026-11-24T11:40Z')).toBeNull();
-    expect(nextStartKey('2026-11-24T11:50Z', null)).toBeNull();
-  });
-
   /**
    * A model of the database's states (one open per rule and subject, its
    * reminders, an end closes it), run every 10 minutes over the hours given.
@@ -1297,10 +1291,11 @@ type Rule3 = 'record_trouble' | 'spike' | 'aimed_guessing';
 /**
  * The job every 10 minutes from NOW over `hours`, against the claim model,
  * claiming as the job does (a start answered already_open takes its due
- * reminder; state_ended is claimed again only with a newer judged bucket).
+ * reminder; state_ended is claimed again only as alertRestartAsk says).
  * `size(b)`: the condition's size in the whole bucket that starts at b.
  * `lost(i)`: run i never happened (failed, missed, or cut before its claims).
  * `twice(i)`: run i overlapped another that read the same answer.
+ * `thresholds(i)`: the thresholds run i reads (a change in the database).
  */
 function everyTenMinutes(o: {
   rule: Rule3;
@@ -1308,6 +1303,7 @@ function everyTenMinutes(o: {
   size: (bucketStart: number) => number;
   lost?: (run: number) => boolean;
   twice?: (run: number) => boolean;
+  thresholds?: (run: number) => RawOptions['thresholds'];
 }) {
   const db = new ClaimModel();
   const answered: string[] = [];
@@ -1328,6 +1324,7 @@ function everyTenMinutes(o: {
       buckets,
       aimed: Object.keys(aimedCells).length > 0 ? [{ org: ORG_A, cells: aimedCells }] : [],
       openStates: db.openStates(),
+      thresholds: o.thresholds?.(i),
     });
     // Both overlapping runs read before either claims.
     const plans = Array.from({ length: o.twice?.(i) ? 2 : 1 }, () => planSecurityAlerts(read));
@@ -1346,8 +1343,11 @@ function everyTenMinutes(o: {
             answered.push(r.outcome === 'refused' ? `refused ${r.refused}` : r.outcome);
           }
         } else if (a.refused === 'state_ended') {
-          const newer = nextStartKey(ask.eventKey, p.judgedBucketKey);
-          if (newer !== null) answered.push(db.claim({ ...ask, eventKey: newer }, t).outcome);
+          const again = alertRestartAsk(p, ask);
+          if (again !== null) {
+            const r = db.claim(again, t);
+            answered.push(r.outcome === 'refused' ? `refused ${r.refused}` : r.outcome);
+          }
         }
       }
     }
@@ -1508,6 +1508,133 @@ describe('a lost run never loses an alert: every run judges the last three whole
       expect(twice.answered.filter((a) => a !== 'new').every((a) => a === 'duplicate')).toBe(true);
     },
   );
+
+  /** A threshold that makes the burst quiet, for one run: raised in the database, then lowered again. */
+  const RAISED: Record<Rule3, RawOptions['thresholds']> = {
+    record_trouble: { record_trouble_rows: BIG.record_trouble + 1 },
+    spike: { spike_event_floor: BIG.spike + 1 },
+    aimed_guessing: { aimed_guessing_events: BIG.aimed_guessing + 1 },
+  };
+
+  it.each(RULES)(
+    '%s: a threshold raised for one run and lowered again: a state that ended is opened again only under a newer bucket where the condition holds, never a quiet one',
+    (rule) => {
+      const size = (b: number) => (b === B ? BIG[rule] : 0);
+      const toggled = everyTenMinutes({
+        rule,
+        hours: 4,
+        size,
+        thresholds: (i) => (i === FIRST_JUDGE + 1 ? RAISED[rule] : undefined),
+      });
+      // The run with the raised threshold ends the state (every bucket of its look-back is quiet).
+      expect(toggled.rows.slice(0, 2)).toEqual([
+        `${rule} started ${key(B)}`,
+        `${rule} ended ${key(B)}`,
+      ]);
+      // Then the burst's own bucket holds again: its start is refused state_ended, once.
+      expect(toggled.answered.filter((a) => a === 'refused state_ended')).toHaveLength(1);
+      // Every start is keyed by a bucket where the condition holds (B to LAST_HELD).
+      for (const row of toggled.rows.filter((r) => r.includes(' started '))) {
+        const at = alertBucketKeyMs(row.slice(row.lastIndexOf(' ') + 1))!;
+        expect(at).toBeGreaterThanOrEqual(B);
+        expect(at).toBeLessThanOrEqual(LAST_HELD[rule]);
+      }
+      if (rule === 'aimed_guessing') {
+        // Guessing counts its 30 minutes, so the newer buckets still hold the
+        // burst: the new state is keyed by the newest of them, as written.
+        expect(toggled.rows.slice(2)).toEqual([
+          `${rule} started ${key(LAST_HELD[rule])}`,
+          `${rule} ended ${key(LAST_HELD[rule])}`,
+        ]);
+      } else {
+        // Nothing newer holds a one-bucket burst: no second state.
+        expect(toggled.rows).toHaveLength(2);
+      }
+    },
+  );
+});
+
+describe('a start refused state_ended: a new state only under a newer bucket where the condition holds', () => {
+  const OLDEST = JUDGED - 2 * BUCKET;
+  /** Record trouble with these flood rows in the three whole buckets of the look-back, oldest first. */
+  const troublePlan = (rows: [number, number, number]) =>
+    plan({ buckets: Object.fromEntries(LAST3.map((b, n) => [b, { troubleRows: rows[n]! }])) });
+
+  it('the newest held key newer than the refused one, never the refused key, never a key it was not given', () => {
+    const [a, b, c] = LAST3.map(key) as [string, string, string];
+    expect(nextStartKey(a, [a, b, c])).toBe(c);
+    expect(nextStartKey(a, [a, b])).toBe(b);
+    expect(nextStartKey(a, [a])).toBeNull();
+    expect(nextStartKey(b, [a, b])).toBeNull();
+    expect(nextStartKey(c, [a, b, c])).toBeNull();
+    expect(nextStartKey(a, [])).toBeNull();
+    expect(nextStartKey('not a key', [a, b, c])).toBeNull();
+  });
+
+  it('with no newer bucket where it holds: nothing (left to the next run)', () => {
+    const p = troublePlan([1, 0, 0]);
+    expect(p.conditions).toHaveLength(1);
+    expect(alertRestartAsk(p, p.conditions[0]!)).toBeNull();
+  });
+
+  it('the newest bucket where it holds, newer than the refused key, with that bucket counts', () => {
+    const p = troublePlan([3, 4, 0]);
+    expect(alertRestartAsk(p, p.conditions[0]!)).toEqual({
+      rule: 'record_trouble',
+      subject: '',
+      eventKey: key(JUDGED - BUCKET),
+      phase: 'started',
+      counts: { rows: 4, events: 28 },
+    });
+    const all = troublePlan([3, 4, 5]);
+    expect(alertRestartAsk(all, all.conditions[0]!)).toEqual({
+      rule: 'record_trouble',
+      subject: '',
+      eventKey: key(JUDGED),
+      phase: 'started',
+      counts: { rows: 5, events: 35 },
+    });
+  });
+
+  it('every mix of held and quiet buckets: the restart is the newest held bucket newer than the start, or none', () => {
+    for (let mask = 1; mask < 8; mask += 1) {
+      const rows = [0, 1, 2].map((n) => ((mask >> n) & 1 ? n + 1 : 0)) as [number, number, number];
+      const p = troublePlan(rows);
+      const start = p.conditions[0]!;
+      const held = LAST3.filter((_b, n) => rows[n]! > 0);
+      expect(start.eventKey).toBe(key(held[0]!));
+      const again = alertRestartAsk(p, start);
+      if (held.length === 1) {
+        expect(again).toBeNull();
+      } else {
+        const newest = held[held.length - 1]!;
+        expect(again?.eventKey).toBe(key(newest));
+        expect(again?.counts).toEqual({
+          rows: rows[LAST3.indexOf(newest)],
+          events: rows[LAST3.indexOf(newest)]! * 7,
+        });
+      }
+    }
+  });
+
+  it('the same for aimed guessing, by organization: another organization is not restarted from this one', () => {
+    const p = plan({
+      aimed: [
+        { org: ORG_A, cells: { [OLDEST - 2 * BUCKET]: 25 } },
+        { org: ORG_B, cells: { [OLDEST]: 25 } },
+      ],
+    });
+    const [a, b] = p.conditions;
+    expect([a!.subject, a!.eventKey]).toEqual([ORG_A, key(OLDEST)]);
+    expect([b!.subject, b!.eventKey]).toEqual([ORG_B, key(OLDEST)]);
+    // ORG_A's guessing left the window after OLDEST; ORG_B's holds through the judged bucket.
+    expect(alertRestartAsk(p, a!)).toBeNull();
+    expect(alertRestartAsk(p, b!)).toMatchObject({ subject: ORG_B, eventKey: key(JUDGED) });
+    // An ask this plan did not make (no condition for that subject) is never restarted.
+    expect(alertRestartAsk(p, { ...b!, subject: ORG_A.replace('a', 'c') })).toBeNull();
+    // Only a start is restarted.
+    expect(alertRestartAsk(p, { ...b!, phase: 'ended' })).toBeNull();
+  });
 });
 
 /* ─────────────────────────────────────── record only ─────────────────────────────────────── */
