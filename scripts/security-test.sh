@@ -2772,13 +2772,18 @@ WEB_TESTS=(
 
   # The security alerts (part 5, stage 4a: RECORD ONLY). Nothing is sent: the
   # setter and the recipients' lookup are called from nowhere, each of 0480's
-  # functions only from its one module, and no module of the alerts imports a
-  # sender or calls fetch (alerts-record-only). The alert job fails closed on
-  # its cron secret, makes its calls in the contract's order (every serious
+  # functions only from its one module, and each module of the alerts imports
+  # exactly its listed modules, calls only its listed functions and tables,
+  # writes nothing and names no fetch or sender, its imports followed one
+  # level deep (alerts-record-only, an allow-list). The alert job fails closed
+  # on its cron secret, makes its calls in the contract's order (every serious
   # flag before any other claim), takes every refusal as an answer, closes a
   # handed-out channel, the email floor's second result and the held notice as
   # skipped, always finishes the heartbeat it started, ends inside its
-  # deadline, never throws, and reports three missed or failed runs once. The
+  # deadline, never throws, and reports three missed or failed runs once.
+  # Every report of the two jobs goes through one helper: a fixed tag, counts
+  # and codes only, each tag at most once in 6 hours on an instance, the
+  # failing report when the database says so (alerts-reports). The
   # daily job only computes the baseline and says it sent nothing. On the
   # console the read is imported by the alerts section and the Check again
   # action alone, the action asks checkPlatformConsoleRead() first and
@@ -2786,6 +2791,7 @@ WEB_TESTS=(
   # empty list), and the page says it is record only first and never says
   # anything was sent. Each file carries the "Security invariant" marker.
   src/server/security/alerts-record-only.guard.test.ts
+  src/server/security/alerts-reports.test.ts
   src/app/api/cron/security-alerts/route.test.ts
   src/app/api/cron/security-summary/route.test.ts
   src/server/services/platform/security-alerts.test.ts
