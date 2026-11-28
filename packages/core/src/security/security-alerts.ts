@@ -30,9 +30,13 @@
  *   - an end only after the condition has been quiet for
  *     ALERT_END_QUIET_BUCKETS whole buckets, and never from a partial read
  *     (a condition may only be out of sight);
+ *   - a lost run never loses an alert: every run judges the last
+ *     ALERT_LOOK_BACK_BUCKETS whole buckets, so the next run claims what a
+ *     failed, missed or cut run would have claimed, under the same key;
  *   - a key from the events: a serious flag's is its reason and the event's
- *     UTC hour (as the inputs give it); a state's start is the latest whole
- *     bucket the run judged; a reminder is the state's key and its step.
+ *     UTC hour (as the inputs give it); a state's start is the oldest bucket
+ *     of the look-back where the condition holds (its own bucket); a
+ *     reminder is the state's key and its step.
  */
 
 import { securityEventReasonLabel, SECURITY_EVENT_REASON_RE } from './security-events';
@@ -260,6 +264,18 @@ const DAY_MS = 24 * HOUR_MS;
  * each time it comes back.
  */
 export const ALERT_END_QUIET_BUCKETS = 3;
+/**
+ * THE LOOK-BACK: every run judges the volume and record rules over its last
+ * this many whole buckets, oldest first, not over the latest one alone. A
+ * bucket is the latest of exactly one run; when that run fails, is missed,
+ * is cut before its claims, or has its read cancelled (likely in the very
+ * flood a rule is for), the next run still judges that bucket, and claims
+ * its start with the key the lost run would have used (the oldest bucket of
+ * the look-back where the condition holds), so the database's one row
+ * answers any repeat. It equals an end's quiet period: never longer, so a
+ * state that ended is never started again from the buckets that ended it.
+ */
+export const ALERT_LOOK_BACK_BUCKETS = ALERT_END_QUIET_BUCKETS;
 /** A reminder is due when its key's time and step have passed, give or take the database's minute. */
 export const ALERT_REMINDER_SLACK_MS = MINUTE_MS;
 const REMINDER_STEP_MS: Readonly<Record<AlertReminderStep, number>> = {
@@ -1073,7 +1089,11 @@ export interface SecurityAlertPlan {
   /** When the window was cut: serious flags dated before this were not read. */
   shortenedFrom: string | null;
   spikeHeld: AlertSpikeHeld;
-  /** The latest whole bucket the run judged (a state's start key); null when the read holds none. */
+  /**
+   * The latest whole bucket the run judged (the newest of its look-back; a
+   * start refused state_ended is claimed again with it); null when the read
+   * holds none.
+   */
   judgedBucketKey: string | null;
   /** Step 3a, then 3b: every serious flag before anything else. */
   seriousRetries: AlertClaimAsk[];
@@ -1160,27 +1180,32 @@ export function nextStartKey(refusedKey: string, judgedBucketKey: string | null)
   return refused !== null && judged !== null && judged > refused ? judgedBucketKey : null;
 }
 
-interface Condition {
-  rule: AlertStateRule;
-  subject: string;
-  /** Present at the latest whole bucket judged. */
-  present: boolean;
-  /** Present at any of the last ALERT_END_QUIET_BUCKETS whole buckets. */
-  recent: boolean;
+/** One whole bucket of the look-back: whether the condition holds there, and its counts there. */
+interface Look {
+  key: string;
+  holds: boolean;
   counts: AlertCounts;
 }
 
+interface Condition {
+  rule: AlertStateRule;
+  subject: string;
+  /** The look-back, oldest first (see ALERT_LOOK_BACK_BUCKETS). */
+  looks: Look[];
+}
+
 /**
- * Turns the conditions into claims: for each rule and subject, a start
- * (none open, present now), the due reminder (open, not yet quiet), or an end
- * (open, quiet, and the read is whole).
+ * Turns the conditions into claims: for each rule and subject, a start (none
+ * open, it holds in a bucket of the look-back: keyed by the OLDEST such
+ * bucket, with that bucket's counts), the due reminder (open, it still holds
+ * in the look-back: the newest such bucket's counts), or an end (open, quiet
+ * in every bucket of a full look-back, and the read is whole).
  */
 function stateClaims(
   inputs: SecurityAlertInputs,
   conditions: readonly Condition[],
   rules: readonly AlertStateRule[],
-  judgedKey: string | null,
-  partial: boolean,
+  canEnd: boolean,
 ): AlertClaimAsk[] {
   const out: AlertClaimAsk[] = [];
   const byKey = new Map<string, Condition>();
@@ -1208,8 +1233,9 @@ function stateClaims(
       k.slice(0, k.indexOf('|')) as AlertStateRule,
       k.slice(k.indexOf('|') + 1),
     ];
+    const held = c ? c.looks.filter((l) => l.holds) : [];
     if (state) {
-      if (c && (c.present || c.recent)) {
+      if (held.length > 0) {
         const step = dueReminderStep(state.eventKey, inputs.nowMs, state.reminders);
         if (step !== null) {
           out.push({
@@ -1217,20 +1243,28 @@ function stateClaims(
             subject,
             eventKey: alertReminderKey(state.eventKey, step),
             phase: 'reminder',
-            counts: c.counts,
+            counts: held[held.length - 1]!.counts,
           });
         }
-      } else if (!partial) {
+      } else if (canEnd) {
         out.push({
           rule,
           subject,
           eventKey: state.eventKey,
           phase: 'ended',
-          counts: c?.counts ?? { quiet_minutes: ALERT_END_QUIET_BUCKETS * 10 },
+          counts: c?.looks[c.looks.length - 1]?.counts ?? {
+            quiet_minutes: ALERT_END_QUIET_BUCKETS * 10,
+          },
         });
       }
-    } else if (c?.present && judgedKey !== null) {
-      out.push({ rule, subject, eventKey: judgedKey, phase: 'started', counts: c.counts });
+    } else if (held.length > 0) {
+      out.push({
+        rule,
+        subject,
+        eventKey: held[0]!.key,
+        phase: 'started',
+        counts: held[0]!.counts,
+      });
     }
   }
   return out;
@@ -1246,10 +1280,11 @@ export function planSecurityAlerts(inputs: SecurityAlertInputs): SecurityAlertPl
   const partial = isSecurityAlertReadPartial(inputs);
   const spikeHeld = securityAlertSpikeHeld(inputs);
   const whole = wholeBuckets(inputs);
-  const judged = whole.length > 0 ? whole[whole.length - 1]! : null;
-  const judgedKey = judged?.key ?? null;
-  // The last ALERT_END_QUIET_BUCKETS whole buckets, newest first.
-  const recent = whole.slice(-ALERT_END_QUIET_BUCKETS).reverse();
+  const judgedKey = whole.length > 0 ? whole[whole.length - 1]!.key : null;
+  // The look-back: the last ALERT_LOOK_BACK_BUCKETS whole buckets, oldest first.
+  const lookBack = whole.slice(-ALERT_LOOK_BACK_BUCKETS);
+  // An end needs its whole quiet period in sight, and a whole read.
+  const canEnd = !partial && lookBack.length === ALERT_END_QUIET_BUCKETS;
   const t = inputs.thresholds;
 
   const seriousRetries: AlertClaimAsk[] = inputs.seriousRetryDue.map((r) => ({
@@ -1281,77 +1316,70 @@ export function planSecurityAlerts(inputs: SecurityAlertInputs): SecurityAlertPl
 
   const conditions: AlertClaimAsk[] = [];
   // Record trouble first: the record itself flooding hides everything else.
-  {
-    const now = judged ? isTroubleBucket(judged, t) : false;
-    const any = recent.some((b) => isTroubleBucket(b, t));
-    conditions.push(
-      ...stateClaims(
-        inputs,
-        judged
-          ? [
-              {
-                rule: 'record_trouble',
-                subject: '',
-                present: now,
-                recent: any,
-                counts: {
-                  rows: judged.troubleRows,
-                  events: Math.min(judged.troubleEvents, COUNT_MOST),
-                },
-              },
-            ]
-          : [],
-        ['record_trouble'],
-        judgedKey,
-        partial,
-      ),
-    );
-  }
+  conditions.push(
+    ...stateClaims(
+      inputs,
+      lookBack.length > 0
+        ? [
+            {
+              rule: 'record_trouble',
+              subject: '',
+              looks: lookBack.map((b) => ({
+                key: b.key,
+                holds: isTroubleBucket(b, t),
+                counts: { rows: b.troubleRows, events: Math.min(b.troubleEvents, COUNT_MOST) },
+              })),
+            },
+          ]
+        : [],
+      ['record_trouble'],
+      canEnd,
+    ),
+  );
   if (spikeHeld === null) {
-    const now = judged ? isSpikeBucket(judged, inputs.baseline) : false;
-    const any = recent.some((b) => isSpikeBucket(b, inputs.baseline));
     conditions.push(
       ...stateClaims(
         inputs,
-        judged
+        lookBack.length > 0
           ? [
               {
                 rule: 'spike',
                 subject: '',
-                present: now,
-                recent: any,
-                counts: {
-                  events: Math.min(judged.events, COUNT_MOST),
-                  sources: Math.min(judged.sources, COUNT_MOST),
-                  event_mark: inputs.baseline.eventMark,
-                  source_mark: inputs.baseline.sourceMark,
-                },
+                looks: lookBack.map((b) => ({
+                  key: b.key,
+                  holds: isSpikeBucket(b, inputs.baseline),
+                  counts: {
+                    events: Math.min(b.events, COUNT_MOST),
+                    sources: Math.min(b.sources, COUNT_MOST),
+                    event_mark: inputs.baseline.eventMark,
+                    source_mark: inputs.baseline.sourceMark,
+                  },
+                })),
               },
             ]
           : [],
         ['spike'],
-        judgedKey,
-        partial,
+        canEnd,
       ),
     );
   }
   {
-    const aimed: Condition[] = judged
-      ? inputs.aimed.map((org) => {
-          const atNow = aimedEventsAt(org, judged.startMs, t.aimed_guessing_minutes);
-          return {
+    const aimed: Condition[] =
+      lookBack.length > 0
+        ? inputs.aimed.map((org) => ({
             rule: 'aimed_guessing' as const,
             subject: org.organizationId,
-            present: atNow >= t.aimed_guessing_events,
-            recent: recent.some(
-              (b) =>
-                aimedEventsAt(org, b.startMs, t.aimed_guessing_minutes) >= t.aimed_guessing_events,
-            ),
-            counts: { events: Math.min(atNow, COUNT_MOST), minutes: t.aimed_guessing_minutes },
-          };
-        })
-      : [];
-    conditions.push(...stateClaims(inputs, aimed, ['aimed_guessing'], judgedKey, partial));
+            looks: lookBack.map((b) => {
+              const n = aimedEventsAt(org, b.startMs, t.aimed_guessing_minutes);
+              return {
+                key: b.key,
+                holds: n >= t.aimed_guessing_events,
+                counts: { events: Math.min(n, COUNT_MOST), minutes: t.aimed_guessing_minutes },
+              };
+            }),
+          }))
+        : [];
+    conditions.push(...stateClaims(inputs, aimed, ['aimed_guessing'], canEnd));
   }
 
   return {

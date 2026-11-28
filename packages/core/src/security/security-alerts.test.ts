@@ -400,7 +400,8 @@ describe('keys, from the events only', () => {
       spy.mockReturnValue(Date.UTC(2020, 5, 5, 3, 3, 3));
       const b = plan(o);
       expect(a).toEqual(b);
-      expect(a.conditions.map((c) => c.eventKey)).toEqual([key(JUDGED), key(JUDGED)]);
+      // Record trouble in the judged bucket; guessing that reached 20 in the window ending one before.
+      expect(a.conditions.map((c) => c.eventKey)).toEqual([key(JUDGED), key(JUDGED - BUCKET)]);
     } finally {
       spy.mockRestore();
     }
@@ -938,6 +939,21 @@ describe('the spike', () => {
     ).toHaveLength(1);
   });
 
+  it('the learning days are the live ones', () => {
+    expect(
+      securityAlertSpikeHeld(
+        inputs({ buckets: spiky, oldest: NOW - 20 * DAY, thresholds: { spike_learning_days: 30 } }),
+      ),
+    ).toBe('learning');
+    const judged = inputs({
+      buckets: spiky,
+      oldest: NOW - 10 * DAY,
+      thresholds: { spike_learning_days: 7 },
+    });
+    expect(securityAlertSpikeHeld(judged)).toBeNull();
+    expect(planSecurityAlerts(judged).conditions.map((c) => c.rule)).toEqual(['spike']);
+  });
+
   it('the bucket running now is never judged', () => {
     expect(
       plan({ buckets: { [JUDGED + BUCKET]: { events: 5000, sources: 500 } } }).conditions,
@@ -1151,6 +1167,299 @@ describe('the state: one start, reminders at 1, 6 and 24 hours, one end', () => 
     ]);
     expect(couldPush(claims)).toHaveLength(4);
   });
+});
+
+/* ───────────────────────── a lost run never loses an alert (S1) ───────────────────────── */
+
+/**
+ * The claim's one-row rule, as 0480 answers it (CONTRACT.md, the claim): one
+ * row per rule, subject, key and phase (a repeat is a duplicate); one open
+ * state per rule and subject (already_open names it); a start with the key
+ * of a state that ended is state_ended; a reminder only once its step has
+ * passed; a new start key no older than the 8-hour window.
+ */
+class ClaimModel {
+  rows: string[] = [];
+  private seen = new Set<string>();
+  states: Array<{
+    rule: string;
+    subject: string;
+    key: string;
+    reminders: string[];
+    ended: boolean;
+  }> = [];
+  openStates() {
+    return this.states
+      .filter((s) => !s.ended)
+      .map((s) => ({ rule: s.rule, subject: s.subject, key: s.key, reminders: [...s.reminders] }));
+  }
+  claim(
+    ask: AlertClaimAsk,
+    nowMs: number,
+  ): { outcome: 'new' | 'duplicate' | 'refused'; refused?: string; openKey?: string } {
+    const row = `${ask.rule} ${ask.phase} ${ask.eventKey}`;
+    const same = (s: { rule: string; subject: string }) =>
+      s.rule === ask.rule && s.subject === ask.subject;
+    const add = () => {
+      this.seen.add(`${ask.subject}|${row}`);
+      this.rows.push(row);
+      return { outcome: 'new' as const };
+    };
+    if (this.seen.has(`${ask.subject}|${row}`)) {
+      const ended = this.states.find((s) => same(s) && s.key === ask.eventKey && s.ended);
+      return ask.phase === 'started' && ended
+        ? { outcome: 'refused', refused: 'state_ended' }
+        : { outcome: 'duplicate' };
+    }
+    if (ask.phase === 'started') {
+      const open = this.states.find((s) => same(s) && !s.ended);
+      if (open) return { outcome: 'refused', refused: 'already_open', openKey: open.key };
+      const at = alertBucketKeyMs(ask.eventKey)!;
+      if (at < nowMs - 8 * HOUR || at > nowMs)
+        return { outcome: 'refused', refused: 'key_out_of_window' };
+      this.states.push({
+        rule: ask.rule,
+        subject: ask.subject,
+        key: ask.eventKey,
+        reminders: [],
+        ended: false,
+      });
+      return add();
+    }
+    const base = ask.phase === 'reminder' ? parseAlertReminderKey(ask.eventKey)! : null;
+    const state = this.states.find(
+      (s) => same(s) && s.key === (base ? base.stateKey : ask.eventKey),
+    );
+    if (!state) return { outcome: 'refused', refused: 'no_open_state' };
+    if (state.ended) return { outcome: 'refused', refused: 'state_ended' };
+    if (base) {
+      const step = { '1h': HOUR, '6h': 6 * HOUR, '24h': DAY }[base.step];
+      if (base.stateMs + step > nowMs + MIN)
+        return { outcome: 'refused', refused: 'reminder_not_due' };
+      state.reminders.push(base.step);
+    } else {
+      state.ended = true;
+    }
+    return add();
+  }
+}
+
+type Rule3 = 'record_trouble' | 'spike' | 'aimed_guessing';
+
+/**
+ * The job every 10 minutes from NOW over `hours`, against the claim model,
+ * claiming as the job does (a start answered already_open takes its due
+ * reminder; state_ended is claimed again only with a newer judged bucket).
+ * `size(b)`: the condition's size in the whole bucket that starts at b.
+ * `lost(i)`: run i never happened (failed, missed, or cut before its claims).
+ * `twice(i)`: run i overlapped another that read the same answer.
+ */
+function everyTenMinutes(o: {
+  rule: Rule3;
+  hours: number;
+  size: (bucketStart: number) => number;
+  lost?: (run: number) => boolean;
+  twice?: (run: number) => boolean;
+}) {
+  const db = new ClaimModel();
+  const answered: string[] = [];
+  const ends: string[] = [];
+  for (let i = 0, t = NOW; t <= NOW + o.hours * HOUR; i += 1, t += BUCKET) {
+    if (o.lost?.(i)) continue;
+    const buckets: NonNullable<RawOptions['buckets']> = {};
+    const aimedCells: Record<number, number> = {};
+    for (let b = binOf(t - 8 * HOUR) + BUCKET; b <= binOf(t); b += BUCKET) {
+      const n = o.size(b);
+      if (n <= 0) continue;
+      if (o.rule === 'record_trouble') buckets[b] = { troubleRows: n };
+      else if (o.rule === 'spike') buckets[b] = { events: n, sources: n };
+      else aimedCells[b] = n;
+    }
+    const read = inputs({
+      now: t,
+      buckets,
+      aimed: Object.keys(aimedCells).length > 0 ? [{ org: ORG_A, cells: aimedCells }] : [],
+      openStates: db.openStates(),
+    });
+    // Both overlapping runs read before either claims.
+    const plans = Array.from({ length: o.twice?.(i) ? 2 : 1 }, () => planSecurityAlerts(read));
+    for (const p of plans) {
+      for (const ask of p.conditions) {
+        const a = db.claim(ask, t);
+        answered.push(a.outcome === 'refused' ? `refused ${a.refused}` : a.outcome);
+        if (a.outcome === 'new' && ask.phase === 'ended') ends.push(p.judgedBucketKey!);
+        if (a.refused === 'already_open' && a.openKey) {
+          const step = dueReminderStep(a.openKey, read.nowMs, []);
+          if (step !== null) {
+            const r = db.claim(
+              { ...ask, eventKey: alertReminderKey(a.openKey, step), phase: 'reminder' },
+              t,
+            );
+            answered.push(r.outcome === 'refused' ? `refused ${r.refused}` : r.outcome);
+          }
+        } else if (a.refused === 'state_ended') {
+          const newer = nextStartKey(ask.eventKey, p.judgedBucketKey);
+          if (newer !== null) answered.push(db.claim({ ...ask, eventKey: newer }, t).outcome);
+        }
+      }
+    }
+  }
+  return { rows: db.rows, answered, ends };
+}
+
+describe('a lost run never loses an alert: every run judges the last three whole buckets', () => {
+  /** The bucket the bursts below fall in: 12:20; the first run that judges it whole is at 12:35:30 (run 3). */
+  const B = binOf(NOW) + 2 * BUCKET;
+  const FIRST_JUDGE = 3;
+  const BIG: Record<Rule3, number> = { record_trouble: 40, spike: 90_000, aimed_guessing: 5_000 };
+  /** The last whole bucket at which a one-bucket burst at B still holds: aimed guessing counts 30 minutes. */
+  const LAST_HELD: Record<Rule3, number> = {
+    record_trouble: B,
+    spike: B,
+    aimed_guessing: B + 2 * BUCKET,
+  };
+  const RULES: Rule3[] = ['record_trouble', 'spike', 'aimed_guessing'];
+
+  it('a burst in the bucket before the judged one still starts its state, keyed by its own bucket', () => {
+    expect(plan({ buckets: { [JUDGED - BUCKET]: { troubleRows: 40 } } }).conditions).toEqual([
+      {
+        rule: 'record_trouble',
+        subject: '',
+        eventKey: key(JUDGED - BUCKET),
+        phase: 'started',
+        counts: { rows: 40, events: 280 },
+      },
+    ]);
+    expect(
+      plan({ buckets: { [JUDGED - BUCKET]: { events: 90_000, sources: 4_000 } } }).conditions,
+    ).toEqual([
+      {
+        rule: 'spike',
+        subject: '',
+        eventKey: key(JUDGED - BUCKET),
+        phase: 'started',
+        counts: { events: 90_000, sources: 4_000, event_mark: 50, source_mark: 10 },
+      },
+    ]);
+    // Guessing two buckets back: the window that ends there already holds it.
+    expect(
+      plan({ aimed: [{ org: ORG_A, cells: { [JUDGED - 2 * BUCKET]: 5_000 } }] }).conditions,
+    ).toEqual([
+      {
+        rule: 'aimed_guessing',
+        subject: ORG_A,
+        eventKey: key(JUDGED - 2 * BUCKET),
+        phase: 'started',
+        counts: { events: 5_000, minutes: 30 },
+      },
+    ]);
+  });
+
+  it('the oldest bucket of the look-back where it holds gives the key and its counts', () => {
+    const p = plan({
+      buckets: { [JUDGED - 2 * BUCKET]: { troubleRows: 1 }, [JUDGED]: { troubleRows: 9 } },
+    });
+    expect(p.conditions).toEqual([
+      {
+        rule: 'record_trouble',
+        subject: '',
+        eventKey: key(JUDGED - 2 * BUCKET),
+        phase: 'started',
+        counts: { rows: 1, events: 7 },
+      },
+    ]);
+    // Guessing that crossed its line in the window ending one bucket back is keyed there.
+    expect(
+      plan({ aimed: [{ org: ORG_A, cells: cells(LAST3, 10) }] }).conditions.map((c) => c.eventKey),
+    ).toEqual([key(JUDGED - BUCKET)]);
+  });
+
+  it('the look-back is the three whole buckets an end needs, no more: an older burst starts nothing', () => {
+    expect(plan({ buckets: { [JUDGED - 3 * BUCKET]: { troubleRows: 40 } } }).conditions).toEqual(
+      [],
+    );
+    expect(
+      plan({ buckets: { [JUDGED - 3 * BUCKET]: { events: 90_000, sources: 4_000 } } }).conditions,
+    ).toEqual([]);
+    expect(
+      plan({ aimed: [{ org: ORG_A, cells: { [JUDGED - 5 * BUCKET]: 5_000 } }] }).conditions,
+    ).toEqual([]);
+  });
+
+  it('no end from a read that holds fewer whole buckets than an end needs quiet', () => {
+    const raw = rawInputs({
+      openStates: [{ rule: 'record_trouble', key: key(JUDGED - 9 * BUCKET) }],
+    });
+    // The bucket running now and two whole ones: an end needs three.
+    const short = { ...raw, buckets: (raw.buckets as unknown[]).slice(-3) };
+    const read = readSecurityAlertInputs(short);
+    if (!read.ok || read.value === null) throw new Error('fixture unreadable');
+    const p = planSecurityAlerts(read.value);
+    expect(p.partial).toBe(false);
+    expect(p.conditions).toEqual([]);
+    expect(
+      plan({
+        openStates: [{ rule: 'record_trouble', key: key(JUDGED - 9 * BUCKET) }],
+      }).conditions.map((c) => c.phase),
+    ).toEqual(['ended']);
+  });
+
+  it.each(RULES)(
+    '%s: a one-bucket burst is claimed once with every run, and once under the same key with the run that first judges it lost',
+    (rule) => {
+      const size = (b: number) => (b === B ? BIG[rule] : 0);
+      const all = everyTenMinutes({ rule, hours: 10, size });
+      expect(all.rows).toEqual([`${rule} started ${key(B)}`, `${rule} ended ${key(B)}`]);
+      // Nothing is claimed twice: every ask of every run was new.
+      expect(all.answered.every((a) => a === 'new')).toBe(true);
+      // The end only after three quiet whole buckets.
+      expect(all.ends).toEqual([key(LAST_HELD[rule] + 3 * BUCKET)]);
+      for (const lost of [
+        (i: number) => i === FIRST_JUDGE,
+        (i: number) => i === FIRST_JUDGE || i === FIRST_JUDGE + 1,
+        (i: number) => i % 3 === 0,
+      ]) {
+        const some = everyTenMinutes({ rule, hours: 10, size, lost });
+        expect(some.rows).toEqual(all.rows);
+        expect(some.answered.every((a) => a === 'new')).toBe(true);
+      }
+    },
+  );
+
+  it.each(RULES)(
+    '%s: a condition that lasts 26 hours, with the middle run of every three lost: one start, 1 h, 6 h, 24 h, one end, each once and under the same keys',
+    (rule) => {
+      const size = (b: number) =>
+        b >= B && b < B + 26 * HOUR
+          ? Math.ceil(BIG[rule] / (rule === 'aimed_guessing' ? 100 : 1))
+          : 0;
+      const all = everyTenMinutes({ rule, hours: 30, size });
+      expect(all.rows).toEqual([
+        `${rule} started ${key(B)}`,
+        `${rule} reminder ${key(B)}+1h`,
+        `${rule} reminder ${key(B)}+6h`,
+        `${rule} reminder ${key(B)}+24h`,
+        `${rule} ended ${key(B)}`,
+      ]);
+      expect(all.answered.every((a) => a === 'new')).toBe(true);
+      const middle = everyTenMinutes({ rule, hours: 30, size, lost: (i) => i % 3 === 1 });
+      expect(middle.rows).toEqual(all.rows);
+      expect(middle.answered.every((a) => a === 'new')).toBe(true);
+    },
+  );
+
+  it.each(RULES)(
+    '%s: two runs that read the same answer claim each alert once: the repeat is a duplicate, one row',
+    (rule) => {
+      const size = (b: number) => (b >= B && b < B + 7 * HOUR ? BIG[rule] : 0);
+      const once = everyTenMinutes({ rule, hours: 9, size });
+      const twice = everyTenMinutes({ rule, hours: 9, size, twice: () => true });
+      expect(twice.rows).toEqual(once.rows);
+      expect(once.rows).toHaveLength(4);
+      expect(twice.answered.filter((a) => a === 'new')).toHaveLength(4);
+      expect(twice.answered.filter((a) => a !== 'new').every((a) => a === 'duplicate')).toBe(true);
+    },
+  );
 });
 
 /* ─────────────────────────────────────── record only ─────────────────────────────────────── */

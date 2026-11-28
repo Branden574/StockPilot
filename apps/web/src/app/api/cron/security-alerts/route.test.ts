@@ -497,8 +497,9 @@ describe("the contract's order", () => {
       `claim aimed_guessing 0b0b started ${key(JUDGED - 6 * BUCKET)}`,
       `claim alerts_held started ${key(JUDGED - 6 * BUCKET)}`,
       `claim record_trouble started ${key(JUDGED)}`,
-      // Busiest first: 90 events, then 27 (the threshold is 20 in 30 minutes).
-      `claim aimed_guessing 0a0a started ${key(JUDGED)}`,
+      // Busiest first, each keyed by the oldest bucket of the look-back where it holds (the
+      // threshold is 20 in 30 minutes): 30 a bucket holds from the first; 9 a bucket at the third.
+      `claim aimed_guessing 0a0a started ${key(JUDGED - 2 * BUCKET)}`,
       `claim aimed_guessing 0b0b started ${key(JUDGED)}`,
       'heartbeat finish',
     ]);
@@ -550,9 +551,9 @@ describe("the contract's order", () => {
     expect(claim.args).toEqual({
       p_rule: 'aimed_guessing',
       p_subject: ORG_A,
-      p_event_key: key(JUDGED),
+      p_event_key: key(JUDGED - 2 * BUCKET),
       p_phase: 'started',
-      p_counts: { events: 90, minutes: 30 },
+      p_counts: { events: 30, minutes: 30 },
     });
     const finish = finishes()[0]!;
     expect(finish.args).toEqual({
