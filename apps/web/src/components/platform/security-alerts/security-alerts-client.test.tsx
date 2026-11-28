@@ -246,6 +246,38 @@ describe('the job', () => {
     expect(within(hb as HTMLElement).getAllByText('Warning:').length).toBeGreaterThan(0);
   });
 
+  it("the latest check could not check fully: it is said beside that check's time, as a warning, although the check was good; the next whole check clears it", () => {
+    const latest = (heartbeat: object) =>
+      rawSecurityAlertList({
+        state: {
+          heartbeat: {
+            ...(rawSecurityAlertList().state as { heartbeat: object }).heartbeat,
+            ...heartbeat,
+          },
+        },
+      });
+    const { container, unmount } = render(
+      <SecurityAlertsClient
+        initial={ok(latest({ last_run_ok: true, last_run_partial: true }))}
+        timeZone={LA}
+      />,
+    );
+    const hb = container.querySelector('[data-slot="security-alerts-heartbeat"]')!;
+    expect(hb).toHaveTextContent('Last checked at 24 Nov 2026, 4:00 AM PST.');
+    expect(hb).toHaveTextContent(W.partial);
+    expect(hb.querySelectorAll('[data-warning]').length).toBeGreaterThan(0);
+    unmount();
+    // The database clears the mark when the next check starts, and keeps it only for the latest one.
+    for (const next of [
+      { last_run_ok: true, last_run_partial: false },
+      { last_run_finished_at: null, last_run_ok: null, last_run_partial: null },
+    ]) {
+      const again = render(<SecurityAlertsClient initial={ok(latest(next))} timeZone={LA} />);
+      expect(again.container).not.toHaveTextContent(W.partial);
+      again.unmount();
+    }
+  });
+
   it('the spike baseline, the push budget counted as if push were on, and no baseline yet', () => {
     const { unmount } = render(<SecurityAlertsClient initial={ok()} timeZone={LA} />);
     expect(

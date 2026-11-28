@@ -88,7 +88,7 @@ interface Shape {
   trouble?: boolean;
   openStates?: Array<{ rule: string; key: string; subject?: string; reminders?: string[] }>;
   shortened?: boolean;
-  truncated?: 'aimed' | 'open';
+  truncated?: 'aimed' | 'open' | 'seriousRetry' | 'retry';
 }
 
 /** platform_security_alert_inputs() as the contract shapes it. */
@@ -148,7 +148,7 @@ function rawInputs(o: Shape = {}): Record<string, unknown> {
       phase: 'started',
       claimed_at: pg(NOW - 7 * MIN),
     })),
-    serious_retry_due_truncated: false,
+    serious_retry_due_truncated: o.truncated === 'seriousRetry',
     retry_due: (o.retry ?? []).map((r) => ({
       rule: r.rule,
       subject: r.subject ?? '',
@@ -156,7 +156,7 @@ function rawInputs(o: Shape = {}): Record<string, unknown> {
       phase: r.phase,
       claimed_at: pg(NOW - 6 * MIN),
     })),
-    retry_due_truncated: false,
+    retry_due_truncated: o.truncated === 'retry',
     window: { from: pg(from), to: pg(NOW + MIN), asked_from: pg(askedFrom) },
     shortened: from > askedFrom,
     refused: null,
@@ -990,6 +990,8 @@ describe('the inputs', () => {
     ['shortened', { shortened: true }],
     ['aimed_truncated', { truncated: 'aimed' as const }],
     ['open_states_truncated', { truncated: 'open' as const }],
+    ['serious_retry_due_truncated', { truncated: 'seriousRetry' as const }],
+    ['retry_due_truncated', { truncated: 'retry' as const }],
   ])(
     'a partial read (%s): every serious flag is claimed, no end, and the finish says partial',
     async (_w, partial) => {
@@ -1004,6 +1006,21 @@ describe('the inputs', () => {
       expect(body).toMatchObject({ ok: true, partial: true });
     },
   );
+
+  it('the heartbeat holds the partial mark of the latest run only: a whole run after a partial one finishes whole', async () => {
+    db.inputs = rawInputs({ shortened: true });
+    const first = await run();
+    expect(first.body).toMatchObject({ ok: true, partial: true, finish: 'recorded' });
+    db.inputs = rawInputs();
+    const second = await run();
+    expect(second.body).toMatchObject({ ok: true, partial: false, finish: 'recorded' });
+    expect(finishes().map((f) => f.args?.p_partial)).toEqual([true, false]);
+    // The run's own log line is what outlives it (QUESTIONS.md W8): partial, and from when.
+    const lines = vi.mocked(console.info).mock.calls.map((c) => JSON.parse(String(c[1])));
+    expect(lines[0]).toMatchObject({ partial: true });
+    expect(lines[0].shortenedFrom).toMatch(/^2026-11-24T/);
+    expect(lines[1]).toMatchObject({ partial: false, shortenedFrom: null });
+  });
 
   it('a whole read ends a state that is gone', async () => {
     db.inputs = rawInputs({
