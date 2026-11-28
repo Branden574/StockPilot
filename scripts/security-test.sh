@@ -1241,6 +1241,11 @@ WEB_TESTS=(
   src/server/services/item-images.upload-checks.test.ts
   src/server/services/po-imports.upload-checks.test.ts
   src/server/services/procedure-videos.upload-checks.test.ts
+  # The finalize check with the real storage reader through Next's fetch over
+  # a socket, and every storage step's time limit and each check's one
+  # deadline (review round 3).
+  src/server/security/upload-checks.seam.test.ts
+  src/lib/storage-steps.test.ts
   src/app/api/orders/sign/route.test.ts
   src/server/services/security-events.test.ts
 
