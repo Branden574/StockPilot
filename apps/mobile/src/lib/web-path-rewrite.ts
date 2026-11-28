@@ -171,6 +171,12 @@ const REWRITES: { re: RegExp; to: (m: RegExpMatchArray) => string }[] = [
   // swallowing it anyway. Other report pages (/dashboard/reports/<slug>) have
   // no native twin and still fall through to home. The cold-start shim is
   // app/dashboard/reports/book-order-totals.tsx.
+  // Vendor risk reviews (security tools part 7): the daily reminder to owners
+  // and admins links the web risk register. The phone has no review screen;
+  // the push opens its Suppliers list (app/(drawer)/suppliers.tsx) rather than
+  // home. Only the register itself: a supplier's review page and the bare
+  // Suppliers path have no rule and still open home. Query dropped.
+  { re: /\/dashboard\/suppliers\/risk(\?.*)?$/, to: () => '/suppliers' },
   { re: /\/dashboard\/reports\/book-order-totals(\?.*)?$/, to: (m) => bookReportNativePath(m[1]) },
   { re: /\/dashboard\/reports(\?.*)?$/, to: () => '/reports' },
   { re: /^\/dashboard(\/.*)?$/, to: () => '/' },
