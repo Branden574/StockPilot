@@ -10,7 +10,7 @@ import {
   zoneLongWords,
   zoneShortName,
 } from './viewer-zone';
-import { zonedParts } from './zoned-wall-clock';
+import { zonedParts, zoneOffsetMs } from './zoned-wall-clock';
 
 /**
  * THE VIEWER'S ZONE. Pinned: a zone is the viewer's only when this runtime
@@ -18,9 +18,10 @@ import { zonedParts } from './zoned-wall-clock';
  * its zone's short name at that very instant, so the same wall clock on the
  * night the clocks go back reads PDT then PST; a day starts at the zone's own
  * midnight, and the day the clocks go back is 25 hours long; a day whose
- * clocks skip midnight starts at the change, and in every zone every day of
- * 2027 starts at its first instant, later than the day before (review M1).
- * Made-up instants; America/Los_Angeles, and Europe/Berlin east of UTC.
+ * clocks skip midnight starts at the change, and in every zone, around every
+ * change of its clocks in 2027 (and on a day each month), each day starts at
+ * its first instant, later than the day before (review M1). Made-up
+ * instants; America/Los_Angeles, and Europe/Berlin east of UTC.
  */
 
 const LA = 'America/Los_Angeles';
@@ -168,32 +169,114 @@ describe("a day starts at the zone's own midnight", () => {
     expect(nextDayStartInZone(Date.parse(first), AMMAN) - Date.parse(first)).toBe(25 * 3_600_000);
   });
 
-  it('every zone this runtime knows, every day of 2027: each day starts at its first instant, strictly later than the day before', () => {
+  it('every zone this runtime knows, through 2027: every hour of the days around each change of its clocks, and a day each month', () => {
     const zones = Intl.supportedValuesOf('timeZone');
     expect(zones.length).toBeGreaterThan(300);
-    expect(zones).toEqual(expect.arrayContaining(['America/Havana', 'America/Santiago']));
+    expect(zones).toEqual(
+      expect.arrayContaining([
+        'America/Havana',
+        'America/Santiago',
+        'Atlantic/Azores',
+        'Asia/Amman',
+        LA,
+        'Asia/Tokyo',
+      ]),
+    );
+    const HOUR = 3_600_000;
+    const DAY = 86_400_000;
     const dateOf = (ms: number, zone: string) => {
       const p = zonedParts(ms, zone);
       return Date.UTC(p.year, p.month - 1, p.day);
     };
-    const DAY = 86_400_000;
     const faults: string[] = [];
+    const fault = (zone: string, what: string) => {
+      if (faults.length < 10) faults.push(`${zone}: ${what}`);
+    };
+    /**
+     * The day that starts at `start`: it starts at its first instant, the
+     * next one starts on the next date at its own first instant (strictly
+     * later), and the day start taken in the day's last millisecond is its
+     * own. Returns the next day's start.
+     */
+    const checkDay = (zone: string, start: number): number => {
+      const next = nextDayStartInZone(start, zone);
+      const date = dateOf(start, zone);
+      const ok =
+        next > start &&
+        dateOf(start - 1, zone) < date &&
+        dateOf(next, zone) === date + DAY &&
+        dateOf(next - 1, zone) === date &&
+        dayStartInZone(next - 1, zone) === start;
+      if (!ok) fault(zone, `day from ${iso(start)}: next ${iso(next)}`);
+      return next;
+    };
+    /** The instants in [from, to] where the zone's offset changes: a day at a time, then to the millisecond. */
+    const changesOf = (zone: string, from: number, to: number): number[] => {
+      const changes: number[] = [];
+      let offset = zoneOffsetMs(from, zone);
+      for (let t = from + DAY; t <= to; t += DAY) {
+        const now = zoneOffsetMs(t, zone);
+        if (now === offset) continue;
+        let lo = t - DAY;
+        let hi = t;
+        while (hi - lo > 1) {
+          const mid = Math.floor((lo + hi) / 2);
+          if (zoneOffsetMs(mid, zone) === offset) lo = mid;
+          else hi = mid;
+        }
+        changes.push(hi);
+        offset = now;
+      }
+      return changes;
+    };
+    /**
+     * The day before a change, its day and the day after: each day as above,
+     * and the day start taken at every hour of them, and just before and at
+     * the change, is the start of the day that hour is in.
+     */
+    const checkAround = (zone: string, change: number) => {
+      const starts = [dayStartInZone(change - DAY, zone)];
+      for (let i = 0; i < 3; i++) starts.push(checkDay(zone, starts[i]!));
+      const instants = [change - 1, change];
+      for (let h = starts[0]!; h < starts[3]!; h += HOUR) instants.push(h);
+      for (const at of instants) {
+        const own = starts.filter((s) => s <= at).pop()!;
+        const got = dayStartInZone(at, zone);
+        if (got !== own) fault(zone, `at ${iso(at)}: day start ${iso(got)}, not ${iso(own)}`);
+      }
+    };
+    const found = new Map<string, string[]>();
     for (const zone of zones) {
-      let start = dayStartInZone(Date.UTC(2027, 0, 1, 12), zone);
-      for (let day = 0; day < 365 && faults.length < 5; day += 1) {
-        const next = nextDayStartInZone(start, zone);
-        const late = dayStartInZone(next - 1, zone);
-        const ok =
-          next > start &&
-          // The next day starts on the next calendar date, at its first instant...
-          dateOf(next, zone) === dateOf(start, zone) + DAY &&
-          dateOf(next - 1, zone) === dateOf(start, zone) &&
-          // ...and the day start taken in the day's last millisecond is the day's own.
-          late === start;
-        if (!ok) faults.push(`${zone} after ${iso(start)}: next ${iso(next)}, late ${iso(late)}`);
-        start = next;
+      // From the last day of 2026 to the first of 2028 in UTC: all of 2027 in every zone.
+      const changes = changesOf(zone, Date.UTC(2026, 11, 31), Date.UTC(2028, 0, 2));
+      found.set(zone, changes.map(iso));
+      for (const change of changes) checkAround(zone, change);
+      for (let month = 0; month < 12; month++) {
+        checkDay(zone, dayStartInZone(Date.UTC(2027, month, 15, 12), zone));
       }
     }
+    // Amman's clocks went back over midnight in 2021, its last change: that year too.
+    const amman2021 = changesOf('Asia/Amman', Date.UTC(2020, 11, 31), Date.UTC(2022, 0, 2));
+    for (const change of amman2021) checkAround('Asia/Amman', change);
     expect(faults).toEqual([]);
+    expect([...found.values()].filter((changes) => changes.length > 0).length).toBeGreaterThan(100);
+    // The changes it found, where the clocks skip midnight or go back over it, and in Pacific time.
+    expect(found.get('America/Havana')).toEqual([
+      '2027-03-14T05:00:00.000Z',
+      '2027-11-07T05:00:00.000Z',
+    ]);
+    expect(found.get('Atlantic/Azores')).toEqual([
+      '2027-03-28T01:00:00.000Z',
+      '2027-10-31T01:00:00.000Z',
+    ]);
+    expect(found.get('America/Santiago')).toEqual([
+      '2027-04-04T03:00:00.000Z',
+      '2027-09-05T04:00:00.000Z',
+    ]);
+    expect(found.get(LA)).toEqual(['2027-03-14T10:00:00.000Z', '2027-11-07T09:00:00.000Z']);
+    expect(amman2021.map(iso)).toContain('2021-10-28T22:00:00.000Z');
+    // And zones whose clocks do not change in 2027.
+    expect(found.get('Asia/Amman')).toEqual([]);
+    expect(found.get('Asia/Tokyo')).toEqual([]);
   }, 60_000);
 });
