@@ -26,20 +26,20 @@ import {
  * Unicode normalisation of a run of combining marks out of order took 651 ms
  * at 30,000 characters and 41.6 s at 240,000.
  *
- * For each hostile shape and each function: the two sizes N and 2N are timed
- * in turn, run after run (so a busy machine slows both alike), each run long
- * enough to read the clock well, after a warm-up. The median time at 2N (what a
- * caller waits) is held to a hard ceiling. The ratio of the fastest run at 2N
- * to the fastest at N (the function's own cost, without the collector's pauses,
- * which grow with what a test file run in parallel holds) is held well under
- * the 4 that a quadratic time gives (linear is 2). N and 2N are both within the
- * raw limits, so the writers do their whole work at both sizes; 240,000
- * characters is held to a ceiling.
+ * For each hostile shape and each function: one call at N and one at 2N
+ * characters, in turn, SAMPLES times each, after a warm-up. The median call at
+ * 2N (what a caller waits) is held to a hard ceiling. The ratio of the fastest
+ * call at 2N to the fastest at N is held well under the 4 that a quadratic time
+ * gives (linear is 2): a busy machine (the other test files, run in parallel)
+ * can only make a call slower, and a longer call more often, so the fastest call
+ * is the function's own cost; while the ratio is over the bound, up to ROUNDS
+ * rounds of samples are added (a quadratic function is over it in every round).
+ * N and 2N are both within the raw limits, so the writers do their whole work at
+ * both sizes; 240,000 characters is held to a ceiling.
  */
 const N = 15_000;
-const RUNS = 7;
-/** A run lasts at least this long (as many calls as that takes at N, at least 2). */
-const RUN_MS = 1;
+const SAMPLES = 15;
+const ROUNDS = 3;
 const RATIO_MAX = 3;
 const RATIO_FLOOR_MS = 0.2;
 const CEILING_MS = 150;
@@ -48,7 +48,7 @@ const BIG_CEILING_MS = 300;
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
 
-/** Times `fn` on `one` and `two` in turn: the median time of each (per call), and the fastest at `two` over the fastest at `one`. */
+/** Times `fn` on `one` and `two` in turn: the median call of each, and the fastest at `two` over the fastest at `one`. */
 function timePair(
   fn: (s: string) => unknown,
   one: string,
@@ -56,26 +56,24 @@ function timePair(
 ): { one: number; two: number; ratio: number } {
   fn(one);
   fn(two);
-  const t0 = performance.now();
   fn(one);
-  const single = performance.now() - t0;
-  const calls = Math.min(200, Math.max(2, Math.ceil(RUN_MS / Math.max(single, 0.001))));
+  fn(two);
   const ones: number[] = [];
   const twos: number[] = [];
-  for (let r = 0; r < RUNS; r += 1) {
-    const a = performance.now();
-    for (let c = 0; c < calls; c += 1) fn(one);
-    const b = performance.now();
-    for (let c = 0; c < calls; c += 1) fn(two);
-    const e = performance.now();
-    ones.push((b - a) / calls);
-    twos.push((e - b) / calls);
-  }
-  return {
-    one: median(ones),
-    two: median(twos),
-    ratio: Math.min(...twos) / Math.max(Math.min(...ones), 0.000001),
+  const call = (s: string, into: number[]) => {
+    const t0 = performance.now();
+    fn(s);
+    into.push(performance.now() - t0);
   };
+  let ratio = Infinity;
+  for (let round = 0; round < ROUNDS && ratio >= RATIO_MAX; round += 1) {
+    for (let i = 0; i < SAMPLES; i += 1) {
+      call(one, ones);
+      call(two, twos);
+    }
+    ratio = Math.min(...twos) / Math.max(Math.min(...ones), 0.000001);
+  }
+  return { one: median(ones), two: median(twos), ratio };
 }
 
 /** `s` repeated to about `n` code points. */
@@ -157,7 +155,7 @@ describe('the text functions run in linear time', () => {
         if (one >= RATIO_FLOOR_MS) {
           expect(
             ratio,
-            `${name}: ${one.toFixed(3)} ms then ${two.toFixed(3)} ms (fastest runs: ratio ${ratio.toFixed(2)})`,
+            `${name}: ${one.toFixed(3)} ms then ${two.toFixed(3)} ms (fastest calls: ratio ${ratio.toFixed(2)})`,
           ).toBeLessThan(RATIO_MAX);
         }
       });
