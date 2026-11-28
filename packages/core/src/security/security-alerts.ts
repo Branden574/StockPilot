@@ -1802,8 +1802,8 @@ export const SECURITY_ALERTS_WORDS = {
     setting: 'Setting',
     value: 'Value',
     defaultValue: 'Default',
-    from: 'From',
-    to: 'To',
+    fromValue: 'From',
+    toValue: 'To',
     who: 'Who',
   },
   // The heartbeat.

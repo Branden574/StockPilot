@@ -14,21 +14,28 @@ import { describe, expect, it } from 'vitest';
  * would pass that):
  *
  *   1. every function of migration 0480 is called (named in a string literal
- *      of code, comments aside) from exactly the module this release gives
- *      it, and from nowhere else: the job's four, the daily job's baseline,
- *      the retention's purge, the console's list. The setter
+ *      of code, or in a concatenation or template whose parts are all
+ *      written out; comments aside) from exactly the module this release
+ *      gives it, and from nowhere else: the job's four, the daily job's
+ *      baseline, the retention's purge, the console's list. The setter
  *      (platform_security_alert_set) and the recipients' lookup
- *      (platform_admin_user_ids) are called from nowhere;
+ *      (platform_admin_user_ids) are called from nowhere. Anywhere under src,
+ *      an .rpc( whose function is not one plain literal, and could be one of
+ *      them, is refused: a name built from parts is not counted, so it may
+ *      not be used;
  *   2. each module of the alerts (MODULES: the alert job, its report helper
- *      and its route, the daily job, the console's service, action,
- *      section, client and page) imports EXACTLY the modules listed for it;
- *      calls .rpc only with a function named on its list, and .from only
- *      with a table named on its list (a read: no insert, update, upsert or
- *      delete anywhere); touches no .functions, .storage, .channel, .auth,
- *      .schema, .realtime or .fetch; and names nothing it did not declare or
- *      import beyond the plain language globals in GLOBALS (so no fetch,
- *      globalThis, window, process, require or a sender that was never
- *      imported, under any name);
+ *      and its route, the daily job, the retention job, the console's
+ *      service, action, section, client and page; every caller in CALLERS
+ *      must be one of them) imports EXACTLY the modules listed for it; calls
+ *      .rpc only with a function named on its list, and .from only with a
+ *      table named on its list (a read: no insert, update, upsert or delete
+ *      anywhere); never takes .rpc, .from or any of those as a value (bound,
+ *      destructured, or with .call); touches no .functions, .storage,
+ *      .channel, .auth, .schema, .realtime or .fetch; takes no property by
+ *      a computed name (x[name], { [name]: v }); and names nothing it did not
+ *      declare or import beyond the plain language globals in GLOBALS (so no
+ *      fetch, globalThis, window, process, require or a sender that was
+ *      never imported, under any name);
  *   3. ONE LEVEL DEEP: every module of the app a module of the alerts
  *      imports (that is not itself one of MODULES) is read too, and may
  *      import only what ONE_LEVEL_DEEP lists for it. A new helper is not on
@@ -40,6 +47,14 @@ import { describe, expect, it } from 'vitest';
  * pass by reading nothing.
  *
  * @stockpilot/core is not followed: it is the pure half (no I/O).
+ *
+ * WHAT IT CANNOT SEE (so it is a check against mistakes and unreviewed
+ * changes, not a proof): a name made at run time from data (a value read
+ * from a file, a request, the database); a module beyond one level deep;
+ * what a name holds (it reads names, not types, and is not scope-aware: a
+ * variable called like an allowed one can hold anything); a call made by
+ * an allowed module's own dependency; and anything outside apps/web/src.
+ * The review of a change to these modules is still the control.
  *
  * STAGE 4b CHANGES THESE LISTS ON PURPOSE: the sending job will call the
  * recipients' lookup, import a mailer and a push sender, and the console
@@ -115,6 +130,23 @@ const MODULES: Record<string, ModuleRule> = {
       '@stockpilot/core',
     ],
     rpc: ['platform_security_alert_baseline'],
+    tables: [],
+  },
+  'app/api/cron/security-events-retention/route.ts': {
+    imports: [
+      'next/server',
+      '@/lib/env',
+      '@/lib/error-reporter',
+      '@/lib/supabase/admin',
+      '@/server/security/passkey-maintenance',
+      '@/server/services/lib/system-context',
+    ],
+    rpc: [
+      'purge_security_events',
+      'purge_sign_in_alerts',
+      'purge_security_event_samples',
+      'platform_security_alert_purge',
+    ],
     tables: [],
   },
   'server/services/platform/security-alerts.ts': {
@@ -247,6 +279,14 @@ const ONE_LEVEL_DEEP: Record<string, string[]> = {
     '@/lib/supabase/url-length-guard.server',
     '@stockpilot/core',
   ],
+  'server/security/passkey-maintenance.ts': [
+    'server-only',
+    '@/lib/auth/passkey-relying-party',
+    '@/lib/env',
+    '@/lib/error-reporter',
+    '@/lib/supabase/admin',
+    './passkey-state',
+  ],
   'server/services/lib/fetch-by-ids.ts': [
     'server-only',
     '@/lib/error-reporter',
@@ -310,6 +350,8 @@ const NEVER = new Set([
 ]);
 /** Properties a module of the alerts may not touch: writes, other doors of the client, the network. */
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete']);
+/** The two doors a module calls by a listed name, and may never take as a value. */
+const DOOR_VALUES = new Set(['rpc', 'from']);
 const DOORS = new Set([
   'functions',
   'storage',
@@ -455,21 +497,50 @@ function problemsIn(name: string, text: string, rule: ModuleRule): string[] {
     } else if (ts.isImportClause(node) && node.name) declared.add(node.name.text);
     else if (ts.isNamespaceImport(node) || ts.isImportSpecifier(node)) declared.add(node.name.text);
 
+    // A property taken by its name: x.name, or x['name'].
+    let prop: string | null = null;
+    let access: ts.Expression | null = null;
     if (ts.isPropertyAccessExpression(node)) {
-      const prop = node.name.text;
-      const call = ts.isCallExpression(node.parent) && node.parent.expression === node;
-      const first = call ? (node.parent as ts.CallExpression).arguments[0] : undefined;
+      prop = node.name.text;
+      access = node;
+    } else if (ts.isElementAccessExpression(node)) {
+      const key = node.argumentExpression;
+      if (ts.isStringLiteralLike(key)) {
+        prop = key.text;
+        access = node;
+      } else if (!ts.isNumericLiteral(key)) {
+        problems.push('takes a property by a computed name');
+      }
+    } else if (
+      ts.isComputedPropertyName(node) &&
+      !ts.isStringLiteralLike(node.expression) &&
+      !ts.isNumericLiteral(node.expression)
+    ) {
+      problems.push('takes a property by a computed name');
+    } else if (ts.isBindingElement(node)) {
+      const key = node.propertyName ?? node.name;
+      const name = ts.isIdentifier(key) || ts.isStringLiteralLike(key) ? key.text : null;
+      if (name !== null && (DOOR_VALUES.has(name) || WRITES.has(name) || DOORS.has(name))) {
+        problems.push(`takes .${name} out by destructuring`);
+      }
+    }
+    if (prop !== null && access !== null) {
+      const parent = access.parent;
+      const call = ts.isCallExpression(parent) && parent.expression === access;
+      const first = call ? (parent as ts.CallExpression).arguments[0] : undefined;
       const literal = first && ts.isStringLiteralLike(first) ? first.text : null;
+      const receiver = (access as ts.PropertyAccessExpression | ts.ElementAccessExpression)
+        .expression;
       if (prop === 'rpc') {
-        if (literal === null) problems.push('calls .rpc without a function named in a literal');
+        if (!call) problems.push('takes .rpc as a value');
+        else if (literal === null)
+          problems.push('calls .rpc without a function named in a literal');
         else if (!rule.rpc.includes(literal))
           problems.push(`calls .rpc('${literal}') (not on its list)`);
-      } else if (
-        prop === 'from' &&
-        call &&
-        !(ts.isIdentifier(node.expression) && node.expression.text === 'Array')
-      ) {
-        if (literal === null) problems.push('reads .from() without a table named in a literal');
+      } else if (prop === 'from' && !(ts.isIdentifier(receiver) && receiver.text === 'Array')) {
+        if (!call) problems.push('takes .from as a value');
+        else if (literal === null)
+          problems.push('reads .from() without a table named in a literal');
         else if (!rule.tables.includes(literal)) {
           problems.push(`reads .from('${literal}') (not on its list)`);
         }
@@ -536,18 +607,134 @@ function oneLevelDeepProblems(
 }
 
 /** Each 0480 function's callers, read from the code of every file under src. */
+/**
+ * The parts of a string expression in order: each written-out piece as its
+ * text, each part that is not written out as null (a concatenation with +, a
+ * template and its spans, brackets and type assertions looked through).
+ */
+function partsOf(e: ts.Expression): Array<string | null> {
+  if (ts.isStringLiteralLike(e) || ts.isNumericLiteral(e)) return [e.text];
+  if (ts.isParenthesizedExpression(e) || ts.isAsExpression(e) || ts.isNonNullExpression(e)) {
+    return partsOf(e.expression);
+  }
+  if (ts.isSatisfiesExpression(e)) return partsOf(e.expression);
+  if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    return [...partsOf(e.left), ...partsOf(e.right)];
+  }
+  if (ts.isTemplateExpression(e)) {
+    return [
+      e.head.text,
+      ...e.templateSpans.flatMap((span) => [...partsOf(span.expression), span.literal.text]),
+    ];
+  }
+  return [null];
+}
+/** The whole text of a concatenation or template whose parts are all written out; else null. */
+const joinedText = (e: ts.Expression): string | null => {
+  const parts = partsOf(e);
+  return parts.every((p) => p !== null) ? parts.join('') : null;
+};
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Whether a name made of these parts (null: anything) could be one of 0480's functions, or a new one. */
+function couldNameAnAlertsFunction(parts: Array<string | null>): boolean {
+  const re = new RegExp(`^${parts.map((p) => (p === null ? '.*' : escapeRe(p))).join('')}$`);
+  return [...Object.keys(CALLERS), 'platform_security_alert_something_new'].some((fn) =>
+    re.test(fn),
+  );
+}
+
+/** The calls of .rpc (or ['rpc']) in one file's code, with their first argument. */
+function rpcCalls(name: string, text: string): Array<ts.Expression | undefined> {
+  const out: Array<ts.Expression | undefined> = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node)) {
+      const c = node.expression;
+      if (
+        (ts.isPropertyAccessExpression(c) && c.name.text === 'rpc') ||
+        (ts.isElementAccessExpression(c) &&
+          ts.isStringLiteralLike(c.argumentExpression) &&
+          c.argumentExpression.text === 'rpc')
+      ) {
+        out.push(node.arguments[0]);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(name, text));
+  return out;
+}
+
+/** Anywhere under src: an .rpc( whose function is not one plain literal, and could be one of 0480's. */
+function builtRpcNames(files: Array<{ name: string; text: string }>): string[] {
+  const problems: string[] = [];
+  for (const { name, text } of files) {
+    if (!text.includes('rpc')) continue;
+    for (const arg of rpcCalls(name, text)) {
+      if (
+        arg !== undefined &&
+        (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))
+      ) {
+        continue;
+      }
+      if (arg === undefined || couldNameAnAlertsFunction(partsOf(arg))) {
+        problems.push(
+          `${name}: .rpc( with a function name built from parts, which could be one of 0480's`,
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+/** Each caller in CALLERS is a module of the alerts, and its rpc list names exactly the alerts functions CALLERS gives it. */
+function callersAreModules(
+  callers: Record<string, string[]>,
+  modules: Record<string, ModuleRule>,
+): string[] {
+  const problems: string[] = [];
+  const files = new Set([...Object.values(callers).flat(), ...Object.keys(modules)]);
+  for (const file of [...files].sort()) {
+    const given = Object.keys(callers).filter((fn) => callers[fn]!.includes(file));
+    const rule = modules[file];
+    if (!rule) {
+      problems.push(`${file} calls ${given.join(', ')} but is not a module of the alerts`);
+      continue;
+    }
+    const listed = rule.rpc.filter((fn) => fn in callers);
+    if (listed.join() !== given.join()) {
+      problems.push(
+        `${file} lists ${listed.join(', ') || 'none'} of 0480's functions; CALLERS gives it ${given.join(', ') || 'none'}`,
+      );
+    }
+  }
+  return problems;
+}
+
 function callersOf(files: Array<{ name: string; text: string }>): Record<string, string[]> {
   const found: Record<string, string[]> = Object.fromEntries(
     Object.keys(CALLERS).map((fn) => [fn, [] as string[]]),
   );
   for (const { name, text } of files) {
-    if (!/platform_security_alert_|platform_admin_user_ids/.test(text)) continue;
+    if (!/platform_|security_|_alert|admin_user/.test(text)) continue;
     const strings: string[] = [];
     const visit = (node: ts.Node) => {
       if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
         strings.push(node.text);
       } else if (ts.isTemplateExpression(node)) {
         strings.push(node.head.text, ...node.templateSpans.map((s) => s.literal.text));
+      }
+      // The joined text of a whole concatenation or template (not of a part of one).
+      if (
+        (ts.isBinaryExpression(node) &&
+          node.operatorToken.kind === ts.SyntaxKind.PlusToken &&
+          !(
+            ts.isBinaryExpression(node.parent) &&
+            node.parent.operatorToken.kind === ts.SyntaxKind.PlusToken
+          )) ||
+        ts.isTemplateExpression(node)
+      ) {
+        const joined = joinedText(node as ts.Expression);
+        if (joined !== null) strings.push(joined);
       }
       ts.forEachChild(node, visit);
     };
@@ -575,6 +762,14 @@ const allFiles = () =>
 describe('release 4a of the security alerts sends nothing', () => {
   it("each of 0480's functions is called from its one module only; the setter and the recipients from none", () => {
     expect(callersOf(allFiles())).toEqual(CALLERS);
+  });
+
+  it("anywhere under src, no .rpc( builds a name that could be one of 0480's functions", () => {
+    expect(builtRpcNames(allFiles())).toEqual([]);
+  });
+
+  it('every caller of an alerts function is a module of the alerts, with exactly those functions on its list', () => {
+    expect(callersAreModules(CALLERS, MODULES)).toEqual([]);
   });
 
   it.each(Object.keys(MODULES))(
@@ -694,7 +889,7 @@ describe('the guard reads what it says it reads', () => {
     [
       'the rpc door taken as a value',
       'const door = admin.rpc;',
-      'calls .rpc without a function named in a literal',
+      'takes .rpc as a value',
     ],
     [
       'a write by another name',
@@ -721,6 +916,96 @@ describe('the guard reads what it says it reads', () => {
     ['the process', "process.env.X = '1';", 'names process'],
   ])('more planted: %s', (_what, planted, problem) => {
     expect(problemsIn(JOB, `${job()}\n${planted}`, MODULES[JOB]!)).toContain(problem);
+  });
+
+  // The second review of the allow-list: a door by element access, a door taken as a value.
+  it.each([
+    [
+      'rpc by element access',
+      "await admin['rpc']('enqueue_outbox_message', {});",
+      "calls .rpc('enqueue_outbox_message') (not on its list)",
+    ],
+    [
+      'from by element access',
+      "await admin['from']('notifications').select('id');",
+      "reads .from('notifications') (not on its list)",
+    ],
+    [
+      'a write by element access',
+      "await admin.from('user_profiles')['update']({});",
+      'writes with .update',
+    ],
+    [
+      'a door by a computed name',
+      "const door = 'r' + 'pc';\nawait admin[door]('enqueue_outbox_message');",
+      'takes a property by a computed name',
+    ],
+    ['a computed property name', 'const o = { [kind]: 1 };', 'takes a property by a computed name'],
+    [
+      'a computed name destructured',
+      'const { [kind]: door } = admin;',
+      'takes a property by a computed name',
+    ],
+    ['rpc destructured', 'const { rpc } = admin;', 'takes .rpc out by destructuring'],
+    [
+      'from destructured and renamed',
+      'const { from: q } = admin;',
+      'takes .from out by destructuring',
+    ],
+    [
+      'functions destructured',
+      'const { functions } = admin;',
+      'takes .functions out by destructuring',
+    ],
+    ['rpc held in a variable', 'const f = admin.rpc;', 'takes .rpc as a value'],
+    ['rpc bound', 'const f = admin.rpc.bind(admin);', 'takes .rpc as a value'],
+    [
+      'rpc called through call',
+      "await admin.rpc.call(admin, 'enqueue_outbox_message');",
+      'takes .rpc as a value',
+    ],
+    ['from held in a variable', 'const q = admin.from;', 'takes .from as a value'],
+  ])('planted, a door by another road: %s', (_what, planted, problem) => {
+    expect(problemsIn(JOB, `${job()}\n${planted}`, MODULES[JOB]!)).toContain(problem);
+  });
+
+  it('a name built from parts is counted when every part is written out, and refused in .rpc( when it could be an alerts function', () => {
+    const planted = [
+      { name: 'server/a.ts', text: "await admin.rpc('platform_security_' + 'alert_claim', {});" },
+      { name: 'server/b.ts', text: "await admin.rpc(`platform_security_alert_${'set'}`, {});" },
+      { name: 'server/c.ts', text: "const fn = 'platform_' + 'admin_user_ids';" },
+      { name: 'server/d.ts', text: 'await admin.rpc(fn, {});' },
+      { name: 'server/e.ts', text: 'await admin.rpc(`platform_security_alert_${step}`, {});' },
+      { name: 'server/f.ts', text: "await admin['rpc']('platform_security_' + kind);" },
+      { name: 'server/g.ts', text: "await admin.rpc('inventory_' + kind, {});" },
+      { name: 'server/h.ts', text: "await admin.rpc('purge_security_events');" },
+    ];
+    const found = callersOf(planted);
+    expect(found.platform_security_alert_claim).toEqual(['server/a.ts']);
+    expect(found.platform_security_alert_set).toEqual(['server/b.ts']);
+    expect(found.platform_admin_user_ids).toEqual(['server/c.ts']);
+    expect(builtRpcNames(planted).map((p) => p.slice(0, p.indexOf(':')))).toEqual([
+      'server/a.ts',
+      'server/b.ts',
+      'server/d.ts',
+      'server/e.ts',
+      'server/f.ts',
+    ]);
+  });
+
+  it('a caller the alerts modules do not list is found, and so is a module whose list disagrees with CALLERS', () => {
+    const retention = 'app/api/cron/security-events-retention/route.ts';
+    const { [retention]: _gone, ...withoutRetention } = MODULES;
+    expect(callersAreModules(CALLERS, withoutRetention)).toEqual([
+      `${retention} calls platform_security_alert_purge but is not a module of the alerts`,
+    ]);
+    const extra = {
+      ...MODULES,
+      [JOB]: { ...MODULES[JOB]!, rpc: [...MODULES[JOB]!.rpc, 'platform_security_alert_set'] },
+    };
+    expect(callersAreModules(CALLERS, extra)).toEqual([
+      `${JOB} lists platform_security_alert_heartbeat, platform_security_alert_inputs, platform_security_alert_claim, platform_security_alert_result, platform_security_alert_set of 0480's functions; CALLERS gives it platform_security_alert_heartbeat, platform_security_alert_inputs, platform_security_alert_claim, platform_security_alert_result`,
+    ]);
   });
 
   it('one level deep: a listed module that starts importing a sender is found', () => {

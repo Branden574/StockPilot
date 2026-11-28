@@ -118,20 +118,28 @@ export function alertWhereCode(where: string): string {
 
 /** What a report may carry: whole-number counts and checked codes, under word keys. */
 function extraOf(data: AlertJobReportData): Record<string, string | number> {
-  const extra: Record<string, string | number> = {};
-  let n = 0;
+  const entries: Array<[string, string | number]> = [];
+  const keys = new Set<string>();
   for (const [k, v] of Object.entries(data.counts ?? {})) {
-    if (n >= MOST_KEYS || !KEY_RE.test(k) || !Number.isSafeInteger(v) || v < 0) continue;
-    extra[k] = v;
-    n += 1;
+    if (entries.length >= MOST_KEYS || !KEY_RE.test(k) || !Number.isSafeInteger(v) || v < 0) {
+      continue;
+    }
+    entries.push([k, v]);
+    keys.add(k);
   }
   for (const [k, v] of Object.entries(data.codes ?? {})) {
-    if (n >= MOST_KEYS || !KEY_RE.test(k) || k in extra) continue;
-    extra[k] = typeof v === 'string' && CODE_RE.test(v) ? v : 'not_a_code';
-    n += 1;
+    if (entries.length >= MOST_KEYS || !KEY_RE.test(k) || keys.has(k)) continue;
+    entries.push([k, typeof v === 'string' && CODE_RE.test(v) ? v : 'not_a_code']);
+    keys.add(k);
   }
-  return extra;
+  return Object.fromEntries(entries);
 }
+
+type ReportSpec = { level: 'error' | 'warning'; message: string; gate?: 'database' };
+/** The reports by tag (read with get: this module takes no property by a computed name). */
+const SPECS: ReadonlyMap<AlertJobReportTag, ReportSpec> = new Map(
+  Object.entries(ALERT_JOB_REPORTS) as Array<[AlertJobReportTag, ReportSpec]>,
+);
 
 /** When each tag was last sent on this instance. */
 const lastSent = new Map<AlertJobReportTag, number>();
@@ -146,8 +154,8 @@ export async function reportAlertJob(
   data: AlertJobReportData = {},
   databaseSaysReportNow = false,
 ): Promise<'sent' | 'held'> {
-  const spec: { level: 'error' | 'warning'; message: string; gate?: 'database' } =
-    ALERT_JOB_REPORTS[tag];
+  const spec = SPECS.get(tag);
+  if (spec === undefined) return 'held';
   const now = Date.now();
   if (spec.gate === 'database') {
     if (!databaseSaysReportNow) return 'held';

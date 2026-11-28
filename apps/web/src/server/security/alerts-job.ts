@@ -364,8 +364,10 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
     }
   };
 
+  const unexpectedCounts = new Map<string, number>();
   const unexpected = (word: string) => {
-    summary.unexpected[word] = (summary.unexpected[word] ?? 0) + 1;
+    unexpectedCounts.set(word, (unexpectedCounts.get(word) ?? 0) + 1);
+    summary.unexpected = Object.fromEntries(unexpectedCounts);
   };
   const stopFor = (failure: Failure): SecurityAlertsStop =>
     failure.kind === 'busy'
@@ -538,7 +540,11 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
         }
         const c = answer.claim;
         tally.claims += 1;
-        tally[c.outcome] += 1;
+        if (c.outcome === 'new') tally.new += 1;
+        else if (c.outcome === 'retry') tally.retry += 1;
+        else if (c.outcome === 'duplicate') tally.duplicate += 1;
+        else if (c.outcome === 'not_sent') tally.not_sent += 1;
+        else tally.refused += 1;
         if (c.refused !== null && !ALERT_EXPECTED_CLAIM_REFUSALS.includes(c.refused)) {
           unexpected(`claim_${c.refused}`);
         }

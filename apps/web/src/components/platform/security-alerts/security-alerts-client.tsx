@@ -492,8 +492,8 @@ function ChangesSection({
           <TableRow className="hover:bg-transparent">
             <TableHead title={zoneNote}>{W.columns.when}</TableHead>
             <TableHead>{W.columns.setting}</TableHead>
-            <TableHead>{W.columns.from}</TableHead>
-            <TableHead>{W.columns.to}</TableHead>
+            <TableHead>{W.columns.fromValue}</TableHead>
+            <TableHead>{W.columns.toValue}</TableHead>
             <TableHead>{W.columns.who}</TableHead>
           </TableRow>
         </TableHeader>
