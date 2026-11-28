@@ -47,6 +47,7 @@ const BLOCKED_CURRENT_ID = 'blocked-activity-current-password-and-set-up-code-20
 const SIGNIN_ID = 'sign-in-alerts-2026-11';
 const PHONE_LARGE_ID = 'phone-large-text-2026-11';
 const RECOVERY_ID = 'recovery-code-signs-out-other-devices-2026-11';
+const UPLOAD_ID = 'upload-checks-2026-11';
 const blockedRead = {
   release_id: BLOCKED_ID,
   revision: 1,
@@ -81,6 +82,13 @@ const recoveryRead = {
   dismissed_at: null,
   opened_at: '2026-11-23T06:31:00Z',
   read_at: '2026-11-23T06:31:00Z',
+};
+const uploadRead = {
+  release_id: UPLOAD_ID,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-28T06:58:00Z',
+  read_at: '2026-11-28T06:58:00Z',
 };
 const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
 const phoneSetUpRead = {
@@ -252,11 +260,14 @@ describe('the phone update releases of 2026-11-13: order, status and date', () =
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(0, 22)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(0, 23)): the Blocked activity release is published at the top, below the Liquid Glass draft, so the list takes one more.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(0, 26)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(0, 27).map((r) => [r.id, r.status])).toEqual([
+    // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+    expect(RELEASES.slice(0, 28).map((r) => [r.id, r.status])).toEqual([
       ['liquid-glass-2026-11', 'draft'],
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      [UPLOAD_ID, 'published'],
       [RECOVERY_ID, 'published'],
       [PHONE_LARGE_ID, 'published'],
       [SIGNIN_ID, 'published'],
@@ -316,6 +327,8 @@ describe('the phone update releases of 2026-11-13: order, status and date', () =
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      UPLOAD_ID,
       RECOVERY_ID,
     );
   });
@@ -344,7 +357,8 @@ describe('the phone update releases of 2026-11-13: order, status and date', () =
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[17]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[20]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[21]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(Date.parse(RELEASES[22]!.publishedAt)).toBeGreaterThanOrEqual(Date.parse(at));
+    // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+    expect(Date.parse(RELEASES[23]!.publishedAt)).toBeGreaterThanOrEqual(Date.parse(at));
     // #510 went live at 18:05:33Z; the phone update was published at 20:08:51Z.
     expect(Date.parse(at)).toBeGreaterThan(Date.parse('2026-11-13T18:05:33Z'));
     expect(Date.parse(at)).toBeGreaterThan(Date.parse('2026-11-13T20:08:51Z'));
@@ -367,7 +381,8 @@ describe('the phone update releases of 2026-11-13: order, status and date', () =
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(21)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(24)): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(25)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(26)) {
+    // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+    for (const r of RELEASES.slice(27)) {
       expect(Date.parse(at), r.id).toBeGreaterThanOrEqual(Date.parse(r.publishedAt));
     }
   });
@@ -446,7 +461,8 @@ describe('the mobile app waits for your authenticator code (S43b)', () => {
       // Re-pinned by docs/whats-new-receiving-shown-to-managers (2026-11-19; was: without it): the receiving release is published later, at the top, and reaches whoever can open a purchase order where Receiving is on (owners, admins, managers, staff and viewers by default), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-      recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead,
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      uploadRead, recoveryRead, phoneLargeRead, signInRead, blockedCurrentRead, blockedRead, phoneSetUpRead,
       // Re-pinned by docs/whats-new-2026-11-19-errors (2026-11-19; was: without it): the count start access check release is published later, at the top, and reaches a manager or above who can assign counts where Cycle Counts is on (an owner with every permission and module among them), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
       countStartAccessRead,
       // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), an owner with every permission and module among them, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
