@@ -71,7 +71,9 @@
  *     STORAGE_READ_TIMED_OUT, which the callers answer as "could not be
  *     checked" (refused). storage-js takes no signal for the size and the
  *     signed URL, so those two are raced against their limit and a late answer
- *     is dropped.
+ *     is dropped. Inside a finalize check, each step also gets no more than
+ *     the time the check has left of its one deadline (lib/storage-steps.ts,
+ *     review round 3).
  * The object's SIZE is asked first (storage's own record of it): an empty
  * object is answered from it at once, one over the caller's ceiling is
  * answered without reading any of its body, and the window asks for no more
@@ -81,6 +83,19 @@
  */
 
 import { sniffNeedsMoreBytes } from './image-signature';
+import {
+  isStorageReadTimedOut,
+  settleInTime,
+  STORAGE_STEP_LIMIT_MS,
+  type StorageReadTimedOut,
+} from './storage-steps';
+
+export {
+  isStorageReadTimedOut,
+  STORAGE_READ_TIMED_OUT,
+  STORAGE_STEP_LIMIT_MS,
+  type StorageReadTimedOut,
+} from './storage-steps';
 
 export const SNIFF_PREFIX_BYTES = 4096;
 
@@ -92,47 +107,26 @@ const PREFIX_URL_TTL_SECONDS = 60;
 
 /**
  * The hard time limits (lab walk 5). A small step (the size, the signed URL,
- * the leading window) answers in milliseconds from a healthy storage; the
- * whole read is at most a bucket's cap (15 MB). Past its limit a step is
- * STORAGE_READ_TIMED_OUT.
+ * the leading window: STORAGE_STEP_LIMIT_MS, 8 s) answers in milliseconds
+ * from a healthy storage; the whole read is at most a bucket's cap (15 MB).
+ * Past its limit a step is STORAGE_READ_TIMED_OUT.
  */
-export const STORAGE_STEP_LIMIT_MS = 8_000;
 export const STORAGE_WHOLE_READ_LIMIT_MS = 20_000;
 
-/** A storage step that did not answer inside its time limit: the object could not be checked. */
-export type StorageReadTimedOut = { readonly timedOut: true };
-export const STORAGE_READ_TIMED_OUT: StorageReadTimedOut = Object.freeze({ timedOut: true as const });
-
-/** True for the timed-out answer (structural, so a caller's test double of this module need not export it). */
-export function isStorageReadTimedOut(value: unknown): value is StorageReadTimedOut {
-  return typeof value === 'object' && value !== null && (value as { timedOut?: unknown }).timedOut === true;
-}
-
 /**
- * Runs one storage step under a hard time limit. The step is handed the
- * signal of its own AbortController, which every fetch in it passes; the
- * controller is aborted when the step ends, answered or not, and nothing
- * waits for that. A step that throws is null, like every failure here.
+ * Runs one storage step under a hard time limit (lib/storage-steps.ts: no
+ * more than its finalize check has left). The step is handed the signal of
+ * its own AbortController, which every fetch in it passes; the controller is
+ * aborted when the step ends, answered or not, and nothing waits for that. A
+ * step that throws is null, like every failure here.
  */
 async function withinLimit<T>(
   ms: number,
   step: (signal: AbortSignal) => Promise<T>,
 ): Promise<T | null | StorageReadTimedOut> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const late = new Promise<StorageReadTimedOut>((resolve) => {
-    timer = setTimeout(() => resolve(STORAGE_READ_TIMED_OUT), ms);
-  });
-  const work = step(controller.signal).then(
-    (value) => value,
-    () => null,
-  );
-  try {
-    return await Promise.race([work, late]);
-  } finally {
-    clearTimeout(timer);
-    controller.abort();
-  }
+  const outcome = await settleInTime(ms, step);
+  if (isStorageReadTimedOut(outcome)) return outcome;
+  return outcome.answered ? outcome.value : null;
 }
 
 /** Stops reading a body without waiting: a teed body's cancel may never settle. */

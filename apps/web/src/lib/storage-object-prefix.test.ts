@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { createClient } from '@supabase/supabase-js';
 import { createDedupeFetch } from 'next/dist/server/lib/dedupe-fetch';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import { sniffImage } from './image-signature';
 import {
@@ -10,12 +11,14 @@ import {
   fetchObjectWhole,
   fetchObjectWindow,
   isStorageReadTimedOut,
+  type PrefixCapableBucket,
   SNIFF_PREFIX_BYTES,
   STORAGE_READ_TIMED_OUT,
   STORAGE_STEP_LIMIT_MS,
   STORAGE_WHOLE_READ_LIMIT_MS,
   type StorageReadTimedOut,
 } from './storage-object-prefix';
+import { withOwnSignal, withStorageDeadline } from './storage-steps';
 
 /**
  * The helper is the storage-read seam for the magic-byte sniff callers
@@ -960,5 +963,163 @@ describe("the comments give each bucket's real size limit", () => {
     for (const { bucket, mb } of stated) {
       expect(`${bucket}: ${mb} MB`).toBe(`${bucket}: ${migratedLimitMb(bucket)} MB`);
     }
+  });
+});
+
+// ─────────────────────────── review round 3 ───────────────────────────
+
+describe("every step of the reader shares its finalize check's one deadline (review round 3, R3-2)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('a whole read that starts with 2 s of the budget left is aborted at the deadline, not at its own 20 s', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const signer = {
+      ...okSigner(10240),
+      createSignedUrl: vi.fn(
+        () =>
+          new Promise<{ data: { signedUrl: string }; error: null }>((resolve) =>
+            setTimeout(
+              () => resolve({ data: { signedUrl: 'https://supa.example.com/storage/v1/object/sign/b/x?token=t' }, error: null }),
+              STORAGE_STEP_LIMIT_MS - 1,
+            ),
+          ),
+      ),
+    };
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      signal = init!.signal!;
+      return neverAnswered(init);
+    });
+    let inner: unknown;
+    const checked = withStorageDeadline(
+      STORAGE_STEP_LIMIT_MS + 1_000,
+      async () => {
+        inner = await fetchObjectWhole(signer, PATH, 10240, fetchImpl as unknown as typeof fetch);
+        return 'answered';
+      },
+      () => 'spent',
+    );
+    await vi.advanceTimersByTimeAsync(STORAGE_STEP_LIMIT_MS + 999);
+    expect(signal!.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal!.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    await checked;
+    expect(inner).toBe(STORAGE_READ_TIMED_OUT);
+  });
+
+  it('a read that would start with no time left asks storage nothing', async () => {
+    vi.useFakeTimers();
+    const signer = okSigner(10240);
+    const fetchImpl = vi.fn();
+    let inner: unknown;
+    const checked = withStorageDeadline(
+      1_000,
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        inner = await fetchObjectWindow(signer, PATH, fetchImpl as unknown as typeof fetch);
+        return 'answered';
+      },
+      () => 'spent',
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(0);
+    await checked;
+    expect(inner).toBe(STORAGE_READ_TIMED_OUT);
+    expect(signer.info).not.toHaveBeenCalled();
+    expect(signer.createSignedUrl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+/** A real supabase-js storage client whose fetch is `fetchImpl` (made-up origin and key). */
+function realStorage(fetchImpl: typeof fetch) {
+  return createClient('https://made-up.supabase.example', 'made-up-key', {
+    global: { fetch: fetchImpl },
+    auth: { persistSession: false, autoRefreshToken: false },
+  }).storage;
+}
+
+describe('a storage download() holds no second copy of the file (review round 3, R3-6)', () => {
+  it("through Next's fetch with a signal of its own: the body is never teed, the file arrives whole, and the request is aborted once it has", async () => {
+    const tee = vi.spyOn(ReadableStream.prototype, 'tee');
+    try {
+      const object = objectBytes(30798);
+      const storage = labStorage(object);
+      const bucket = realStorage(nextsFetch(storage.impl)).from('maintenance-photos');
+      const { data, error } = await withOwnSignal((signal) => bucket.download(PATH, undefined, { signal }));
+      expect(error).toBeNull();
+      expect(Array.from(new Uint8Array(await data!.arrayBuffer()))).toEqual(Array.from(object));
+      expect(tee).not.toHaveBeenCalled();
+      expect(storage.calls).toHaveLength(1);
+      expect(storage.calls[0]!.signal).toBeInstanceOf(AbortSignal);
+      expect(storage.calls[0]!.signal!.aborted).toBe(true);
+
+      // The stand-in is faithful: the same download with no signal of its
+      // own is teed, and one branch is kept for later.
+      const plain = labStorage(object);
+      await realStorage(nextsFetch(plain.impl)).from('maintenance-photos').download(PATH);
+      expect(tee).toHaveBeenCalledTimes(1);
+    } finally {
+      tee.mockRestore();
+    }
+  });
+});
+
+describe("storage-js's info() gives the size the window read is built on (review round 3)", () => {
+  /**
+   * What storage-api's object info answer carries (made-up values): the
+   * object's row, its size at the top level.
+   */
+  const INFO_ANSWER = {
+    id: '00000000-0000-4000-8000-000000000001',
+    version: '00000000-0000-4000-8000-000000000002',
+    name: PATH,
+    bucket_id: 'item-images',
+    size: 1136,
+    content_type: 'image/png',
+    cache_control: 'max-age=3600',
+    etag: '"made-up"',
+    metadata: {},
+    last_modified: '2026-01-01T00:00:00.000Z',
+    created_at: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('asks GET <storage>/object/info/<bucket>/<path>, and the size comes back as `size`, which the window then asks for exactly', async () => {
+    const object = objectBytes(1136);
+    const lab = labStorage(object);
+    const asked: string[] = [];
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const method = init?.method ?? 'GET';
+      asked.push(`${method} ${url}`);
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (url.includes('/object/info/')) return json(INFO_ANSWER);
+      if (method === 'POST' && url.includes('/object/sign/')) {
+        return json({ signedURL: '/object/sign/item-images/made-up?token=t' });
+      }
+      return lab.impl(input, init);
+    }) as typeof fetch;
+    // The installed storage-js bucket is the shape the reader takes.
+    const bucket: PrefixCapableBucket = realStorage(fetchImpl).from('item-images');
+
+    const info = await bucket.info(PATH);
+    expect(info.error).toBeNull();
+    expect(info.data?.size).toBe(1136);
+    expect(asked[0]).toBe(`GET https://made-up.supabase.example/storage/v1/object/info/item-images/${PATH}`);
+
+    const head = inTime(await fetchObjectWindow(bucket, PATH, fetchImpl));
+    expect(head).toEqual({ prefix: object, totalSize: 1136 });
+    expect(lab.calls.map((c) => c.range)).toEqual(['bytes=0-1135']);
+  });
+
+  it("the installed package's info() states `size` as a number", () => {
+    type InfoData = NonNullable<
+      Awaited<ReturnType<ReturnType<ReturnType<typeof realStorage>['from']>['info']>>['data']
+    >;
+    expectTypeOf<InfoData['size']>().toEqualTypeOf<number | undefined>();
   });
 });

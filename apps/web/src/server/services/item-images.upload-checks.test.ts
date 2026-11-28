@@ -33,9 +33,11 @@ vi.mock('./context', async (importOriginal) => {
   return { ...actual, assertPermission: vi.fn() };
 });
 
+import { UPLOAD_CHECK_BUDGET_MS } from '@/lib/storage-steps';
 import { ITEM_IMAGE_MAX_BYTES } from '@/lib/upload-size-limits';
 import { recordSecurityEvent } from '@/server/security/events';
 import {
+  UPLOAD_NOT_CHECKED_MESSAGE,
   UPLOAD_REFUSED_MESSAGE,
   UPLOAD_TOO_LARGE_MESSAGE,
   UPLOAD_WRONG_TYPE_MESSAGE,
@@ -246,6 +248,40 @@ describe('item photo finalize', () => {
     expect(checkRateLimitMock).toHaveBeenCalledWith('item-images:record:user-test', 240, 60_000, 'closed');
     expect(fetchObjectWindowMock).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
+    expect(stub.chains.has('item_images.insert')).toBe(false);
+  });
+});
+
+describe('one request, two checks: at most 90 s of storage waits (review round 3)', () => {
+  /** Answers `value` after `ms` of (fake) time. */
+  const after = <T>(ms: number, value: T): Promise<T> =>
+    new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+  it('a master that passes a moment before its own 45 s, then a thumbnail storage never answers: refused at 90 s, never later', async () => {
+    const { stub, svc, remove } = world({ [MASTER]: TINY_JPEG, [THUMB]: TINY_PNG });
+    fetchObjectWindowMock.mockImplementation(async (_bucket: unknown, path: string) =>
+      path === MASTER
+        ? after(UPLOAD_CHECK_BUDGET_MS - 1, { prefix: TINY_JPEG, totalSize: TINY_JPEG.byteLength })
+        : new Promise(() => undefined),
+    );
+    vi.useFakeTimers();
+    try {
+      let answer: unknown;
+      const recorded = svc.record(ITEM, MASTER, true, { thumbPath: THUMB }).then(
+        () => (answer = 'recorded'),
+        (e: unknown) => (answer = e),
+      );
+      await vi.advanceTimersByTimeAsync(2 * UPLOAD_CHECK_BUDGET_MS - 2);
+      expect(answer).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answer).toMatchObject({ code: 'validation_error', message: UPLOAD_NOT_CHECKED_MESSAGE });
+      await recorded;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(fetchObjectWindowMock.mock.calls.map((c) => c[1])).toEqual([MASTER, THUMB]);
+    expect(remove).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
     expect(stub.chains.has('item_images.insert')).toBe(false);
   });
 });

@@ -26,6 +26,7 @@ vi.mock('next/headers', () => ({
   }),
 }));
 
+import { STORAGE_STEP_LIMIT_MS, UPLOAD_CHECK_BUDGET_MS } from '@/lib/storage-steps';
 import { recordSecurityEvent } from '@/server/security/events';
 import { audit } from '@/server/services/audit';
 
@@ -34,6 +35,8 @@ import {
   checkStoredUploadSignature,
   checkUploadBytes,
   checkUploadPrefix,
+  removeAndAudit,
+  removeUnlessNamed,
   UPLOAD_EMPTY_MESSAGE,
   UPLOAD_NOT_CHECKED_MESSAGE,
   UPLOAD_REFUSED_MESSAGE,
@@ -501,6 +504,25 @@ describe('checkStoredUpload: the finalize of an object a client put in storage',
     remove.mockRejectedValue(new Error('storage down'));
     expect(await checkStoredUpload(store, PATH, stored)).toMatchObject({ ok: false, family: 'wrong_type' });
   });
+
+  it('an empty object a record still names is kept: a "kept" line, nothing removed, no event (review round 3)', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: new Uint8Array(0), totalSize: 0 });
+    stillNamed.mockResolvedValue(true);
+    const { store, remove } = bucket();
+    expect(await checkStoredUpload(store, PATH, stored)).toEqual({
+      ok: false,
+      family: null,
+      message: UPLOAD_EMPTY_MESSAGE,
+    });
+    expect(stillNamed).toHaveBeenCalledWith([PATH, `${PATH}.thumb`]);
+    expect(remove).not.toHaveBeenCalled();
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
+    onlyRemovalLine('po_attachment', 'empty', 2, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'still_named' },
+    });
+    expect(record).not.toHaveBeenCalled();
+  });
 });
 
 describe('checkStoredUploadSignature: a video, by its container only', () => {
@@ -587,5 +609,223 @@ describe('checkStoredUploadSignature: a video, by its container only', () => {
       extra: { because: 'still_named' },
     });
     expect(onlyEvent().event).toMatchObject({ outcome: 'flagged', reason: 'upload_refused_in_use' });
+  });
+});
+
+// ─────────── review round 3: every step answers in time, and one deadline per finalize ───────────
+
+const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
+/** Answers `value` after `ms` of (fake) time. */
+const after = <T>(ms: number, value: T): Promise<T> =>
+  new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
+
+/**
+ * Starts `start` on a fake clock and says whether it had answered 1 ms
+ * before `ms`, and at `ms`. A call that never answers is left waiting: the
+ * test fails on `at`, it does not hang.
+ */
+async function onFakeClock<T>(ms: number, start: () => Promise<T>) {
+  vi.useFakeTimers();
+  try {
+    let answered = false;
+    let value: T | undefined;
+    const settled = start().then((v) => {
+      answered = true;
+      value = v;
+    });
+    await vi.advanceTimersByTimeAsync(ms - 1);
+    const before = answered;
+    await vi.advanceTimersByTimeAsync(1);
+    const at = answered;
+    // What the check still writes after its answer (an audit line, an event) lands now.
+    await vi.advanceTimersByTimeAsync(0);
+    if (at) await settled;
+    return { before, at, value };
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+describe('every step answers in time, and one deadline holds a whole finalize (review round 3)', () => {
+  const MAX = 15 * 1024 * 1024;
+  const stillNamed = vi.fn(async (_paths: readonly string[]) => false);
+  const stored = {
+    ...base,
+    accept: ['png', 'pdf'] as const,
+    maxBytes: MAX,
+    removeOnRefusal: [PATH, `${PATH}.thumb`],
+    stillNamed,
+    removedBy: { organizationId: ORG, userId: USER },
+    unreadableMessage: 'This file could not be verified.',
+  };
+  function bucket(remove: ReturnType<typeof vi.fn> = deletes()) {
+    const store = { remove, createSignedUrl: vi.fn() } as unknown as StoredUploadBucket;
+    return { store, remove };
+  }
+  beforeEach(() => {
+    stillNamed.mockImplementation(async () => false);
+  });
+
+  it('a look for a record that never answers: at the step limit, kept, nothing removed, "could not be checked"', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    stillNamed.mockImplementation(() => never());
+    const { store, remove } = bucket();
+    const out = await onFakeClock(STORAGE_STEP_LIMIT_MS, () => checkStoredUpload(store, PATH, stored));
+    expect(out).toMatchObject({ before: false, at: true });
+    expect(out.value).toEqual({ ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE });
+    expect(remove).not.toHaveBeenCalled();
+    onlyRemovalLine('po_attachment', 'wrong_type', 2, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'look_failed' },
+    });
+    // The file was judged: its one event, as for a look that fails (not "in use": nobody knows).
+    expect(onlyEvent().event).toMatchObject({ outcome: 'blocked', reason: 'upload_wrong_type' });
+  });
+
+  it.each([
+    ['an empty object', { prefix: new Uint8Array(0), totalSize: 0 }, 'empty'],
+    ['an object over the ceiling', { prefix: new Uint8Array(0), totalSize: MAX + 1, overLimit: true }, 'too_large'],
+  ] as const)('%s whose look never answers: kept, "could not be checked", no event', async (_what, head, why) => {
+    fetchObjectWindowMock.mockResolvedValue(head);
+    stillNamed.mockImplementation(() => never());
+    const { store, remove } = bucket();
+    const out = await onFakeClock(STORAGE_STEP_LIMIT_MS, () => checkStoredUpload(store, PATH, stored));
+    expect(out).toMatchObject({ before: false, at: true });
+    expect(out.value).toEqual({ ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE });
+    expect(remove).not.toHaveBeenCalled();
+    onlyRemovalLine('po_attachment', why, 2, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'look_failed' },
+    });
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a removal that never answers: at the step limit, the line says the removal failed; the refusal stands', async () => {
+    fetchObjectWindowMock.mockResolvedValue({ prefix: HTML, totalSize: HTML.byteLength });
+    const { store, remove } = bucket(vi.fn(() => never()));
+    const out = await onFakeClock(STORAGE_STEP_LIMIT_MS, () => checkStoredUpload(store, PATH, stored));
+    expect(out).toMatchObject({ before: false, at: true });
+    expect(out.value).toEqual({ ok: false, family: 'wrong_type', message: UPLOAD_WRONG_TYPE_MESSAGE });
+    expect(remove).toHaveBeenCalledTimes(1);
+    onlyRemovalLine('po_attachment', 'wrong_type', 2, {
+      event: 'security.upload_refused_removal_failed',
+      extra: { code: 'timed_out' },
+    });
+    expect(onlyEvent().event.reason).toBe('upload_wrong_type');
+  });
+
+  it("each removal outside a finalize check has the step limit too (maintenance, exception evidence, PO import, the logo's pixel limit)", async () => {
+    const by = { organizationId: ORG, userId: USER };
+    const removal = await onFakeClock(STORAGE_STEP_LIMIT_MS, () =>
+      removeAndAudit({ remove: vi.fn(() => never()) }, [PATH], 'maintenance_photo', 'path_refusal', by),
+    );
+    expect(removal).toMatchObject({ before: false, at: true });
+    expect(removal.value).toEqual({ done: 'removal_failed', objects: 1, code: 'timed_out' });
+    onlyRemovalLine('maintenance_photo', 'path_refusal', 1, {
+      event: 'security.upload_refused_removal_failed',
+      extra: { code: 'timed_out' },
+    });
+    auditMock.mockClear();
+    const remove = deletes();
+    const look = await onFakeClock(STORAGE_STEP_LIMIT_MS, () =>
+      removeUnlessNamed({ remove }, [PATH], () => never(), 'org_logo', 'too_large', by),
+    );
+    expect(look).toMatchObject({ before: false, at: true });
+    expect(look.value).toMatchObject({ done: 'kept', objects: 1, because: 'look_failed' });
+    expect(remove).not.toHaveBeenCalled();
+    onlyRemovalLine('org_logo', 'too_large', 1, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'look_failed' },
+    });
+  });
+
+  it('the budget is spent: a storage that never answers is "could not be checked" at 45 s, nothing removed or recorded', async () => {
+    fetchObjectWindowMock.mockImplementation(() => never());
+    const { store, remove } = bucket();
+    const out = await onFakeClock(UPLOAD_CHECK_BUDGET_MS, () => checkStoredUpload(store, PATH, stored));
+    expect(out).toMatchObject({ before: false, at: true });
+    expect(out.value).toEqual({ ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE });
+    // The whole read waits the same way.
+    fetchObjectWindowMock.mockResolvedValue({ prefix: PDF.subarray(0, 8), totalSize: 9000 });
+    fetchObjectWholeMock.mockImplementation(() => never());
+    const whole = await onFakeClock(UPLOAD_CHECK_BUDGET_MS, () => checkStoredUpload(store, PATH, stored));
+    expect(whole).toMatchObject({ before: false, at: true });
+    expect(whole.value).toEqual({ ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE });
+    expect(remove).not.toHaveBeenCalled();
+    expect(stillNamed).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(auditMock).not.toHaveBeenCalled();
+  });
+
+  it('one deadline for all the steps: reads that each answer inside their own limits leave the look only what is left, and the finalize ends at 45 s', async () => {
+    // Size, signed link and window each a moment under their 8 s; then a
+    // signed link and a whole read that leave 2 s of the budget. A file
+    // hidden after the picture is refused; the look would answer at 8 s.
+    const big = concat(PNG, new Uint8Array(5000).fill(0x20), Uint8Array.from([0x50, 0x4b, 0x05, 0x06]));
+    const reads = 3 * (STORAGE_STEP_LIMIT_MS - 1);
+    fetchObjectWindowMock.mockImplementation(() =>
+      after(reads, { prefix: big.subarray(0, 4096), totalSize: big.byteLength }),
+    );
+    fetchObjectWholeMock.mockImplementation(() => after(UPLOAD_CHECK_BUDGET_MS - 2_000 - reads, big));
+    stillNamed.mockImplementation(() => after(STORAGE_STEP_LIMIT_MS - 1, false));
+    const { store, remove } = bucket();
+    const out = await onFakeClock(UPLOAD_CHECK_BUDGET_MS, () => checkStoredUpload(store, PATH, stored));
+    expect(out).toMatchObject({ before: false, at: true });
+    expect(out.value).toEqual({ ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE });
+    expect(remove).not.toHaveBeenCalled();
+    onlyRemovalLine('po_attachment', 'hidden_file', 2, {
+      event: 'security.upload_refused_kept',
+      extra: { because: 'look_failed' },
+    });
+    expect(onlyEvent().event.reason).toBe('upload_hidden_file');
+  });
+
+  it('a removal that starts with too little of the budget left is cut at the deadline: the line says it failed', async () => {
+    fetchObjectWindowMock.mockImplementation(() =>
+      after(UPLOAD_CHECK_BUDGET_MS - 1_000, { prefix: HTML, totalSize: HTML.byteLength }),
+    );
+    const { store, remove } = bucket(vi.fn(() => never()));
+    const out = await onFakeClock(UPLOAD_CHECK_BUDGET_MS, () => checkStoredUpload(store, PATH, stored));
+    expect(out).toMatchObject({ before: false, at: true });
+    // The budget is spent: the answer is "could not be checked".
+    expect(out.value).toEqual({ ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE });
+    expect(remove).toHaveBeenCalledTimes(1);
+    onlyRemovalLine('po_attachment', 'wrong_type', 2, {
+      event: 'security.upload_refused_removal_failed',
+      extra: { code: 'timed_out' },
+    });
+  });
+
+  it('a video check has the same one deadline', async () => {
+    fetchObjectWindowMock.mockImplementation(() => never());
+    const { store, remove } = bucket();
+    const video = {
+      ...stored,
+      surface: 'procedure_video' as const,
+      accept: ['mp4', 'quicktime', 'webm'] as const,
+      maxBytes: 1024 * 1024 * 1024,
+    };
+    const out = await onFakeClock(UPLOAD_CHECK_BUDGET_MS, () => checkStoredUploadSignature(store, PATH, video));
+    expect(out).toMatchObject({ before: false, at: true });
+    expect(out.value).toEqual({ ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE });
+    expect(remove).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('each finalize has its own budget: the next one starts with all 45 s', async () => {
+    fetchObjectWindowMock.mockImplementationOnce(() =>
+      after(UPLOAD_CHECK_BUDGET_MS - 1, { prefix: PNG, totalSize: PNG.byteLength }),
+    );
+    fetchObjectWindowMock.mockImplementationOnce(() => never());
+    const { store } = bucket();
+    const both = await onFakeClock(2 * UPLOAD_CHECK_BUDGET_MS - 1, async () => [
+      await checkStoredUpload(store, PATH, stored),
+      await checkStoredUpload(store, `${PATH}.thumb`, stored),
+    ]);
+    expect(both).toMatchObject({ before: false, at: true });
+    expect(both.value).toEqual([
+      expect.objectContaining({ ok: true, kind: 'png' }),
+      { ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE },
+    ]);
   });
 });

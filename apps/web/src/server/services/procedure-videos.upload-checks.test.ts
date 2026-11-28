@@ -50,9 +50,10 @@ vi.mock('./upload-still-named', () => ({ uploadObjectsStillNamed: h.stillNamed }
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: h.checkRateLimit }));
 
 import { fetchObjectWindow } from '@/lib/storage-object-prefix';
+import { UPLOAD_CHECK_BUDGET_MS } from '@/lib/storage-steps';
 import { PROCEDURE_POSTER_MAX_BYTES, PROCEDURE_VIDEO_MAX_BYTES } from '@/lib/upload-size-limits';
 import { recordSecurityEvent } from '@/server/security/events';
-import { UPLOAD_TOO_LARGE_MESSAGE } from '@/server/security/upload-checks';
+import { UPLOAD_NOT_CHECKED_MESSAGE, UPLOAD_TOO_LARGE_MESSAGE } from '@/server/security/upload-checks';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 import {
   expectOneRefusal,
@@ -275,6 +276,47 @@ describe('procedure video finalize', () => {
     });
     expect(h.checkRateLimit).toHaveBeenCalledWith('procedure-videos:record:user-test', 30, 60_000, 'closed');
     expect(fetchObjectWindow).not.toHaveBeenCalled();
+    expect(stub.chains.has('procedure_videos.insert')).toBe(false);
+  });
+});
+
+describe('one request, two checks: at most 90 s of storage waits (review round 3)', () => {
+  it('a video that passes a moment before its own 45 s, then a poster storage never answers: refused at 90 s, never later', async () => {
+    h.objects[VIDEO] = TINY_MP4;
+    h.objects[POSTER] = TINY_JPEG;
+    // The video's window a moment before its budget is spent; the poster's never.
+    vi.mocked(fetchObjectWindow)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) =>
+            setTimeout(
+              () => resolve({ prefix: TINY_MP4, totalSize: TINY_MP4.byteLength }),
+              UPLOAD_CHECK_BUDGET_MS - 1,
+            ),
+          ),
+      )
+      .mockImplementationOnce(() => new Promise(() => undefined));
+    const { stub, svc } = service();
+    vi.useFakeTimers();
+    try {
+      let answer: unknown;
+      const recorded = svc
+        .record({ procedureId: PROC, storagePath: VIDEO, thumbnailPath: POSTER } as never)
+        .then(
+          () => (answer = 'recorded'),
+          (e: unknown) => (answer = e),
+        );
+      await vi.advanceTimersByTimeAsync(2 * UPLOAD_CHECK_BUDGET_MS - 2);
+      expect(answer).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answer).toMatchObject({ code: 'validation_error', message: UPLOAD_NOT_CHECKED_MESSAGE });
+      await recorded;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(vi.mocked(fetchObjectWindow).mock.calls.map((c) => c[1])).toEqual([VIDEO, POSTER]);
+    expect(h.remove).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
     expect(stub.chains.has('procedure_videos.insert')).toBe(false);
   });
 });

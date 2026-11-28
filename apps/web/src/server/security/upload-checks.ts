@@ -10,6 +10,12 @@ import {
   type StorageReadTimedOut,
 } from '@/lib/storage-object-prefix';
 import {
+  settleInTime,
+  STORAGE_STEP_LIMIT_MS,
+  UPLOAD_CHECK_BUDGET_MS,
+  withStorageDeadline,
+} from '@/lib/storage-steps';
+import {
   inspectUpload,
   inspectUploadPrefix,
   type UploadInspection,
@@ -269,11 +275,11 @@ export type StoredUploadResult =
       bytes: Uint8Array;
     }
   /**
-   * `family` null: nothing was judged or recorded (the object could not be
-   * read, or it is over the path's size ceiling). `absent`: it could not be
-   * read at all (never uploaded, or already gone), so nothing was removed
-   * either; a path whose object is optional (an item photo's thumbnail) reads
-   * that as "none".
+   * `family` null: no verdict is given (the object could not be read, is
+   * empty or over the path's size ceiling, or the check could not finish in
+   * time). `absent`: it could not be read at all (never uploaded, or already
+   * gone), so nothing was removed either; a path whose object is optional (an
+   * item photo's thumbnail) reads that as "none".
    */
   | { ok: false; family: UploadRefusalFamily | null; message: string; absent?: true };
 
@@ -305,7 +311,9 @@ export interface StoredUploadInput extends UploadCheckInput {
   /**
    * Asked before anything is removed: true when a record (this one recorded
    * already, or another) still names one of these objects. Then nothing is
-   * removed. A look that fails keeps them too.
+   * removed. A look that fails keeps them too, and one that does not answer
+   * in time (STORAGE_STEP_LIMIT_MS, or what the check has left) keeps them
+   * and makes the answer "could not be checked".
    */
   stillNamed: (paths: readonly string[]) => Promise<boolean>;
   /** Who removed it: every removal writes one audit line. */
@@ -330,13 +338,20 @@ function readTimedOut(value: unknown): value is StorageReadTimedOut {
 }
 
 /**
- * The answer when storage did not answer in time: refused as "could not be
- * checked". Nothing was judged, so nothing is removed and no event is
- * recorded (a slow storage is not a file anyone sent); the object stays as
- * an upload that never finished.
+ * The answer when a step did not answer in time, or the check's one deadline
+ * passed: refused as "could not be checked". When that was a read, nothing
+ * was judged, so nothing is removed and no event is recorded (a slow storage
+ * is not a file anyone sent); the object stays as an upload that never
+ * finished. When it was the look before a removal, the objects are kept, as
+ * for a look that fails.
  */
 function notChecked(): StoredUploadResult {
   return { ok: false, family: null, message: UPLOAD_NOT_CHECKED_MESSAGE };
+}
+
+/** True when a refusal's look for a record did not answer in time: nothing was removed. */
+function lookTimedOut(outcome: UploadRemovalOutcome | null): boolean {
+  return outcome?.done === 'kept' && outcome.lookTimedOut === true;
 }
 
 /**
@@ -345,19 +360,28 @@ function notChecked(): StoredUploadResult {
  * (an empty file carries nothing).
  */
 async function refuseEmpty(store: StoredUploadBucket, input: StoredUploadInput): Promise<StoredUploadResult> {
-  await removeRefused(store, input, 'empty');
+  const outcome = await removeRefused(store, input, 'empty');
+  if (lookTimedOut(outcome)) return notChecked();
   return { ok: false, family: null, message: UPLOAD_EMPTY_MESSAGE };
+}
+
+/** An object over the path's ceiling, refused from its size: removed, with its audit line, and no event. */
+async function refuseTooLarge(store: StoredUploadBucket, input: StoredUploadInput): Promise<StoredUploadResult> {
+  const outcome = await removeRefused(store, input, 'too_large');
+  if (lookTimedOut(outcome)) return notChecked();
+  return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
 }
 
 /**
  * What became of a refused upload's objects: removed (storage listed them as
- * deleted), kept (a record still names one, or that look failed), or a
- * removal storage did not confirm (its error's code, or "nothing_removed"
- * when it answered with no object deleted).
+ * deleted), kept (a record still names one, or that look failed or did not
+ * answer in time: `lookTimedOut`), or a removal storage did not confirm (its
+ * error's code, "timed_out" when it did not answer in time, or
+ * "nothing_removed" when it answered with no object deleted).
  */
 export type UploadRemovalOutcome =
   | { done: 'removed'; objects: number }
-  | { done: 'kept'; objects: number; because: 'still_named' | 'look_failed' }
+  | { done: 'kept'; objects: number; because: 'still_named' | 'look_failed'; lookTimedOut?: true }
   | { done: 'removal_failed'; objects: number; code: string };
 
 /** A storage error's own code, as a short token (never its message, which can name the object). */
@@ -377,8 +401,9 @@ function storageErrorCode(error: unknown): string {
 /**
  * Removes the objects and writes the one audit line of what storage
  * answered: "removed" only when storage lists the objects it deleted (an
- * answer with none, as a storage rule that matches nothing gives, or an
- * error, is a removal that failed). Best-effort on purpose (the rule of
+ * answer with none, as a storage rule that matches nothing gives, an error,
+ * or no answer within STORAGE_STEP_LIMIT_MS or what the check has left, is a
+ * removal that failed). Best-effort on purpose (the rule of
  * upload-verification.ts): a failed cleanup must not turn "this file was
  * refused" into an internal error.
  */
@@ -390,8 +415,13 @@ export async function removeAndAudit(
   by: UploadRemovedBy,
 ): Promise<UploadRemovalOutcome> {
   let outcome: UploadRemovalOutcome;
-  try {
-    const answered = (await store.remove([...paths])) as { data?: unknown; error?: unknown } | null | undefined;
+  const removal = await settleInTime(STORAGE_STEP_LIMIT_MS, () => store.remove([...paths]));
+  if (readTimedOut(removal)) {
+    outcome = { done: 'removal_failed', objects: paths.length, code: 'timed_out' };
+  } else if (!removal.answered) {
+    outcome = { done: 'removal_failed', objects: paths.length, code: storageErrorCode(removal.error) };
+  } else {
+    const answered = removal.value as { data?: unknown; error?: unknown } | null | undefined;
     if (answered?.error) {
       outcome = { done: 'removal_failed', objects: paths.length, code: storageErrorCode(answered.error) };
     } else if (Array.isArray(answered?.data) && answered.data.length > 0) {
@@ -399,8 +429,6 @@ export async function removeAndAudit(
     } else {
       outcome = { done: 'removal_failed', objects: paths.length, code: 'nothing_removed' };
     }
-  } catch (e) {
-    outcome = { done: 'removal_failed', objects: paths.length, code: storageErrorCode(e) };
   }
   await auditRemoval(surface, why, outcome, by);
   return outcome;
@@ -422,7 +450,9 @@ async function removeRefused(
 /**
  * The same removal for a path that refuses a file on a rule of its own
  * (the logo's pixel limit): the look first, then the removal, and one audit
- * line either way. Null when there was nothing to remove.
+ * line either way. Null when there was nothing to remove. The look has the
+ * step limit (or what the check has left): one that does not answer in time
+ * keeps the objects, like one that fails.
  */
 export async function removeUnlessNamed(
   store: { remove(paths: string[]): Promise<unknown> },
@@ -434,14 +464,16 @@ export async function removeUnlessNamed(
 ): Promise<UploadRemovalOutcome | null> {
   const paths = [...new Set(objects)];
   if (paths.length === 0) return null;
-  let because: 'still_named' | 'look_failed' | null;
-  try {
-    because = (await stillNamed(paths)) ? 'still_named' : null;
-  } catch {
-    because = 'look_failed';
+  const look = await settleInTime(STORAGE_STEP_LIMIT_MS, () => stillNamed(paths));
+  let kept: UploadRemovalOutcome | null = null;
+  if (readTimedOut(look)) {
+    kept = { done: 'kept', objects: paths.length, because: 'look_failed', lookTimedOut: true };
+  } else if (!look.answered) {
+    kept = { done: 'kept', objects: paths.length, because: 'look_failed' };
+  } else if (look.value) {
+    kept = { done: 'kept', objects: paths.length, because: 'still_named' };
   }
-  if (because) {
-    const kept: UploadRemovalOutcome = { done: 'kept', objects: paths.length, because };
+  if (kept) {
     await auditRemoval(surface, why, kept, by);
     return kept;
   }
@@ -500,7 +532,9 @@ export async function auditRemoval(
 /**
  * A refusal of a stored upload's verdict: the look and the removal first,
  * then its one event, in the words of what was done (a file a record still
- * points at is kept, and its event says so).
+ * points at is kept, and its event says so). A look that does not answer in
+ * time keeps the objects and records the ordinary event, as a look that
+ * fails does, and the person is told the file could not be checked.
  */
 async function refuseStored(
   store: StoredUploadBucket,
@@ -510,6 +544,7 @@ async function refuseStored(
   const outcome = await removeRefused(store, input, inspection.family);
   const inUse = outcome?.done === 'kept' && outcome.because === 'still_named';
   await recordRefusal(inUse ? 'in_use' : inspection.family, input.organizationId, input.headers);
+  if (lookTimedOut(outcome)) return notChecked();
   return {
     ok: false,
     family: inspection.family,
@@ -533,8 +568,22 @@ function windowUndecided(head: { prefix: Uint8Array; totalSize: number }): boole
  * is recorded. An empty object is refused from its size at once (removed, no
  * event), and a storage read past its time limit is "could not be checked"
  * (refused; nothing judged, removed or recorded).
+ *
+ * ONE DEADLINE (review round 3): every step of one call (the size, the
+ * signed link, the window, the whole read, the look, the removal) shares
+ * UPLOAD_CHECK_BUDGET_MS on top of its own limit, and the call answers
+ * "could not be checked" when that is spent.
  */
 export async function checkStoredUpload(
+  store: StoredUploadBucket,
+  path: string,
+  input: StoredUploadInput,
+): Promise<StoredUploadResult> {
+  return withStorageDeadline(UPLOAD_CHECK_BUDGET_MS, () => storedUploadVerdict(store, path, input), notChecked);
+}
+
+/** checkStoredUpload's steps, inside its one deadline. */
+async function storedUploadVerdict(
   store: StoredUploadBucket,
   path: string,
   input: StoredUploadInput,
@@ -542,10 +591,7 @@ export async function checkStoredUpload(
   const head = await fetchObjectWindow(store, path, fetch, { maxTotalBytes: input.maxBytes });
   if (readTimedOut(head)) return notChecked();
   if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
-  if (head.overLimit) {
-    await removeRefused(store, input, 'too_large');
-    return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
-  }
+  if (head.overLimit) return refuseTooLarge(store, input);
   if (head.totalSize === 0) return refuseEmpty(store, input);
   const prefixKinds = input.accept.filter((k) => k !== 'text' && k !== 'docx' && k !== 'xlsx');
   if (prefixKinds.length === input.accept.length && !windowUndecided(head)) {
@@ -573,9 +619,19 @@ export async function checkStoredUpload(
  * container's signature from the leading window only (never widened, never
  * read whole: a video may be a gigabyte). Over the ceiling, or a wrong
  * signature, removes the upload's objects (never while a record names one)
- * and, for a wrong signature, records one event.
+ * and, for a wrong signature, records one event. The same one deadline as
+ * checkStoredUpload.
  */
 export async function checkStoredUploadSignature(
+  store: StoredUploadBucket,
+  path: string,
+  input: StoredUploadInput,
+): Promise<StoredUploadResult> {
+  return withStorageDeadline(UPLOAD_CHECK_BUDGET_MS, () => storedSignatureVerdict(store, path, input), notChecked);
+}
+
+/** checkStoredUploadSignature's steps, inside its one deadline. */
+async function storedSignatureVerdict(
   store: StoredUploadBucket,
   path: string,
   input: StoredUploadInput,
@@ -583,10 +639,7 @@ export async function checkStoredUploadSignature(
   const head = await fetchObjectWindow(store, path, fetch, { maxTotalBytes: input.maxBytes });
   if (readTimedOut(head)) return notChecked();
   if (!head) return { ok: false, family: null, message: input.unreadableMessage, absent: true };
-  if (head.overLimit) {
-    await removeRefused(store, input, 'too_large');
-    return { ok: false, family: null, message: input.tooLargeMessage ?? UPLOAD_TOO_LARGE_MESSAGE };
-  }
+  if (head.overLimit) return refuseTooLarge(store, input);
   if (head.totalSize === 0) return refuseEmpty(store, input);
   const verdict = inspectUploadPrefix(head.prefix, input);
   if (!verdict.ok) return refuseStored(store, input, verdict);
