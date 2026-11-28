@@ -38,7 +38,7 @@
 
 begin;
 
-select plan(138);
+select plan(144);
 
 set local timezone = 'UTC';
 
@@ -1868,6 +1868,158 @@ select is(
   'org_policies_for_admin:false,org_policy_acknowledgement_record:false,org_policy_discard_draft:true,org_policy_draft:false,'
   'org_policy_publish:true,org_policy_remind_now:true,org_policy_retire:true,org_policy_save_draft:true,org_policy_status:false,org_policy_text:false',
   '0482/138: each of the five writes refuses a support seat right after the authenticator rule, before it locks or writes a row; no read does');
+
+-- ── 13. Runs of combining marks (review round 2, M2) ────────────────────────
+-- Every combining mark of Unicode 17.0, as the core lists it (POLICY_COMBINING_MARK_RANGES; policy-text.parity.test.ts
+-- holds this copy, the migration's two brackets and the core's list equal).
+create temporary table marks17 (lo integer not null, hi integer not null);
+insert into marks17
+  select ('x' || lpad(split_part(t, '-', 1), 8, '0'))::bit(32)::integer,
+         ('x' || lpad(coalesce(nullif(split_part(t, '-', 2), ''), split_part(t, '-', 1)), 8, '0'))::bit(32)::integer
+    from regexp_split_to_table(btrim(
+      '0300-036F 0483-0489 0591-05BD 05BF 05C1-05C2 05C4-05C5 05C7 0610-061A 064B-065F 0670 06D6-06DC '
+      '06DF-06E4 06E7-06E8 06EA-06ED 0711 0730-074A 07A6-07B0 07EB-07F3 07FD 0816-0819 081B-0823 '
+      '0825-0827 0829-082D 0859-085B 0897-089F 08CA-08E1 08E3-0903 093A-093C 093E-094F 0951-0957 '
+      '0962-0963 0981-0983 09BC 09BE-09C4 09C7-09C8 09CB-09CD 09D7 09E2-09E3 09FE 0A01-0A03 0A3C '
+      '0A3E-0A42 0A47-0A48 0A4B-0A4D 0A51 0A70-0A71 0A75 0A81-0A83 0ABC 0ABE-0AC5 0AC7-0AC9 0ACB-0ACD '
+      '0AE2-0AE3 0AFA-0AFF 0B01-0B03 0B3C 0B3E-0B44 0B47-0B48 0B4B-0B4D 0B55-0B57 0B62-0B63 0B82 '
+      '0BBE-0BC2 0BC6-0BC8 0BCA-0BCD 0BD7 0C00-0C04 0C3C 0C3E-0C44 0C46-0C48 0C4A-0C4D 0C55-0C56 '
+      '0C62-0C63 0C81-0C83 0CBC 0CBE-0CC4 0CC6-0CC8 0CCA-0CCD 0CD5-0CD6 0CE2-0CE3 0CF3 0D00-0D03 '
+      '0D3B-0D3C 0D3E-0D44 0D46-0D48 0D4A-0D4D 0D57 0D62-0D63 0D81-0D83 0DCA 0DCF-0DD4 0DD6 0DD8-0DDF '
+      '0DF2-0DF3 0E31 0E34-0E3A 0E47-0E4E 0EB1 0EB4-0EBC 0EC8-0ECE 0F18-0F19 0F35 0F37 0F39 0F3E-0F3F '
+      '0F71-0F84 0F86-0F87 0F8D-0F97 0F99-0FBC 0FC6 102B-103E 1056-1059 105E-1060 1062-1064 1067-106D '
+      '1071-1074 1082-108D 108F 109A-109D 135D-135F 1712-1715 1732-1734 1752-1753 1772-1773 17B4-17D3 '
+      '17DD 180B-180D 180F 1885-1886 18A9 1920-192B 1930-193B 1A17-1A1B 1A55-1A5E 1A60-1A7C 1A7F '
+      '1AB0-1ADD 1AE0-1AEB 1B00-1B04 1B34-1B44 1B6B-1B73 1B80-1B82 1BA1-1BAD 1BE6-1BF3 1C24-1C37 '
+      '1CD0-1CD2 1CD4-1CE8 1CED 1CF4 1CF7-1CF9 1DC0-1DFF 20D0-20F0 2CEF-2CF1 2D7F 2DE0-2DFF 302A-302F '
+      '3099-309A A66F-A672 A674-A67D A69E-A69F A6F0-A6F1 A802 A806 A80B A823-A827 A82C A880-A881 '
+      'A8B4-A8C5 A8E0-A8F1 A8FF A926-A92D A947-A953 A980-A983 A9B3-A9C0 A9E5 AA29-AA36 AA43 AA4C-AA4D '
+      'AA7B-AA7D AAB0 AAB2-AAB4 AAB7-AAB8 AABE-AABF AAC1 AAEB-AAEF AAF5-AAF6 ABE3-ABEA ABEC-ABED FB1E '
+      'FE00-FE0F FE20-FE2F 101FD 102E0 10376-1037A 10A01-10A03 10A05-10A06 10A0C-10A0F 10A38-10A3A 10A3F '
+      '10AE5-10AE6 10D24-10D27 10D69-10D6D 10EAB-10EAC 10EFA-10EFF 10F46-10F50 10F82-10F85 11000-11002 '
+      '11038-11046 11070 11073-11074 1107F-11082 110B0-110BA 110C2 11100-11102 11127-11134 11145-11146 '
+      '11173 11180-11182 111B3-111C0 111C9-111CC 111CE-111CF 1122C-11237 1123E 11241 112DF-112EA '
+      '11300-11303 1133B-1133C 1133E-11344 11347-11348 1134B-1134D 11357 11362-11363 11366-1136C '
+      '11370-11374 113B8-113C0 113C2 113C5 113C7-113CA 113CC-113D0 113D2 113E1-113E2 11435-11446 1145E '
+      '114B0-114C3 115AF-115B5 115B8-115C0 115DC-115DD 11630-11640 116AB-116B7 1171D-1172B 1182C-1183A '
+      '11930-11935 11937-11938 1193B-1193E 11940 11942-11943 119D1-119D7 119DA-119E0 119E4 11A01-11A0A '
+      '11A33-11A39 11A3B-11A3E 11A47 11A51-11A5B 11A8A-11A99 11B60-11B67 11C2F-11C36 11C38-11C3F '
+      '11C92-11CA7 11CA9-11CB6 11D31-11D36 11D3A 11D3C-11D3D 11D3F-11D45 11D47 11D8A-11D8E 11D90-11D91 '
+      '11D93-11D97 11EF3-11EF6 11F00-11F01 11F03 11F34-11F3A 11F3E-11F42 11F5A 13440 13447-13455 '
+      '1611E-1612F 16AF0-16AF4 16B30-16B36 16F4F 16F51-16F87 16F8F-16F92 16FE4 16FF0-16FF1 1BC9D-1BC9E '
+      '1CF00-1CF2D 1CF30-1CF46 1D165-1D169 1D16D-1D172 1D17B-1D182 1D185-1D18B 1D1AA-1D1AD 1D242-1D244 '
+      '1DA00-1DA36 1DA3B-1DA6C 1DA75 1DA84 1DA9B-1DA9F 1DAA1-1DAAF 1E000-1E006 1E008-1E018 1E01B-1E021 '
+      '1E023-1E024 1E026-1E02A 1E08F 1E130-1E136 1E2AE 1E2EC-1E2EF 1E4EC-1E4EF 1E5EE-1E5EF 1E6E3 1E6E6 '
+      '1E6EE-1E6EF 1E6F5 1E8D0-1E8D6 1E944-1E94A E0100-E01EF '
+    ), '\s+') t;
+
+select is(
+  (select string_agg(coalesce(public._org_policy_body_problem(t), 'ok'), ',' order by n)
+     from unnest(array[
+       'x' || repeat(chr(769), 30), 'x' || repeat(chr(769), 31),
+       'x' || repeat(chr(769) || chr(790), 15), 'x' || repeat(chr(769) || chr(790), 15) || chr(769),
+       'x' || repeat(chr(790), 15) || repeat(chr(769), 15), 'x' || repeat(chr(790), 15) || repeat(chr(769), 16),
+       'x' || repeat(chr(769), 30) || 'x' || repeat(chr(769), 30), repeat(chr(769), 30), repeat(chr(769), 31),
+       normalize(chr(3904) || repeat(chr(3955), 15), nfc), normalize(chr(3904) || repeat(chr(3955), 16), nfc),
+       'x' || repeat(chr(124398), 30), 'x' || repeat(chr(124398), 31),
+       'x' || repeat(chr(888), 31),
+       repeat('b', 30000) || repeat(chr(769), 31), (select string_agg('a', E'\n') from generate_series(1, 601)) || repeat(chr(769), 31),
+       'x' || chr(8238) || repeat(chr(769), 31), 'x' || repeat(chr(769), 31) || ' '
+     ]) with ordinality u(t, n)),
+  'ok,too_many_marks,not_normal_form,too_many_marks,ok,too_many_marks,ok,ok,too_many_marks,ok,too_many_marks,ok,too_many_marks,'
+  'ok,too_long,too_many_lines,forbidden_character,too_many_marks',
+  '0482/139: a body holds at most 30 combining marks in a row, in or out of order (out of order is not normal form), a run at the start too, '
+  'Tibetan II as its normal form spells it (two marks each), Ol Onal; a run of code points Unicode 17.0 left unassigned is the core''s alone; '
+  'checked after the length, the lines and the refused characters, and before the normal form');
+
+select is(
+  (select string_agg(coalesce(public._org_policy_title_problem(t), 'ok'), ',' order by n)
+     from unnest(array[
+       'x' || repeat(chr(769), 30), 'x' || repeat(chr(769), 31), 'x' || repeat(chr(769) || chr(790), 16),
+       'x' || repeat(chr(124399), 31), repeat('t', 89) || repeat(chr(769), 31), repeat('t', 90) || repeat(chr(769), 31),
+       'x' || chr(8203) || repeat(chr(769), 31), 'x' || repeat(chr(769), 31) || '  y'
+     ]) with ordinality u(t, n)),
+  'ok,too_many_marks,too_many_marks,too_many_marks,too_many_marks,too_long,forbidden_character,too_many_marks',
+  '0482/140: a title the same: at most 30 marks in a row, after the length and the refused characters, before the normal form');
+
+-- Each listed range at both of its ends, in a title and a body: 30 in a row allowed, 31 refused (the supplementary
+-- variation selectors are refused characters first); the code point beside each range is not counted.
+select is(
+  (select coalesce(string_agg(to_hex(cp) || ':' || got, ' ' order by cp), '')
+     from (select cp,
+                  coalesce(public._org_policy_title_problem('x' || repeat(chr(cp), 30)), 'ok') || '/' ||
+                  coalesce(public._org_policy_body_problem('x' || repeat(chr(cp), 30)), 'ok') || '/' ||
+                  coalesce(public._org_policy_title_problem('x' || repeat(chr(cp), 31)), 'ok') || '/' ||
+                  coalesce(public._org_policy_body_problem('x' || repeat(chr(cp), 31)), 'ok') as got,
+                  case when cp between 917760 and 917999
+                       then 'forbidden_character/forbidden_character/forbidden_character/forbidden_character'
+                       else 'too_many_marks/too_many_marks' end as want
+             from (select lo as cp from marks17 union select hi from marks17) e) x
+    where (want like 'forbidden%' and got <> want)
+       or (want = 'too_many_marks/too_many_marks'
+           and (split_part(got, '/', 3) || '/' || split_part(got, '/', 4) <> want
+                or split_part(got, '/', 1) = 'too_many_marks' or split_part(got, '/', 2) = 'too_many_marks'))),
+  '',
+  '0482/141: every one of the 327 ranges is counted at both of its ends, in a title and in a body: 30 in a row allowed, 31 refused');
+select is(
+  (select count(*)::text || ' ' || coalesce(string_agg(to_hex(cp), ' ' order by cp) filter (
+            where coalesce(public._org_policy_title_problem('x' || repeat(chr(cp), 31)), 'ok') = 'too_many_marks'
+               or coalesce(public._org_policy_body_problem('x' || repeat(chr(cp), 31)), 'ok') = 'too_many_marks'), 'none')
+     from (select lo - 1 as cp from marks17 union select hi + 1 from marks17) n),
+  '587 none',
+  '0482/142: the code point beside each range (587 of them) is not counted');
+
+-- Through the writer, and the tables' own checks for their owner.
+select pg_temp.keep('pM', (pg_temp.save(:adminA, :orgA, null, 'other', 'Marks policy', 'B') ->> 'policy_id')::uuid);
+select is(
+  (pg_temp.save(:adminA, :orgA, null, 'other', 'x' || repeat(chr(769), 31), 'B') ->> 'detail') || ' ' ||
+  pg_temp.err(pg_temp.save(:adminA, :orgA, null, 'other', 'x' || repeat(chr(769), 31), 'B')) || ' ' ||
+  (pg_temp.save(:adminA, :orgA, null, 'other', 'T', 'x' || repeat(chr(124398), 14999) || repeat(chr(124399), 15000)) ->> 'detail') || ' ' ||
+  pg_temp.err(pg_temp.save(:adminA, :orgA, null, 'other', 'T', 'x' || repeat(chr(124398), 14999) || repeat(chr(124399), 15000))) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash) select %L, %L, ''other'', ''T'', b, encode(sha256(convert_to(''T'' || E''\n\n'' || b, ''UTF8'')), ''hex'') from (select ''x'' || repeat(chr(769), 31) as b) s',
+    'a0482000-0000-0000-0000-0000000000a1', pg_temp.id('pM'))) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'insert into public.org_policy_versions (organization_id, policy_id, kind, title, body, text_hash) select %L, %L, ''other'', t, ''B'', encode(sha256(convert_to(t || E''\n\n'' || ''B'', ''UTF8'')), ''hex'') from (select ''x'' || repeat(chr(769), 31) as t) s',
+    'a0482000-0000-0000-0000-0000000000a1', pg_temp.id('pM'))) || ' ' ||
+  pg_temp.try_as('postgres', null, format(
+    'update public.org_policies set title = ''x'' || repeat(chr(769), 31) where id = %L', pg_temp.id('pM'))) || ' ' ||
+  (select count(*)::text from public.org_policy_versions v where v.body ~ '[̀-ͯ]{31}' or v.title ~ '[̀-ͯ]{31}'),
+  'too_many_marks 22023|policy_title_invalid too_many_marks 22023|policy_body_invalid '
+  '23514:org_policy_versions_body 23514:org_policy_versions_title 23514:org_policies_title 0',
+  '0482/143: the writer refuses a title or a body with a run of more than 30 marks (the review''s stored Ol Onal body among them), '
+  'naming too_many_marks; even the tables'' owner cannot store one; nothing holds one');
+
+-- The rule is quick on hostile texts of 30,000 characters (each well under a millisecond on the stack; the bound is generous).
+create temporary table marks_timing (shape text, ms numeric, word text);
+do $time$
+declare
+  s text; t0 timestamptz; w text; shape text;
+begin
+  for shape, s in select * from (values
+    ('marks 230 and 220 in turn', 'x' || repeat(chr(769) || chr(790), 14999) || chr(769)),
+    ('230s then 220s', 'x' || repeat(chr(769), 14999) || repeat(chr(790), 15000)),
+    ('runs of 30 out of order', repeat('x' || repeat(chr(769) || chr(790), 15), 967)),
+    ('runs of 30 in order', repeat('x' || repeat(chr(790), 15) || repeat(chr(769), 15), 967)),
+    ('Tibetan II', chr(3904) || repeat(chr(3955), 29999)),
+    ('Ol Onal 230s then 220s', 'x' || repeat(chr(124398), 14999) || repeat(chr(124399), 15000)),
+    ('code points unassigned in 17.0', 'x' || repeat(chr(888), 29999)),
+    ('ideographs', repeat(chr(20013), 30000))) v(a, b)
+  loop
+    t0 := clock_timestamp();
+    w := public._org_policy_body_problem(s);
+    w := coalesce(w, 'ok') || '/' || coalesce(public._org_policy_title_problem(left(s, 120)), 'ok');
+    insert into marks_timing values (shape, extract(epoch from clock_timestamp() - t0) * 1000, w);
+  end loop;
+end
+$time$;
+select is(
+  (select string_agg(shape || '=' || word || case when ms < 100 then '' else ' SLOW ' || round(ms) || ' ms' end, ', ' order by shape)
+     from marks_timing),
+  '230s then 220s=too_many_marks/too_many_marks, code points unassigned in 17.0=ok/ok, ideographs=ok/ok, '
+  'marks 230 and 220 in turn=too_many_marks/too_many_marks, Ol Onal 230s then 220s=too_many_marks/too_many_marks, '
+  'runs of 30 in order=ok/ok, runs of 30 out of order=not_normal_form/not_normal_form, Tibetan II=too_many_marks/too_many_marks',
+  '0482/144: the text rules answer within 100 ms for each hostile text of 30,000 characters (a title of its first 120)');
 
 select * from finish();
 rollback;

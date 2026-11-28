@@ -3128,10 +3128,14 @@ CORE_TESTS=(
   # parser that knows headings, bullets and paragraphs only, so the words are
   # shown as text and never as markup or a link; the hash of the exact words;
   # the same rules as migration 0482, read out of it; every text function
-  # runs in time linear in the text (a hostile body cannot hold a thread).
+  # runs in time linear in the text (a hostile body cannot hold a thread):
+  # nothing normalises a run of more than 30 combining marks (refused before
+  # normalising; the reader shows it as one character), and the marks counted
+  # hold every code point this engine's normaliser can reorder.
   src/policies/policy-text.test.ts
   src/policies/policy-text.parity.test.ts
   src/policies/policy-text.time.test.ts
+  src/policies/policy-text.marks.test.ts
   src/policies/policy-hash.test.ts
 )
 

@@ -10,7 +10,7 @@
 -- scripts/security-test.sh.
 --
 -- WHAT IT ADDS (tier A: four new tables with their keys, checks and indexes,
--- four trigger functions and their triggers on the new tables, three
+-- four trigger functions and their triggers on the new tables, four
 -- private helpers, fourteen functions and their grants. No stored row. No
 -- existing table, column, function, policy, trigger or grant changes. Two
 -- existing tables gain the internal triggers of the foreign keys that point
@@ -43,7 +43,7 @@
 --      characters (a body at most 600 lines), without the refused characters (controls other than the
 --      line feed, invisible and direction-changing characters, the byte
 --      order mark, U+FFF9 to U+FFFF, tags, supplementary variation
---      selectors).
+--      selectors), and with at most 30 combining marks in a row.
 --   3. public.org_policy_acknowledgements. APPEND ONLY. One row per member
 --      and version: the version (and its number, round and text hash, as
 --      they were), the account (and its name as it was: the profile's full
@@ -142,8 +142,8 @@
 --         mfa_required (an admin function, where an authenticator is asked
 --         for and the caller has none).
 --   22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid
---         (detail: empty, too_long, too_many_lines, forbidden_character or
---         not_normal_form),
+--         (detail: empty, too_long, too_many_lines, forbidden_character,
+--         too_many_marks or not_normal_form),
 --         policy_change_invalid, policy_hash_invalid, policy_method_invalid.
 --   P0001 policy_no_draft, policy_draft_changed, policy_draft_unchanged,
 --         policy_correction_needs_a_version, policy_correction_changes_title,
@@ -290,13 +290,33 @@ $lock$;
 
 -- ── The text rules (packages/core src/policies/policy-text.ts) ───────────────
 -- Why a title or a body would be refused, in the core's words (empty,
--- too_long, forbidden_character, not_normal_form, checked in that order), or
--- null. Used by the tables' checks and, for the refusal's detail, by the
--- writers. The refused characters are one bracket expression, the same in
--- both (policy-text.parity.test.ts compares it with
--- FORBIDDEN_POLICY_CODE_POINTS). A title's line feed is not refused, it is
--- not normal form (the core turns it into a space); a carriage return and a
--- tab are refused characters in both.
+-- too_long, too_many_lines for a body, forbidden_character, too_many_marks,
+-- not_normal_form, checked in that order), or null. Used by the tables'
+-- checks and, for the refusal's detail, by the writers. The refused
+-- characters are one bracket expression, the same in both
+-- (policy-text.parity.test.ts compares it with FORBIDDEN_POLICY_CODE_POINTS).
+-- A title's line feed is not refused, it is not normal form (the core turns
+-- it into a space); a carriage return and a tab are refused characters in
+-- both.
+-- too_many_marks: more than 30 combining marks in a row (the stream-safe
+-- limit of UAX #15; no written language comes near it). Unicode
+-- normalisation puts marks that are out of order back in order with an
+-- insertion sort, so a long run costs a client's normaliser the square of its
+-- length every time a page or the phone shows the text (review of
+-- 2026-11-27, M2); a text holding one is refused. The marks are every
+-- combining mark of Unicode 17.0 (General_Category Mn, Mc, Me), named by
+-- code point because Postgres cannot name a Unicode property: one bracket
+-- expression, the same in both functions and the same ranges as the core's
+-- POLICY_COMBINING_MARK_RANGES (policy-text.parity.test.ts compares them).
+-- Postgres matches it in time linear in the text. What the two cannot agree
+-- on, and why it is safe: (1) the core also counts what its engine's own
+-- tables call a mark or unassigned (a mark added to Unicode after 17.0), so
+-- it refuses a run of those that this rule accepts: the core is the stricter
+-- side, and its reader shows such a run as one U+FFFD; (2) Unicode
+-- normalisation itself: Postgres 17 does not know the marks of the Unicode
+-- versions after its tables, so a short run (at most 30) of those, out of
+-- order, is normal form here and not in a newer core (it refuses it); such a
+-- run costs a reader at most 30 squared steps.
 create function public._org_policy_title_problem(p_title text)
 returns text
 language sql
@@ -308,6 +328,66 @@ as $$
     when pg_catalog.char_length(p_title) > 120 then 'too_long'
     when p_title ~ '[\u0001-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFF\U000E0000-\U000E007F\U000E0100-\U000E01EF]'
       then 'forbidden_character'
+    when p_title ~ ('[\u0300-\u036F\u0483-\u0489\u0591-\u05BD\u05BF\u05C1-\u05C2\u05C4-\u05C5\u05C7'
+                    '\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7-\u06E8\u06EA-\u06ED'
+                    '\u0711\u0730-\u074A\u07A6-\u07B0\u07EB-\u07F3\u07FD\u0816-\u0819\u081B-\u0823'
+                    '\u0825-\u0827\u0829-\u082D\u0859-\u085B\u0897-\u089F\u08CA-\u08E1\u08E3-\u0903'
+                    '\u093A-\u093C\u093E-\u094F\u0951-\u0957\u0962-\u0963\u0981-\u0983\u09BC\u09BE-\u09C4'
+                    '\u09C7-\u09C8\u09CB-\u09CD\u09D7\u09E2-\u09E3\u09FE\u0A01-\u0A03\u0A3C\u0A3E-\u0A42'
+                    '\u0A47-\u0A48\u0A4B-\u0A4D\u0A51\u0A70-\u0A71\u0A75\u0A81-\u0A83\u0ABC\u0ABE-\u0AC5'
+                    '\u0AC7-\u0AC9\u0ACB-\u0ACD\u0AE2-\u0AE3\u0AFA-\u0AFF\u0B01-\u0B03\u0B3C\u0B3E-\u0B44'
+                    '\u0B47-\u0B48\u0B4B-\u0B4D\u0B55-\u0B57\u0B62-\u0B63\u0B82\u0BBE-\u0BC2\u0BC6-\u0BC8'
+                    '\u0BCA-\u0BCD\u0BD7\u0C00-\u0C04\u0C3C\u0C3E-\u0C44\u0C46-\u0C48\u0C4A-\u0C4D'
+                    '\u0C55-\u0C56\u0C62-\u0C63\u0C81-\u0C83\u0CBC\u0CBE-\u0CC4\u0CC6-\u0CC8\u0CCA-\u0CCD'
+                    '\u0CD5-\u0CD6\u0CE2-\u0CE3\u0CF3\u0D00-\u0D03\u0D3B-\u0D3C\u0D3E-\u0D44\u0D46-\u0D48'
+                    '\u0D4A-\u0D4D\u0D57\u0D62-\u0D63\u0D81-\u0D83\u0DCA\u0DCF-\u0DD4\u0DD6\u0DD8-\u0DDF'
+                    '\u0DF2-\u0DF3\u0E31\u0E34-\u0E3A\u0E47-\u0E4E\u0EB1\u0EB4-\u0EBC\u0EC8-\u0ECE'
+                    '\u0F18-\u0F19\u0F35\u0F37\u0F39\u0F3E-\u0F3F\u0F71-\u0F84\u0F86-\u0F87\u0F8D-\u0F97'
+                    '\u0F99-\u0FBC\u0FC6\u102B-\u103E\u1056-\u1059\u105E-\u1060\u1062-\u1064\u1067-\u106D'
+                    '\u1071-\u1074\u1082-\u108D\u108F\u109A-\u109D\u135D-\u135F\u1712-\u1715\u1732-\u1734'
+                    '\u1752-\u1753\u1772-\u1773\u17B4-\u17D3\u17DD\u180B-\u180D\u180F\u1885-\u1886\u18A9'
+                    '\u1920-\u192B\u1930-\u193B\u1A17-\u1A1B\u1A55-\u1A5E\u1A60-\u1A7C\u1A7F\u1AB0-\u1ADD'
+                    '\u1AE0-\u1AEB\u1B00-\u1B04\u1B34-\u1B44\u1B6B-\u1B73\u1B80-\u1B82\u1BA1-\u1BAD'
+                    '\u1BE6-\u1BF3\u1C24-\u1C37\u1CD0-\u1CD2\u1CD4-\u1CE8\u1CED\u1CF4\u1CF7-\u1CF9'
+                    '\u1DC0-\u1DFF\u20D0-\u20F0\u2CEF-\u2CF1\u2D7F\u2DE0-\u2DFF\u302A-\u302F\u3099-\u309A'
+                    '\uA66F-\uA672\uA674-\uA67D\uA69E-\uA69F\uA6F0-\uA6F1\uA802\uA806\uA80B\uA823-\uA827'
+                    '\uA82C\uA880-\uA881\uA8B4-\uA8C5\uA8E0-\uA8F1\uA8FF\uA926-\uA92D\uA947-\uA953'
+                    '\uA980-\uA983\uA9B3-\uA9C0\uA9E5\uAA29-\uAA36\uAA43\uAA4C-\uAA4D\uAA7B-\uAA7D\uAAB0'
+                    '\uAAB2-\uAAB4\uAAB7-\uAAB8\uAABE-\uAABF\uAAC1\uAAEB-\uAAEF\uAAF5-\uAAF6\uABE3-\uABEA'
+                    '\uABEC-\uABED\uFB1E\uFE00-\uFE0F\uFE20-\uFE2F\U000101FD\U000102E0\U00010376-\U0001037A'
+                    '\U00010A01-\U00010A03\U00010A05-\U00010A06\U00010A0C-\U00010A0F\U00010A38-\U00010A3A'
+                    '\U00010A3F\U00010AE5-\U00010AE6\U00010D24-\U00010D27\U00010D69-\U00010D6D'
+                    '\U00010EAB-\U00010EAC\U00010EFA-\U00010EFF\U00010F46-\U00010F50\U00010F82-\U00010F85'
+                    '\U00011000-\U00011002\U00011038-\U00011046\U00011070\U00011073-\U00011074'
+                    '\U0001107F-\U00011082\U000110B0-\U000110BA\U000110C2\U00011100-\U00011102'
+                    '\U00011127-\U00011134\U00011145-\U00011146\U00011173\U00011180-\U00011182'
+                    '\U000111B3-\U000111C0\U000111C9-\U000111CC\U000111CE-\U000111CF\U0001122C-\U00011237'
+                    '\U0001123E\U00011241\U000112DF-\U000112EA\U00011300-\U00011303\U0001133B-\U0001133C'
+                    '\U0001133E-\U00011344\U00011347-\U00011348\U0001134B-\U0001134D\U00011357'
+                    '\U00011362-\U00011363\U00011366-\U0001136C\U00011370-\U00011374\U000113B8-\U000113C0'
+                    '\U000113C2\U000113C5\U000113C7-\U000113CA\U000113CC-\U000113D0\U000113D2'
+                    '\U000113E1-\U000113E2\U00011435-\U00011446\U0001145E\U000114B0-\U000114C3'
+                    '\U000115AF-\U000115B5\U000115B8-\U000115C0\U000115DC-\U000115DD\U00011630-\U00011640'
+                    '\U000116AB-\U000116B7\U0001171D-\U0001172B\U0001182C-\U0001183A\U00011930-\U00011935'
+                    '\U00011937-\U00011938\U0001193B-\U0001193E\U00011940\U00011942-\U00011943'
+                    '\U000119D1-\U000119D7\U000119DA-\U000119E0\U000119E4\U00011A01-\U00011A0A'
+                    '\U00011A33-\U00011A39\U00011A3B-\U00011A3E\U00011A47\U00011A51-\U00011A5B'
+                    '\U00011A8A-\U00011A99\U00011B60-\U00011B67\U00011C2F-\U00011C36\U00011C38-\U00011C3F'
+                    '\U00011C92-\U00011CA7\U00011CA9-\U00011CB6\U00011D31-\U00011D36\U00011D3A'
+                    '\U00011D3C-\U00011D3D\U00011D3F-\U00011D45\U00011D47\U00011D8A-\U00011D8E'
+                    '\U00011D90-\U00011D91\U00011D93-\U00011D97\U00011EF3-\U00011EF6\U00011F00-\U00011F01'
+                    '\U00011F03\U00011F34-\U00011F3A\U00011F3E-\U00011F42\U00011F5A\U00013440'
+                    '\U00013447-\U00013455\U0001611E-\U0001612F\U00016AF0-\U00016AF4\U00016B30-\U00016B36'
+                    '\U00016F4F\U00016F51-\U00016F87\U00016F8F-\U00016F92\U00016FE4\U00016FF0-\U00016FF1'
+                    '\U0001BC9D-\U0001BC9E\U0001CF00-\U0001CF2D\U0001CF30-\U0001CF46\U0001D165-\U0001D169'
+                    '\U0001D16D-\U0001D172\U0001D17B-\U0001D182\U0001D185-\U0001D18B\U0001D1AA-\U0001D1AD'
+                    '\U0001D242-\U0001D244\U0001DA00-\U0001DA36\U0001DA3B-\U0001DA6C\U0001DA75\U0001DA84'
+                    '\U0001DA9B-\U0001DA9F\U0001DAA1-\U0001DAAF\U0001E000-\U0001E006\U0001E008-\U0001E018'
+                    '\U0001E01B-\U0001E021\U0001E023-\U0001E024\U0001E026-\U0001E02A\U0001E08F'
+                    '\U0001E130-\U0001E136\U0001E2AE\U0001E2EC-\U0001E2EF\U0001E4EC-\U0001E4EF'
+                    '\U0001E5EE-\U0001E5EF\U0001E6E3\U0001E6E6\U0001E6EE-\U0001E6EF\U0001E6F5'
+                    '\U0001E8D0-\U0001E8D6\U0001E944-\U0001E94A\U000E0100-\U000E01EF]{31}')
+      then 'too_many_marks'
     when not (p_title is nfc normalized)
       or pg_catalog.strpos(p_title, E'\n') > 0
       or pg_catalog.strpos(p_title, '  ') > 0
@@ -329,6 +409,66 @@ as $$
       then 'too_many_lines'
     when p_body ~ '[\u0001-\u0009\u000B-\u001F\u007F-\u009F\u00AD\u061C\u180E\u200B-\u200F\u2028-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFF\U000E0000-\U000E007F\U000E0100-\U000E01EF]'
       then 'forbidden_character'
+    when p_body ~ ('[\u0300-\u036F\u0483-\u0489\u0591-\u05BD\u05BF\u05C1-\u05C2\u05C4-\u05C5\u05C7'
+                   '\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06DC\u06DF-\u06E4\u06E7-\u06E8\u06EA-\u06ED'
+                   '\u0711\u0730-\u074A\u07A6-\u07B0\u07EB-\u07F3\u07FD\u0816-\u0819\u081B-\u0823'
+                   '\u0825-\u0827\u0829-\u082D\u0859-\u085B\u0897-\u089F\u08CA-\u08E1\u08E3-\u0903'
+                   '\u093A-\u093C\u093E-\u094F\u0951-\u0957\u0962-\u0963\u0981-\u0983\u09BC\u09BE-\u09C4'
+                   '\u09C7-\u09C8\u09CB-\u09CD\u09D7\u09E2-\u09E3\u09FE\u0A01-\u0A03\u0A3C\u0A3E-\u0A42'
+                   '\u0A47-\u0A48\u0A4B-\u0A4D\u0A51\u0A70-\u0A71\u0A75\u0A81-\u0A83\u0ABC\u0ABE-\u0AC5'
+                   '\u0AC7-\u0AC9\u0ACB-\u0ACD\u0AE2-\u0AE3\u0AFA-\u0AFF\u0B01-\u0B03\u0B3C\u0B3E-\u0B44'
+                   '\u0B47-\u0B48\u0B4B-\u0B4D\u0B55-\u0B57\u0B62-\u0B63\u0B82\u0BBE-\u0BC2\u0BC6-\u0BC8'
+                   '\u0BCA-\u0BCD\u0BD7\u0C00-\u0C04\u0C3C\u0C3E-\u0C44\u0C46-\u0C48\u0C4A-\u0C4D'
+                   '\u0C55-\u0C56\u0C62-\u0C63\u0C81-\u0C83\u0CBC\u0CBE-\u0CC4\u0CC6-\u0CC8\u0CCA-\u0CCD'
+                   '\u0CD5-\u0CD6\u0CE2-\u0CE3\u0CF3\u0D00-\u0D03\u0D3B-\u0D3C\u0D3E-\u0D44\u0D46-\u0D48'
+                   '\u0D4A-\u0D4D\u0D57\u0D62-\u0D63\u0D81-\u0D83\u0DCA\u0DCF-\u0DD4\u0DD6\u0DD8-\u0DDF'
+                   '\u0DF2-\u0DF3\u0E31\u0E34-\u0E3A\u0E47-\u0E4E\u0EB1\u0EB4-\u0EBC\u0EC8-\u0ECE'
+                   '\u0F18-\u0F19\u0F35\u0F37\u0F39\u0F3E-\u0F3F\u0F71-\u0F84\u0F86-\u0F87\u0F8D-\u0F97'
+                   '\u0F99-\u0FBC\u0FC6\u102B-\u103E\u1056-\u1059\u105E-\u1060\u1062-\u1064\u1067-\u106D'
+                   '\u1071-\u1074\u1082-\u108D\u108F\u109A-\u109D\u135D-\u135F\u1712-\u1715\u1732-\u1734'
+                   '\u1752-\u1753\u1772-\u1773\u17B4-\u17D3\u17DD\u180B-\u180D\u180F\u1885-\u1886\u18A9'
+                   '\u1920-\u192B\u1930-\u193B\u1A17-\u1A1B\u1A55-\u1A5E\u1A60-\u1A7C\u1A7F\u1AB0-\u1ADD'
+                   '\u1AE0-\u1AEB\u1B00-\u1B04\u1B34-\u1B44\u1B6B-\u1B73\u1B80-\u1B82\u1BA1-\u1BAD'
+                   '\u1BE6-\u1BF3\u1C24-\u1C37\u1CD0-\u1CD2\u1CD4-\u1CE8\u1CED\u1CF4\u1CF7-\u1CF9'
+                   '\u1DC0-\u1DFF\u20D0-\u20F0\u2CEF-\u2CF1\u2D7F\u2DE0-\u2DFF\u302A-\u302F\u3099-\u309A'
+                   '\uA66F-\uA672\uA674-\uA67D\uA69E-\uA69F\uA6F0-\uA6F1\uA802\uA806\uA80B\uA823-\uA827'
+                   '\uA82C\uA880-\uA881\uA8B4-\uA8C5\uA8E0-\uA8F1\uA8FF\uA926-\uA92D\uA947-\uA953'
+                   '\uA980-\uA983\uA9B3-\uA9C0\uA9E5\uAA29-\uAA36\uAA43\uAA4C-\uAA4D\uAA7B-\uAA7D\uAAB0'
+                   '\uAAB2-\uAAB4\uAAB7-\uAAB8\uAABE-\uAABF\uAAC1\uAAEB-\uAAEF\uAAF5-\uAAF6\uABE3-\uABEA'
+                   '\uABEC-\uABED\uFB1E\uFE00-\uFE0F\uFE20-\uFE2F\U000101FD\U000102E0\U00010376-\U0001037A'
+                   '\U00010A01-\U00010A03\U00010A05-\U00010A06\U00010A0C-\U00010A0F\U00010A38-\U00010A3A'
+                   '\U00010A3F\U00010AE5-\U00010AE6\U00010D24-\U00010D27\U00010D69-\U00010D6D'
+                   '\U00010EAB-\U00010EAC\U00010EFA-\U00010EFF\U00010F46-\U00010F50\U00010F82-\U00010F85'
+                   '\U00011000-\U00011002\U00011038-\U00011046\U00011070\U00011073-\U00011074'
+                   '\U0001107F-\U00011082\U000110B0-\U000110BA\U000110C2\U00011100-\U00011102'
+                   '\U00011127-\U00011134\U00011145-\U00011146\U00011173\U00011180-\U00011182'
+                   '\U000111B3-\U000111C0\U000111C9-\U000111CC\U000111CE-\U000111CF\U0001122C-\U00011237'
+                   '\U0001123E\U00011241\U000112DF-\U000112EA\U00011300-\U00011303\U0001133B-\U0001133C'
+                   '\U0001133E-\U00011344\U00011347-\U00011348\U0001134B-\U0001134D\U00011357'
+                   '\U00011362-\U00011363\U00011366-\U0001136C\U00011370-\U00011374\U000113B8-\U000113C0'
+                   '\U000113C2\U000113C5\U000113C7-\U000113CA\U000113CC-\U000113D0\U000113D2'
+                   '\U000113E1-\U000113E2\U00011435-\U00011446\U0001145E\U000114B0-\U000114C3'
+                   '\U000115AF-\U000115B5\U000115B8-\U000115C0\U000115DC-\U000115DD\U00011630-\U00011640'
+                   '\U000116AB-\U000116B7\U0001171D-\U0001172B\U0001182C-\U0001183A\U00011930-\U00011935'
+                   '\U00011937-\U00011938\U0001193B-\U0001193E\U00011940\U00011942-\U00011943'
+                   '\U000119D1-\U000119D7\U000119DA-\U000119E0\U000119E4\U00011A01-\U00011A0A'
+                   '\U00011A33-\U00011A39\U00011A3B-\U00011A3E\U00011A47\U00011A51-\U00011A5B'
+                   '\U00011A8A-\U00011A99\U00011B60-\U00011B67\U00011C2F-\U00011C36\U00011C38-\U00011C3F'
+                   '\U00011C92-\U00011CA7\U00011CA9-\U00011CB6\U00011D31-\U00011D36\U00011D3A'
+                   '\U00011D3C-\U00011D3D\U00011D3F-\U00011D45\U00011D47\U00011D8A-\U00011D8E'
+                   '\U00011D90-\U00011D91\U00011D93-\U00011D97\U00011EF3-\U00011EF6\U00011F00-\U00011F01'
+                   '\U00011F03\U00011F34-\U00011F3A\U00011F3E-\U00011F42\U00011F5A\U00013440'
+                   '\U00013447-\U00013455\U0001611E-\U0001612F\U00016AF0-\U00016AF4\U00016B30-\U00016B36'
+                   '\U00016F4F\U00016F51-\U00016F87\U00016F8F-\U00016F92\U00016FE4\U00016FF0-\U00016FF1'
+                   '\U0001BC9D-\U0001BC9E\U0001CF00-\U0001CF2D\U0001CF30-\U0001CF46\U0001D165-\U0001D169'
+                   '\U0001D16D-\U0001D172\U0001D17B-\U0001D182\U0001D185-\U0001D18B\U0001D1AA-\U0001D1AD'
+                   '\U0001D242-\U0001D244\U0001DA00-\U0001DA36\U0001DA3B-\U0001DA6C\U0001DA75\U0001DA84'
+                   '\U0001DA9B-\U0001DA9F\U0001DAA1-\U0001DAAF\U0001E000-\U0001E006\U0001E008-\U0001E018'
+                   '\U0001E01B-\U0001E021\U0001E023-\U0001E024\U0001E026-\U0001E02A\U0001E08F'
+                   '\U0001E130-\U0001E136\U0001E2AE\U0001E2EC-\U0001E2EF\U0001E4EC-\U0001E4EF'
+                   '\U0001E5EE-\U0001E5EF\U0001E6E3\U0001E6E6\U0001E6EE-\U0001E6EF\U0001E6F5'
+                   '\U0001E8D0-\U0001E8D6\U0001E944-\U0001E94A\U000E0100-\U000E01EF]{31}')
+      then 'too_many_marks'
     when not (p_body is nfc normalized)
       or pg_catalog.strpos(p_body, E' \n') > 0
       or p_body like '% '
@@ -361,9 +501,9 @@ revoke all on function public._org_policy_body_problem(text) from public, anon, 
 revoke all on function public._org_policy_person_name(uuid) from public, anon, authenticated, service_role;
 
 comment on function public._org_policy_title_problem(text) is
-  'Why a policy title would be refused (0482): empty, too_long (over 120 characters), forbidden_character, not_normal_form (not NFC, a line feed, two spaces in a row, a space at either end), or null. The rule of packages/core policyTitleProblem. Used by the checks of org_policies and org_policy_versions. No API role may execute it.';
+  'Why a policy title would be refused (0482): empty, too_long (over 120 characters), forbidden_character, too_many_marks (more than 30 combining marks of Unicode 17.0 in a row), not_normal_form (not NFC, a line feed, two spaces in a row, a space at either end), or null. The rule of packages/core policyTitleProblem. Used by the checks of org_policies and org_policy_versions. No API role may execute it.';
 comment on function public._org_policy_body_problem(text) is
-  'Why a policy body would be refused (0482): empty, too_long (over 30,000 characters), too_many_lines (over 600 lines), forbidden_character, not_normal_form (not NFC, a space at a line''s end, three line feeds in a row, a line feed at either end), or null. The rule of packages/core policyBodyProblem. Used by the check of org_policy_versions. No API role may execute it.';
+  'Why a policy body would be refused (0482): empty, too_long (over 30,000 characters), too_many_lines (over 600 lines), forbidden_character, too_many_marks (more than 30 combining marks of Unicode 17.0 in a row), not_normal_form (not NFC, a space at a line''s end, three line feeds in a row, a line feed at either end), or null. The rule of packages/core policyBodyProblem. Used by the check of org_policy_versions. No API role may execute it.';
 comment on function public._org_policy_person_name(uuid) is
   'The name a policy record keeps for an account (0482): its full name, trimmed, at most 200 characters, or null when the name is empty or holds an ''@'' (never an email). No API role may execute it.';
 
@@ -1520,7 +1660,7 @@ revoke all on function public.org_policy_save_draft(uuid, uuid, text, text, text
 grant execute on function public.org_policy_save_draft(uuid, uuid, text, text, text) to authenticated;
 
 comment on function public.org_policy_save_draft(uuid, uuid, text, text, text) is
-  'For the organization''s owners and admins: saves a policy''s draft (kind, title, body; the last save wins; a published policy keeps its kind and title until the draft is published); with p_policy_id null, makes a new draft policy in p_organization_id. Title and body must be in the normal form of packages/core policy-text.ts. Answers policy_id, draft_version_id, text_hash (pass it to org_policy_publish), updated_at, created. 42501 policy_admins_only (not an admin of p_organization_id, or the policy is not in it), policy_act_as_read_only (a support seat), 22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid (detail empty, too_long, too_many_lines, forbidden_character or not_normal_form), P0001 policy_retired; mfa_required and aal2_required by the authenticator rule.';
+  'For the organization''s owners and admins: saves a policy''s draft (kind, title, body; the last save wins; a published policy keeps its kind and title until the draft is published); with p_policy_id null, makes a new draft policy in p_organization_id. Title and body must be in the normal form of packages/core policy-text.ts. Answers policy_id, draft_version_id, text_hash (pass it to org_policy_publish), updated_at, created. 42501 policy_admins_only (not an admin of p_organization_id, or the policy is not in it), policy_act_as_read_only (a support seat), 22023 policy_kind_invalid, policy_title_invalid and policy_body_invalid (detail empty, too_long, too_many_lines, forbidden_character, too_many_marks or not_normal_form), P0001 policy_retired; mfa_required and aal2_required by the authenticator rule.';
 
 create function public.org_policy_discard_draft(p_policy_id uuid)
 returns jsonb

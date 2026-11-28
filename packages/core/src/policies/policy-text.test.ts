@@ -4,8 +4,13 @@ import {
   FORBIDDEN_POLICY_CODE_POINTS,
   POLICY_BODY_MAX,
   POLICY_BODY_MAX_LINES,
+  POLICY_BODY_RAW_MAX,
+  POLICY_COMBINING_MARK_RANGES,
+  POLICY_MARK_RUN_MAX,
   POLICY_TITLE_MAX,
+  POLICY_TITLE_RAW_MAX,
   findForbiddenPolicyCharacter,
+  findPolicyMarkRun,
   isPolicyAckMethod,
   isPolicyChange,
   isPolicyKind,
@@ -18,6 +23,8 @@ import {
   policyLineCount,
   policyTextLength,
   policyTitleProblem,
+  preparePolicyBody,
+  preparePolicyTitle,
 } from './policy-text';
 
 /** A small deterministic generator, so a failure is the same on every run. */
@@ -278,5 +285,156 @@ describe('the parser', () => {
         if (b.kind === 'bullets') expect(b.items.every((l) => l.length > 0)).toBe(true);
       }
     }
+  });
+});
+
+/** `n` combining marks: acute (class 230) and grave below (220) in turn, so out of canonical order. */
+const outOfOrder = (n: number) => '\u0301\u0316'.repeat(Math.ceil(n / 2)).slice(0, n);
+const ACUTE = '\u0301';
+const OL_ONAL_MU = '\u{1E5EE}'; // a mark of Unicode 16.0 (class 230), one the database's Postgres 17 does not know
+const OL_ONAL_IKIR = '\u{1E5EF}'; // (class 220)
+const UNASSIGNED = '\u0378'; // unassigned in Unicode 17.0
+
+describe('runs of combining marks (review round 2, M2)', () => {
+  it('allows 30 marks in a row and refuses 31, in a title and a body, in order or not', () => {
+    expect(POLICY_MARK_RUN_MAX).toBe(30);
+    // "x" has no precomposed form with these marks, so the in-order text is in normal form.
+    expect(policyBodyProblem('x' + ACUTE.repeat(30))).toBeNull();
+    expect(policyBodyProblem('x' + ACUTE.repeat(31))).toBe('too_many_marks');
+    expect(policyTitleProblem('x' + ACUTE.repeat(30))).toBeNull();
+    expect(policyTitleProblem('x' + ACUTE.repeat(31))).toBe('too_many_marks');
+    expect(policyBodyProblem('x' + outOfOrder(30))).toBe('not_normal_form');
+    expect(policyBodyProblem('x' + outOfOrder(31))).toBe('too_many_marks');
+    expect(policyBodyProblem('x' + '\u0316'.repeat(15) + ACUTE.repeat(15))).toBeNull();
+    // Runs are counted apart: a letter ends a run; a run at the very start counts too.
+    expect(policyBodyProblem('x' + ACUTE.repeat(30) + 'x' + ACUTE.repeat(30))).toBeNull();
+    expect(policyBodyProblem(ACUTE.repeat(31))).toBe('too_many_marks');
+    expect(findPolicyMarkRun('ab' + ACUTE.repeat(30) + 'c' + ACUTE.repeat(40) + 'd')).toEqual({
+      index: 33,
+      length: 40,
+    });
+    expect(findPolicyMarkRun('x' + ACUTE.repeat(30))).toBeNull();
+  });
+
+  it('counts the marks of any script, those Postgres 17 does not know, and code points Unicode 17.0 left unassigned', () => {
+    expect(policyBodyProblem('x' + OL_ONAL_MU.repeat(30))).toBeNull();
+    expect(policyBodyProblem('x' + OL_ONAL_MU.repeat(31))).toBe('too_many_marks');
+    expect(policyBodyProblem('x' + OL_ONAL_MU + OL_ONAL_IKIR)).toBe('not_normal_form');
+    // The database does not count an unassigned code point; the core does (the stricter side).
+    expect(policyBodyProblem('x' + UNASSIGNED.repeat(30))).toBeNull();
+    expect(policyBodyProblem('x' + UNASSIGNED.repeat(31))).toBe('too_many_marks');
+    // Marks and unassigned code points count together.
+    expect(policyBodyProblem('x' + ACUTE.repeat(20) + UNASSIGNED.repeat(11))).toBe(
+      'too_many_marks',
+    );
+    // Tibetan vowel sign II is two marks in normal form: 15 make 30, 16 make 32.
+    expect(preparePolicyBody('\u0F40' + '\u0F73'.repeat(15))).toEqual({
+      body: '\u0F40' + '\u0F71'.repeat(15) + '\u0F72'.repeat(15),
+      problem: null,
+    });
+    expect(preparePolicyBody('\u0F40' + '\u0F73'.repeat(16)).problem).toBe('too_many_marks');
+  });
+
+  it('refuses the marks after the length, the lines and the refused characters, and before the normal form', () => {
+    const lines = (n: number) => Array.from({ length: n }, () => 'a').join('\n');
+    expect(policyBodyProblem('b'.repeat(30000) + ACUTE.repeat(31))).toBe('too_long');
+    expect(policyBodyProblem(lines(601) + ACUTE.repeat(31))).toBe('too_many_lines');
+    expect(policyBodyProblem('x\u202e' + ACUTE.repeat(31))).toBe('forbidden_character');
+    expect(policyBodyProblem('x' + ACUTE.repeat(31) + ' ')).toBe('too_many_marks');
+    expect(policyTitleProblem('t'.repeat(89) + ACUTE.repeat(31))).toBe('too_many_marks');
+    expect(policyTitleProblem('t'.repeat(90) + ACUTE.repeat(31))).toBe('too_long');
+    expect(policyTitleProblem('x\u200b' + ACUTE.repeat(31))).toBe('forbidden_character');
+    expect(policyTitleProblem('x' + ACUTE.repeat(31) + '  y')).toBe('too_many_marks');
+  });
+
+  it('counts every listed range at both of its ends, and not the code point beside it', () => {
+    expect(POLICY_COMBINING_MARK_RANGES.length).toBe(327);
+    for (const [lo, hi] of POLICY_COMBINING_MARK_RANGES) {
+      for (const cp of [lo, hi]) {
+        const ch = String.fromCodePoint(cp);
+        expect(findPolicyMarkRun('x' + ch.repeat(31)), cp.toString(16)).not.toBeNull();
+        expect(findPolicyMarkRun('x' + ch.repeat(30)), cp.toString(16)).toBeNull();
+      }
+      for (const cp of [lo - 1, hi + 1]) {
+        if (/[\p{M}\p{Cn}]/u.test(String.fromCodePoint(cp))) continue; // this engine counts it
+        expect(
+          findPolicyMarkRun('x' + String.fromCodePoint(cp).repeat(31)),
+          cp.toString(16),
+        ).toBeNull();
+      }
+    }
+  });
+});
+
+describe('the writers check the raw text before normalising it', () => {
+  it('refuse a raw text over the raw limit as too long, and return it unnormalised', () => {
+    expect(POLICY_BODY_RAW_MAX).toBe(32000);
+    expect(POLICY_TITLE_RAW_MAX).toBe(240);
+    const big = 'e\u0301'.repeat(16001); // 32,002 code points, NFD
+    expect(normalizePolicyBody(big)).toBe(big);
+    expect(preparePolicyBody(big)).toEqual({ body: big, problem: 'too_long' });
+    expect(preparePolicyTitle('t'.repeat(241))).toEqual({
+      title: 't'.repeat(241),
+      problem: 'too_long',
+    });
+    expect(normalizePolicyTitle(' '.repeat(241))).toBe(' '.repeat(241));
+    // Within the raw limit the text is normalised, then held to 30,000.
+    expect(preparePolicyBody('b'.repeat(31000)).problem).toBe('too_long');
+    const spaced = ('b'.repeat(45) + '    \r\n').repeat(590) + 'end';
+    expect(policyTextLength(spaced)).toBe(30093); // 27,143 in normal form: accepted
+    expect(preparePolicyBody(spaced)).toEqual({
+      body: ('b'.repeat(45) + '\n').repeat(590) + 'end',
+      problem: null,
+    });
+  });
+
+  it('refuse a raw run of more than 30 marks without normalising, whatever else the text holds', () => {
+    const raw = 'a\r\n\tx' + outOfOrder(31);
+    expect(normalizePolicyBody(raw)).toBe(raw);
+    expect(normalizePolicyTitle(raw)).toBe(raw);
+    expect(preparePolicyBody(raw)).toEqual({ body: raw, problem: 'too_many_marks' });
+    expect(preparePolicyTitle(raw)).toEqual({ title: raw, problem: 'too_many_marks' });
+    // The two refusals stay refusals (normalising is still idempotent on them).
+    expect(normalizePolicyBody(normalizePolicyBody(raw))).toBe(raw);
+  });
+
+  it("normalise and check everything else, in the database's order", () => {
+    expect(preparePolicyBody('  # A\r\n\r\n\r\n- x \t\r\n')).toEqual({
+      body: '  # A\n\n- x',
+      problem: null,
+    });
+    expect(preparePolicyBody(' \r\n\t')).toEqual({ body: '', problem: 'empty' });
+    expect(preparePolicyBody('a\u200bb')).toEqual({
+      body: 'a\u200bb',
+      problem: 'forbidden_character',
+    });
+    expect(preparePolicyTitle('  Data \t handling\npolicy  ')).toEqual({
+      title: 'Data handling policy',
+      problem: null,
+    });
+    expect(preparePolicyTitle('Cafe\u0301')).toEqual({ title: 'Café', problem: null });
+  });
+});
+
+describe('the reader never normalises a long run of marks', () => {
+  it('shows each run of more than 30 marks as one replacement character, and normalises the rest', () => {
+    expect(parsePolicyText('x' + outOfOrder(40) + 'y\n# T' + ACUTE.repeat(31))).toEqual([
+      { kind: 'paragraph', lines: ['x\uFFFDy'] },
+      { kind: 'heading', text: 'T\uFFFD' },
+    ]);
+    // A run of 30, out of order, is put in order (canonical order: 220 before 230).
+    expect(parsePolicyText('x' + outOfOrder(30))).toEqual([
+      { kind: 'paragraph', lines: ['x' + '\u0316'.repeat(15) + ACUTE.repeat(15)] },
+    ]);
+    expect(parsePolicyText(UNASSIGNED.repeat(31) + ' z')).toEqual([
+      { kind: 'paragraph', lines: ['\uFFFD z'] },
+    ]);
+  });
+
+  it('reads the body the review stored (Ol Onal marks Postgres 17 does not know) as one character', () => {
+    const stored = 'x' + OL_ONAL_MU.repeat(14999) + OL_ONAL_IKIR.repeat(15000);
+    expect(policyTextLength(stored)).toBe(30000);
+    expect(parsePolicyText(stored)).toEqual([{ kind: 'paragraph', lines: ['x\uFFFD'] }]);
+    expect(policyBodyProblem(stored)).toBe('too_many_marks');
   });
 });

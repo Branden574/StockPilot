@@ -14,7 +14,13 @@
 
 import { DELETED_USER_LABEL } from '../people/deleted-user';
 
-import type { PolicyAckMethod, PolicyChange, PolicyKind, PolicyStatus } from './policy-text';
+import type {
+  PolicyAckMethod,
+  PolicyChange,
+  PolicyKind,
+  PolicyStatus,
+  PolicyTextProblem,
+} from './policy-text';
 
 /* ───────────────────────────── labels ───────────────────────────── */
 
@@ -147,13 +153,31 @@ export const POLICY_ADMIN_COPY = {
     'The draft still holds the note that it is an example. Edit it to fit your organization and remove the note before you publish.',
   whatItRecords:
     'An acknowledgement records that a person pressed “I have read and agree” while signed in as themselves. It does not prove that they read or understood the policy, and StockPilot gives no legal opinion on its words.',
+  /** Beside the count when some acknowledgements are of the text before a correction. */
+  acknowledgedBeforeCorrectionExplain:
+    'A correction does not ask anyone again, so these members acknowledged the text as it was before the correction. Their acknowledgements still count.',
 } as const;
 
-/** "12 of 15 members have acknowledged it." */
-export function policyAcknowledgedCount(acknowledged: number, members: number): string {
+/**
+ * The count line, with its correction part: "12 of 15 members have
+ * acknowledged it." and, when some of those acknowledged the text before a
+ * correction (org_policies_for_admin acknowledged_before_correction), "3 of
+ * them acknowledged the text before it was corrected." The third number is
+ * required, so a page never shows the count without it.
+ */
+export function policyAcknowledgedCount(
+  acknowledged: number,
+  members: number,
+  acknowledgedBeforeCorrection: number,
+): string {
   const a = Number.isInteger(acknowledged) && acknowledged >= 0 ? acknowledged : 0;
   const m = Number.isInteger(members) && members >= 0 ? members : 0;
-  return `${a} of ${m} ${m === 1 ? 'member has' : 'members have'} acknowledged it.`;
+  const c =
+    Number.isInteger(acknowledgedBeforeCorrection) && acknowledgedBeforeCorrection > 0
+      ? Math.min(acknowledgedBeforeCorrection, a)
+      : 0;
+  const line = `${a} of ${m} ${m === 1 ? 'member has' : 'members have'} acknowledged it.`;
+  return c === 0 ? line : `${line} ${c} of them acknowledged the text before it was corrected.`;
 }
 
 /** "Version 3", "Version 3 (a correction)". */
@@ -250,6 +274,38 @@ export function policyReminderEmail(input: { title: string; organizationName: st
 }
 
 /* ───────────────────────────── refusals ───────────────────────────── */
+
+/**
+ * The words under a title or body field for each refusal word
+ * (PolicyTextProblem: what policyTitleProblem, policyBodyProblem and the
+ * prepare functions answer, and the database's detail with the hints
+ * policy_title_invalid and policy_body_invalid). Fixed words: none repeats
+ * the text or says where in it the problem is.
+ */
+export const POLICY_TEXT_PROBLEM_COPY: Readonly<Record<PolicyTextProblem, string>> = {
+  empty: 'This cannot be empty.',
+  too_long:
+    'This is too long. A title can be at most 120 characters, and the policy text at most 30,000.',
+  too_many_lines: 'The policy text can be at most 600 lines.',
+  forbidden_character: 'This holds a hidden or control character. Remove it and try again.',
+  too_many_marks:
+    'This text holds characters that cannot be shown: more than 30 accents or other marks in a row.',
+  not_normal_form: POLICY_ADMIN_COPY.reload,
+};
+
+/** The words for a title or body refusal word; an unknown word gets the hint's words. */
+export function policyTextProblemWords(
+  problem: string | null | undefined,
+  field: 'title' | 'body',
+): string {
+  if (
+    typeof problem === 'string' &&
+    Object.prototype.hasOwnProperty.call(POLICY_TEXT_PROBLEM_COPY, problem)
+  ) {
+    return POLICY_TEXT_PROBLEM_COPY[problem as PolicyTextProblem];
+  }
+  return policyRefusalWords(field === 'title' ? 'policy_title_invalid' : 'policy_body_invalid');
+}
 
 /**
  * The words for each refusal the database gives (its hint, migration 0482).

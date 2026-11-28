@@ -17,7 +17,10 @@
  * and every acknowledgement stores the hash of the version it was given for.
  * The website and the phone send back the hash that came with the text they
  * showed; they may recompute it here first and refuse to offer the button if
- * the two differ.
+ * the two differ. It hashes the two strings exactly as given and never
+ * normalises them, so it runs in time linear in their length on any input
+ * (policy-text.time.test.ts): recompute it on the title and body as the
+ * database served them, never on parsed or normalised words.
  *
  * The SHA-256 below is written out (FIPS 180-4) so the phone needs no native
  * module and no Web Crypto; policy-hash.test.ts checks it against Node's

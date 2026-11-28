@@ -13,6 +13,7 @@ import {
   POLICY_STARTERS,
   POLICY_STARTER_NOTE,
   POLICY_STATUS_LABELS,
+  POLICY_TEXT_PROBLEM_COPY,
   policyAcknowledgedCount,
   policyAcknowledgedLine,
   policyAcknowledgedVersionLine,
@@ -25,6 +26,7 @@ import {
   policyRemindNowTooSoon,
   policyRemindedLine,
   policyReminderEmail,
+  policyTextProblemWords,
   policyVersionLabel,
 } from './policy-copy';
 import {
@@ -52,6 +54,7 @@ function everyWord(): string[] {
     POLICY_REFUSAL_COPY,
     POLICY_STARTERS,
     POLICY_STARTER_NOTE,
+    POLICY_TEXT_PROBLEM_COPY,
   ]);
   walk([
     policyOwedBanner(1),
@@ -60,7 +63,8 @@ function everyWord(): string[] {
     policyNotice('T', 'reminder'),
     policyReminderEmail({ title: 'T', organizationName: 'O' }),
     policyAcknowledgedLine('d', 'web'),
-    policyAcknowledgedCount(1, 2),
+    policyAcknowledgedCount(1, 2, 0),
+    policyAcknowledgedCount(2, 2, 1),
     policyRemindedLine(2, 'd'),
     policyRemindNowTooSoon('t'),
     policyCorrectionNotice('T'),
@@ -114,9 +118,11 @@ describe('the words', () => {
     expect(policyAcknowledgedLine('24 Nov 2026', 'phone')).toBe(
       'You acknowledged this on 24 Nov 2026, in the phone app.',
     );
-    expect(policyAcknowledgedCount(12, 15)).toBe('12 of 15 members have acknowledged it.');
-    expect(policyAcknowledgedCount(0, 1)).toBe('0 of 1 member has acknowledged it.');
-    expect(policyAcknowledgedCount(-1, Number.NaN)).toBe('0 of 0 members have acknowledged it.');
+    expect(policyAcknowledgedCount(12, 15, 0)).toBe('12 of 15 members have acknowledged it.');
+    expect(policyAcknowledgedCount(0, 1, 0)).toBe('0 of 1 member has acknowledged it.');
+    expect(policyAcknowledgedCount(-1, Number.NaN, Number.NaN)).toBe(
+      '0 of 0 members have acknowledged it.',
+    );
     expect(policyVersionLabel(3, true)).toBe('Version 3');
     expect(policyVersionLabel(4, false)).toBe('Version 4 (a correction)');
     expect(policyRemindedLine(0, null)).toBe('Not reminded yet.');
@@ -154,6 +160,52 @@ describe('the words', () => {
     );
     expect(policyRefusalWords('policy_correction_changes_title')).toBe(
       'A correction keeps the title. To change the title, publish a new version: everyone is asked again.',
+    );
+  });
+
+  it("count the acknowledgements of the text before a correction apart (the review's web follow-up)", () => {
+    expect(policyAcknowledgedCount(5, 5, 2)).toBe(
+      '5 of 5 members have acknowledged it. 2 of them acknowledged the text before it was corrected.',
+    );
+    expect(policyAcknowledgedCount(1, 3, 1)).toBe(
+      '1 of 3 members have acknowledged it. 1 of them acknowledged the text before it was corrected.',
+    );
+    // Never more than the acknowledgements, and nothing said when none.
+    expect(policyAcknowledgedCount(2, 4, 9)).toBe(
+      '2 of 4 members have acknowledged it. 2 of them acknowledged the text before it was corrected.',
+    );
+    expect(policyAcknowledgedCount(2, 4, -1)).toBe('2 of 4 members have acknowledged it.');
+    expect(POLICY_ADMIN_COPY.acknowledgedBeforeCorrectionExplain).toBe(
+      'A correction does not ask anyone again, so these members acknowledged the text as it was before the correction. Their acknowledgements still count.',
+    );
+  });
+
+  it("have words for every refusal word of a title or a body, the database's details included", () => {
+    expect(POLICY_TEXT_PROBLEM_COPY.too_many_marks).toBe(
+      'This text holds characters that cannot be shown: more than 30 accents or other marks in a row.',
+    );
+    const sql = readFileSync(
+      fileURLToPath(
+        new URL('../../../../supabase/migrations/0482_org_policies.sql', import.meta.url),
+      ),
+      'utf8',
+    );
+    const words = new Set<string>();
+    for (const fn of ['_org_policy_title_problem', '_org_policy_body_problem']) {
+      const start = sql.indexOf(`create function public.${fn}(`);
+      const body = sql.slice(start, sql.indexOf('$$;', start));
+      for (const m of body.matchAll(/then '([a-z_]+)'/g)) words.add(m[1]!);
+    }
+    expect([...words].sort()).toEqual(Object.keys(POLICY_TEXT_PROBLEM_COPY).sort());
+    expect(policyTextProblemWords('too_many_marks', 'body')).toBe(
+      POLICY_TEXT_PROBLEM_COPY.too_many_marks,
+    );
+    expect(policyTextProblemWords('nonsense', 'title')).toBe(
+      policyRefusalWords('policy_title_invalid'),
+    );
+    expect(policyTextProblemWords(null, 'body')).toBe(policyRefusalWords('policy_body_invalid'));
+    expect(policyTextProblemWords('toString', 'body')).toBe(
+      policyRefusalWords('policy_body_invalid'),
     );
   });
 

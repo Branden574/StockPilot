@@ -15,7 +15,9 @@ import {
   POLICY_BODY_MAX,
   POLICY_BODY_MAX_LINES,
   POLICY_CHANGES,
+  POLICY_COMBINING_MARK_RANGES,
   POLICY_KINDS,
+  POLICY_MARK_RUN_MAX,
   POLICY_STATUSES,
   POLICY_TITLE_MAX,
 } from './policy-text';
@@ -26,6 +28,10 @@ import {
  */
 const SQL = readFileSync(
   fileURLToPath(new URL('../../../../supabase/migrations/0482_org_policies.sql', import.meta.url)),
+  'utf8',
+);
+const TEST_SQL = readFileSync(
+  fileURLToPath(new URL('../../../../supabase/tests/0482_org_policies.test.sql', import.meta.url)),
   'utf8',
 );
 const fnBody = (name: string) => {
@@ -63,6 +69,34 @@ describe('core and migration 0482 agree', () => {
     }
   });
 
+  it('on the combining marks: the same ranges in both helpers and in the core, more than 30 in a row refused', () => {
+    for (const fn of ['_org_policy_title_problem', '_org_policy_body_problem']) {
+      // One bracket written as string constants on consecutive lines (Postgres joins them).
+      const m = fnBody(fn).match(/~ \(((?:'[^']*'\s*)+)\)\s*then 'too_many_marks'/);
+      expect(m, fn).not.toBeNull();
+      const pattern = [...m![1]!.matchAll(/'([^']*)'/g)].map((x) => x[1]).join('');
+      expect(pattern.startsWith('['), fn).toBe(true);
+      expect(pattern.endsWith(`]{${POLICY_MARK_RUN_MAX + 1}}`), fn).toBe(true);
+      expect(bracketRanges(pattern.slice(1, pattern.lastIndexOf(']'))), fn).toEqual(
+        POLICY_COMBINING_MARK_RANGES.map(([lo, hi]) => [lo, hi]),
+      );
+    }
+    // The pgTAP test's own copy (0482/141 and 142 check each range's ends in the database).
+    const block = TEST_SQL.match(/regexp_split_to_table\(btrim\(((?:\s*'[^']*')+)\s*\), '\\s\+'\)/);
+    expect(block).not.toBeNull();
+    const tokens = [...block![1]!.matchAll(/'([^']*)'/g)]
+      .map((x) => x[1])
+      .join('')
+      .trim()
+      .split(/\s+/);
+    expect(
+      tokens.map((tok) => {
+        const [lo, hi] = tok.split('-');
+        return [parseInt(lo!, 16), parseInt(hi ?? lo!, 16)];
+      }),
+    ).toEqual(POLICY_COMBINING_MARK_RANGES.map(([lo, hi]) => [lo, hi]));
+  });
+
   it('on the limits', () => {
     expect(fnBody('_org_policy_title_problem')).toContain(
       `char_length(p_title) > ${POLICY_TITLE_MAX} then 'too_long'`,
@@ -74,12 +108,30 @@ describe('core and migration 0482 agree', () => {
     expect(body).toContain(
       `pg_catalog.char_length(p_body) - pg_catalog.char_length(pg_catalog.replace(p_body, E'\\n', '')) + 1 > ${POLICY_BODY_MAX_LINES}\n      then 'too_many_lines'`,
     );
-    // The same order as policyBodyProblem: empty, too_long, too_many_lines, forbidden_character, not_normal_form.
-    const at = (w: string) => body.indexOf(`'${w}'`);
-    expect(at('empty')).toBeLessThan(at('too_long'));
-    expect(at('too_long')).toBeLessThan(at('too_many_lines'));
-    expect(at('too_many_lines')).toBeLessThan(at('forbidden_character'));
-    expect(at('forbidden_character')).toBeLessThan(at('not_normal_form'));
+    // The same order as policyBodyProblem: empty, too_long, too_many_lines, forbidden_character,
+    // too_many_marks, not_normal_form; and policyTitleProblem's, without the lines.
+    const at = (text: string, w: string) => text.indexOf(`then '${w}'`);
+    const order = (text: string, words: string[]) => {
+      for (let i = 1; i < words.length; i += 1) {
+        expect(at(text, words[i - 1]!), words[i - 1]).toBeGreaterThan(-1);
+        expect(at(text, words[i - 1]!), words[i]).toBeLessThan(at(text, words[i]!));
+      }
+    };
+    order(body, [
+      'empty',
+      'too_long',
+      'too_many_lines',
+      'forbidden_character',
+      'too_many_marks',
+      'not_normal_form',
+    ]);
+    order(fnBody('_org_policy_title_problem'), [
+      'empty',
+      'too_long',
+      'forbidden_character',
+      'too_many_marks',
+      'not_normal_form',
+    ]);
   });
 
   it('on the name kept for a deleted account that had none', () => {
