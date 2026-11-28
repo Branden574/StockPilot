@@ -584,8 +584,18 @@ describe("the history: the database's record, every value as text", () => {
         result: null,
         computedResult: null,
         reason: 'Line one <img src=x onerror=alert(1)>\n  line two',
-        before: { status: 'open', ownerName: 'Avery Example', dueOn: '2026-12-31' },
-        after: { status: 'accepted', ownerName: 'Blake <b>Example</b>', dueOn: null },
+        before: {
+          status: 'open',
+          ownerName: 'Avery Example',
+          ownerDeleted: false,
+          dueOn: '2026-12-31',
+        },
+        after: {
+          status: 'accepted',
+          ownerName: 'Blake <b>Example</b>',
+          ownerDeleted: false,
+          dueOn: null,
+        },
       },
       ...over,
     };
@@ -655,6 +665,39 @@ describe("the history: the database's record, every value as text", () => {
     expect(li.textContent).toMatch(/Risk acceptance withdrawn/);
     expect(li.querySelector('bdi')?.textContent).toBe('Rami \u202eExample');
     expect(li.textContent).toContain('(account since deleted)');
+  });
+
+  it('an owner whose account was deleted renders as a deleted account, never an id', () => {
+    const base = event();
+    const { container } = render(
+      <SupplierRiskHistory
+        read={{
+          state: 'ok',
+          value: {
+            events: [
+              event({
+                detail: {
+                  ...base.detail,
+                  before: {
+                    status: 'open',
+                    ownerName: 'Casey Example',
+                    ownerDeleted: true,
+                    dueOn: null,
+                  },
+                  after: { status: 'open', ownerName: null, ownerDeleted: false, dueOn: null },
+                },
+              }),
+            ],
+            next: null,
+          },
+        }}
+        timeZone="UTC"
+        olderHref={null}
+        newestHref={null}
+      />,
+    );
+    expect(container.textContent).toContain('Casey Example (account deleted)');
+    expect(container.textContent).toContain('no owner');
   });
 
   it('a finished review with a result set by an admin says both results', () => {

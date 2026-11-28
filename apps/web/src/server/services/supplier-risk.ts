@@ -310,6 +310,11 @@ export type SupplierRiskEventName =
 export interface SupplierRiskEventItemState {
   status: string | null;
   ownerName: string | null;
+  /**
+   * The owner's name is kept but the account link is gone: an owner id of
+   * null beside a name is a deleted account. Never an id: ids are not read.
+   */
+  ownerDeleted: boolean;
   dueOn: string | null;
 }
 
@@ -643,9 +648,17 @@ function eventItemStateOf(
 ): SupplierRiskEventItemState | null {
   const status = `status_${side}`;
   const owner = `owner_${side}_name`;
+  const ownerId = `owner_${side}_id`;
   const due = `due_on_${side}`;
   if (!(status in d) && !(owner in d) && !(due in d)) return null;
-  return { status: text(d[status]), ownerName: text(d[owner]), dueOn: day(d[due]) };
+  const ownerName = text(d[owner]);
+  return {
+    status: text(d[status]),
+    ownerName,
+    // A name with no account link (null or absent id) is a deleted account.
+    ownerDeleted: ownerName !== null && text(d[ownerId]) === null,
+    dueOn: day(d[due]),
+  };
 }
 
 function eventOf(raw: Record<string, unknown>): SupplierRiskEvent | null {

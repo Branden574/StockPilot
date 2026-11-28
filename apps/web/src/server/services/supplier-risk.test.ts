@@ -884,8 +884,18 @@ describe("the history: the database's own record of a supplier's reviews, newest
         result: null,
         computedResult: null,
         reason: 'Accepted until January.',
-        before: { status: 'open', ownerName: 'Avery Example', dueOn: '2026-12-31' },
-        after: { status: 'accepted', ownerName: 'Blake Example', dueOn: null },
+        before: {
+          status: 'open',
+          ownerName: 'Avery Example',
+          ownerDeleted: false,
+          dueOn: '2026-12-31',
+        },
+        after: {
+          status: 'accepted',
+          ownerName: 'Blake Example',
+          ownerDeleted: false,
+          dueOn: null,
+        },
       },
     });
     expect(JSON.stringify(read.value)).not.toContain(OWNER_A);
@@ -1026,9 +1036,44 @@ describe("the history: the database's own record of a supplier's reviews, newest
     expect(read.value.events[1]?.detail.before).toEqual({
       status: null,
       ownerName: null,
+      ownerDeleted: false,
       dueOn: null,
     });
     expect(read.value.events[1]?.detail.after).toBeNull();
+  });
+
+  it('an owner kept by name with no account link is a deleted account; ids are never read', async () => {
+    const { svc } = setup({
+      'rpc:supplier_risk_events': {
+        data: [
+          EVENT(1, {
+            event: 'item_changed',
+            detail: {
+              status_before: 'open',
+              status_after: 'open',
+              owner_before_id: null,
+              owner_before_name: 'Casey Example',
+              owner_after_id: OWNER_B,
+              owner_after_name: 'Blake Example',
+              due_on_before: null,
+              due_on_after: null,
+            },
+          }),
+        ],
+        error: null,
+      },
+    });
+    const read = await svc.listEvents(SUPPLIER, null);
+    if (read.state !== 'ok') throw new Error('expected ok');
+    const d = read.value.events[0]!.detail;
+    expect(d.before).toEqual({
+      status: 'open',
+      ownerName: 'Casey Example',
+      ownerDeleted: true,
+      dueOn: null,
+    });
+    expect(d.after?.ownerDeleted).toBe(false);
+    expect(JSON.stringify(read.value)).not.toContain(OWNER_B);
   });
 
   it('a refusal of the database is thrown, never read as no history', async () => {

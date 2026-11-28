@@ -22,8 +22,14 @@ function statusWords(status: string | null): string {
   return (VENDOR_RISK_ITEM_STATUS_WORDS as Record<string, string>)[status] ?? status;
 }
 
-function Owner({ name }: { name: string | null }) {
-  return name ? <bdi>{name}</bdi> : <>no owner</>;
+function Owner({ name, deleted }: { name: string | null; deleted: boolean }) {
+  if (!name) return <>no owner</>;
+  return (
+    <>
+      <bdi>{name}</bdi>
+      {deleted ? ' (account deleted)' : null}
+    </>
+  );
 }
 
 /** What changed on an item, field by field, only where before and after differ. */
@@ -35,7 +41,7 @@ function ItemChanges({
   after: SupplierRiskEventItemState | null;
 }) {
   if (!after) return null;
-  const b = before ?? { status: null, ownerName: null, dueOn: null };
+  const b = before ?? { status: null, ownerName: null, ownerDeleted: false, dueOn: null };
   const lines: ReactNode[] = [];
   if (b.status !== after.status) {
     lines.push(
@@ -46,16 +52,17 @@ function ItemChanges({
       </li>,
     );
   }
-  if (b.ownerName !== after.ownerName) {
+  if (b.ownerName !== after.ownerName || b.ownerDeleted !== after.ownerDeleted) {
     lines.push(
       <li key="owner">
         {before ? (
           <>
-            Owner changed from <Owner name={b.ownerName} /> to <Owner name={after.ownerName} />.
+            Owner changed from <Owner name={b.ownerName} deleted={b.ownerDeleted} /> to{' '}
+            <Owner name={after.ownerName} deleted={after.ownerDeleted} />.
           </>
         ) : (
           <>
-            Owner: <Owner name={after.ownerName} />.
+            Owner: <Owner name={after.ownerName} deleted={after.ownerDeleted} />.
           </>
         )}
       </li>,
