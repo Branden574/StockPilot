@@ -129,8 +129,13 @@ if [ "$(q "select count(*) from public.organizations where id = '$ORG'")" != "0"
 fi
 remove_rows
 
-# Every question asked with staff contact details answered Yes.
-YES="$(q "select jsonb_object_agg(q.key, jsonb_build_object('answer', 'yes'))
+# Every question asked with staff contact details answered Yes; the security
+# report and the insurance dated 200 days ago (a Yes there needs its date,
+# and the finals below were finished that day).
+YES="$(q "select jsonb_object_agg(q.key, jsonb_build_object('answer', 'yes')
+              || case when q.date_max_months is not null
+                      then jsonb_build_object('date', ((now() - interval '200 days') at time zone 'UTC')::date::text)
+                      else '{}'::jsonb end)
             from public._supplier_risk_questions() q where not q.student_only")"
 case "$YES" in '{"'*) ;; *) echo "could not read the question list: $YES"; exit 1 ;; esac
 

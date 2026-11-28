@@ -15,8 +15,8 @@
 -- advisory lock key below (4810001) carries this file's number.
 --
 -- WHAT IT ADDS (tier A: two new tables with their keys, checks and indexes,
--- two triggers on the new tables, twenty-six functions (eleven the API roles
--- may run: eight for signed-in admins, three for the daily job; fifteen
+-- two triggers on the new tables, twenty-nine functions (eleven the API roles
+-- may run: eight for signed-in admins, three for the daily job; eighteen
 -- private) and their grants. No stored row; no existing table, column,
 -- function, policy, trigger or grant changes. The existing objects touched
 -- are public.organizations and public.user_profiles, which gain the internal
@@ -37,7 +37,8 @@
 --      Each row holds: the organization and the supplier (a plain uuid, with
 --      the supplier's name as it was at the last save: the name it was
 --      reviewed as, so a review outlives its supplier and a rename shows; see
---      SUPPLIERS ARCHIVED OR DELETED); the version number; the rules version
+--      SUPPLIERS ARCHIVED OR DELETED; kept as plain text, see TEXT); the
+--      version number; the rules version
 --      (1: a stored review keeps the rules version it was judged under); the
 --      data level (none, staff, student); the
 --      answers (jsonb: question key to {answer, note, date}; keys and values
@@ -95,8 +96,28 @@
 --          hours is offered once more; one claimed twice and still not
 --          confirmed 24 hours later shows as not sent on the register.
 --   5. Private helpers (no API role may call them): the question list, the
---      answers check, the rules, the text rule, the default next review
---      date, the organization's zone, the two trigger functions.
+--      answers check, the rules, the hidden characters and the spaces, the
+--      text rule, the reason rule, a name as plain text, the default next
+--      review date, the organization's zone, the two trigger functions.
+--
+-- TEXT. No text these tables store (a note, a reason, a finding, an action,
+-- a name kept beside a link) holds a hidden character: a control character
+-- but tab and line breaks, a zero-width or joiner character, a direction
+-- control, a tag character, or another default-ignorable or format
+-- character of Unicode. The set is ONE list (_supplier_risk_hidden_chars(),
+-- the same ranges as core's VENDOR_RISK_HIDDEN_CHARACTERS). A reason (an
+-- override's, a risk accepted) is counted over what can be seen: at least
+-- 20 characters once each run of spaces is one space and the ends are
+-- trimmed, at least 5 different characters that are not spaces. The names
+-- the functions copy (the supplier's, a person's) are stored as plain text:
+-- hidden characters taken out, each run of spaces one space.
+--
+-- DATES BESIDE THE ANSWERS. A Yes to the security report or to insurance
+-- needs the date on the document (a finished review without it is refused,
+-- answer_date_missing); a date there later than today in UTC plus one day
+-- is refused (answer_date_in_future), on every save and by the reviews
+-- table's CHECK for a final (against the UTC day of reviewed_at); a Yes
+-- dated more than 12 months before the review counts as Not shown to us.
 --
 -- WHO CAN READ AND WRITE
 --   - RLS is on with NO policy on both tables, and anon, authenticated and
@@ -145,7 +166,10 @@
 -- are keys to user_profiles with ON DELETE SET NULL: the row stays, the link
 -- empties, and the name written beside it (reviewer_name, owner_name,
 -- changed_by_name, accepted_by_name) stays, also through later changes of
--- the item.
+-- the item. The SET NULL is an update, so the tables' CHECKs run again on
+-- every row it touches: their functions are never changed in place (see
+-- the text rule), so a row stored once passes them again and the deletion
+-- is never refused by it.
 --
 -- ERRORS: 42501 (not allowed; mfa_required, aal2_required); 22023 with the
 -- code as message and hint for every refused argument (listed in each
@@ -297,11 +321,68 @@ comment on function public._supplier_risk_question_key_ok(text) is
   'Private (0481). Is this a key of the vendor risk question list. Used by the items table''s CHECK. No API role may call it.';
 
 -- ── The text rule ────────────────────────────────────────────────────────────
--- Every text this file stores from a caller (a note, a reason, a finding, an
--- action): p_min to p_max characters, at least one that is not a space, tab
--- or line break, no control character but tab and line breaks, and none of
--- the invisible or direction-changing characters. Core's vendorRiskTextOk is
--- the same rule.
+-- NEVER CHANGE THE FOUR FUNCTIONS BELOW IN PLACE once a row is stored
+-- anywhere (the hidden characters, the spaces, the text rule, the reason
+-- rule): the tables' CHECKs call them, and a CHECK runs again at every
+-- update of a row, an account deletion's SET NULL among them. A stricter
+-- rule written over these by create or replace would make stored rows fail
+-- their CHECK at that update, and the account deletion would be refused. A
+-- new rule is new functions, used by new rows only.
+--
+-- The hidden characters: no stored text may hold one. ONE list of ranges, in
+-- order (core's VENDOR_RISK_HIDDEN_CHARACTERS is the same list; the parity
+-- test compares them range by range): the controls but tab, line feed and
+-- carriage return (U+0001 to U+0008, U+000B, U+000C, U+000E to U+001F,
+-- U+007F to U+009F); soft hyphen U+00AD; combining grapheme joiner U+034F;
+-- the Arabic number signs U+0600 to U+0605, letter mark U+061C and end of
+-- ayah U+06DD; Syriac abbreviation mark U+070F; U+0890, U+0891, U+08E2; the
+-- Hangul fillers U+115F, U+1160, U+3164, U+FFA0; Khmer inherent vowels
+-- U+17B4, U+17B5; Mongolian variation selectors and vowel separator U+180B
+-- to U+180F; zero width space, non-joiner, joiner and the direction marks
+-- U+200B to U+200F; line and paragraph separators and direction embeddings
+-- and overrides U+2028 to U+202E; word joiner, invisible operators,
+-- direction isolates and deprecated format characters U+2060 to U+206F;
+-- variation selectors U+FE00 to U+FE0F; byte order mark U+FEFF; U+FFF0 to
+-- U+FFFB (default-ignorable, interlinear annotation); Kaithi number signs
+-- U+110BD, U+110CD; Egyptian hieroglyph format controls U+13430 to U+1343F;
+-- shorthand format controls U+1BCA0 to U+1BCA3; musical symbol format
+-- controls U+1D173 to U+1D17A; tag characters and the variation selectors
+-- supplement, the whole block U+E0000 to U+E0FFF.
+create function public._supplier_risk_hidden_chars()
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select '[\u0001-\u0008\u000B-\u000C\u000E-\u001F\u007F-\u009F\u00AD\u034F\u0600-\u0605\u061C\u06DD\u070F\u0890-\u0891\u08E2\u115F-\u1160\u17B4-\u17B5\u180B-\u180F\u200B-\u200F\u2028-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFFB\U000110BD\U000110CD\U00013430-\U0001343F\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF]'::text;
+$$;
+
+revoke all on function public._supplier_risk_hidden_chars() from public, anon, authenticated, service_role;
+
+comment on function public._supplier_risk_hidden_chars() is
+  'Private (0481). The hidden characters, as one regular expression bracket: the controls but tab and line breaks, the zero-width and joiner characters, the direction controls, the tag characters and the other default-ignorable and format characters of Unicode (the migration names every range). The same ranges as core''s VENDOR_RISK_HIDDEN_CHARACTERS. Used by the text rule (so by the tables'' CHECKs) and the plain names. Never change it in place once a row is stored. No API role may call it.';
+
+-- The spaces: Unicode's white space that the list above leaves (tab, line
+-- feed, carriage return, space, no-break space, Ogham space mark, U+2000 to
+-- U+200A, narrow no-break space, medium mathematical space, ideographic
+-- space). Core's VENDOR_RISK_SPACE_CHARACTERS is the same list.
+create function public._supplier_risk_space_chars()
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select '[\u0009\u000A\u000D\u0020\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]'::text;
+$$;
+
+revoke all on function public._supplier_risk_space_chars() from public, anon, authenticated, service_role;
+
+comment on function public._supplier_risk_space_chars() is
+  'Private (0481). The spaces, as one regular expression bracket: tab, line feed, carriage return, space, U+00A0, U+1680, U+2000 to U+200A, U+202F, U+205F, U+3000. The same ranges as core''s VENDOR_RISK_SPACE_CHARACTERS. A text must hold something else; a reason counts each run of them as one. Never change it in place once a row is stored. No API role may call it.';
+
+-- Every text this file stores (a note, a reason, a finding, an action, a
+-- name): p_min to p_max characters, at least one that is not a space, and no
+-- hidden character. Core's vendorRiskTextOk is the same rule.
 create function public._supplier_risk_text_ok(p_text text, p_min integer, p_max integer)
 returns boolean
 language sql
@@ -310,20 +391,21 @@ set search_path = ''
 as $$
   select coalesce(
            pg_catalog.char_length(p_text) between p_min and p_max
-           and p_text ~ '[^ \t\r\n]'
-           and p_text !~ '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2066-\u2069\uFEFF]',
+           and pg_catalog.regexp_replace(p_text, public._supplier_risk_space_chars(), '', 'g') <> ''
+           and p_text !~ public._supplier_risk_hidden_chars(),
            false);
 $$;
 
 revoke all on function public._supplier_risk_text_ok(text, integer, integer) from public, anon, authenticated, service_role;
 
 comment on function public._supplier_risk_text_ok(text, integer, integer) is
-  'Private (0481). The text rule for what a caller writes (a note, a reason, a finding, an action): p_min to p_max characters, at least one that is not a space, tab or line break, no control character but tab and line breaks, none of U+200B to U+200F, U+2028 to U+202E, U+2066 to U+2069, U+FEFF. False for null. No API role may call it.';
+  'Private (0481). The text rule for everything these tables store (a note, a reason, a finding, an action, a name): p_min to p_max characters, at least one that is not a space (_supplier_risk_space_chars), no hidden character (_supplier_risk_hidden_chars). False for null. The same as core''s vendorRiskTextOk. Never change it in place once a row is stored. No API role may call it.';
 
--- A reason (an override's, or a risk accepted): the text rule (1 to 2000),
--- at least 20 characters once spaces, tabs and line breaks at the ends are
--- trimmed, and not one character repeated (at least two different characters
--- that are not a space, tab or line break).
+-- A reason (an override's, or a risk accepted), counted over what can be
+-- seen: the text rule (1 to 2000, so no hidden character), at least 20
+-- characters once each run of spaces is one space and the ends are trimmed,
+-- and at least 5 different characters that are not spaces. Core's
+-- vendorRiskOverrideReasonOk is the same rule.
 create function public._supplier_risk_reason_ok(p_text text)
 returns boolean
 language sql
@@ -331,15 +413,34 @@ immutable
 set search_path = ''
 as $$
   select public._supplier_risk_text_ok(p_text, 1, 2000)
-         and pg_catalog.char_length(pg_catalog.btrim(p_text, E' \t\r\n')) >= 20
+         and pg_catalog.char_length(pg_catalog.btrim(pg_catalog.regexp_replace(p_text, public._supplier_risk_space_chars() || '+', ' ', 'g'), ' ')) >= 20
          and (select pg_catalog.count(distinct c) from pg_catalog.regexp_split_to_table(p_text, '') c
-               where c !~ '[ \t\r\n]') >= 2;
+               where c !~ public._supplier_risk_space_chars()) >= 5;
 $$;
 
 revoke all on function public._supplier_risk_reason_ok(text) from public, anon, authenticated, service_role;
 
 comment on function public._supplier_risk_reason_ok(text) is
-  'Private (0481). The reason rule (an override''s, a risk accepted): the text rule with 1 to 2000 characters, at least 20 once spaces, tabs and line breaks at the ends are trimmed, and at least two different characters that are not a space, tab or line break. False for null. No API role may call it.';
+  'Private (0481). The reason rule (an override''s, a risk accepted): the text rule with 1 to 2000 characters (no hidden character), at least 20 once each run of spaces is one space and the ends are trimmed, and at least 5 different characters that are not spaces. False for null. The same as core''s vendorRiskOverrideReasonOk. Never change it in place once a row is stored. No API role may call it.';
+
+-- A name these functions copy into a row (the supplier's, a person's), as
+-- plain text: the hidden characters taken out, each run of spaces one space,
+-- the ends trimmed, at most p_max characters; null when nothing is left.
+create function public._supplier_risk_plain_name(p_text text, p_max integer)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select nullif(pg_catalog.rtrim(pg_catalog.left(pg_catalog.btrim(pg_catalog.regexp_replace(
+           pg_catalog.regexp_replace(p_text, public._supplier_risk_hidden_chars(), '', 'g'),
+           public._supplier_risk_space_chars() || '+', ' ', 'g'), ' '), p_max), ' '), '');
+$$;
+
+revoke all on function public._supplier_risk_plain_name(text, integer) from public, anon, authenticated, service_role;
+
+comment on function public._supplier_risk_plain_name(text, integer) is
+  'Private (0481). A name as plain text for a row of these tables: the hidden characters taken out, each run of spaces one space, the ends trimmed, at most p_max characters; null when nothing is left (or for null). What it gives always passes the text rule. No API role may call it.';
 
 -- ── The answers check ────────────────────────────────────────────────────────
 -- What is wrong with these answers, as a fixed word, or null when nothing is.
@@ -347,14 +448,22 @@ comment on function public._supplier_risk_reason_ok(text) is
 -- null, "date": 'YYYY-MM-DD' or null} and no other field; only keys of
 -- questions asked at the level; a date only where the question takes one,
 -- a real date from 2000-01-01 to 2100-12-31; a note by the text rule, 1 to
--- 1000 characters. p_final: every question asked at the level is answered.
--- Core's vendorRiskAnswersProblem gives the same words. Used by the reviews
--- table's CHECK, so every row on every path is held to it.
+-- 1000 characters. Beside a question whose date is judged (the security
+-- report, insurance): a date later than p_utc_today plus one day is refused
+-- (answer_date_in_future, whatever the answer; null p_utc_today: not judged),
+-- and with p_final a Yes needs its date (answer_date_missing). p_final:
+-- every question asked at the level is answered. Core's
+-- vendorRiskAnswersProblem gives the same words, in the same order. Used by
+-- the reviews table's CHECK (p_utc_today: the UTC day of reviewed_at, so a
+-- draft's dates are judged at its saves only), so every row on every path is
+-- held to it. NEVER CHANGE IT IN PLACE once a review is stored: the CHECK
+-- runs again at every update (see the text rule).
 create function public._supplier_risk_answers_problem(
   p_rules_version smallint,
   p_level text,
   p_answers jsonb,
-  p_final boolean
+  p_final boolean,
+  p_utc_today date
 )
 returns text
 language plpgsql
@@ -420,6 +529,15 @@ begin
       if v_d < date '2000-01-01' or v_d > date '2100-12-31' then
         return 'answer_bad_date';
       end if;
+      -- A judged date later than tomorrow in UTC (whatever the answer).
+      if v_q.date_max_months is not null and p_utc_today is not null and v_d > p_utc_today + 1 then
+        return 'answer_date_in_future';
+      end if;
+    end if;
+    -- A finished Yes to a question whose date is judged needs its date.
+    if p_final and v_q.date_max_months is not null and (v_val ->> 'answer') = 'yes'
+       and coalesce(pg_catalog.jsonb_typeof(v_val -> 'date'), 'null') = 'null' then
+      return 'answer_date_missing';
     end if;
   end loop;
 
@@ -434,18 +552,20 @@ begin
 end;
 $$;
 
-revoke all on function public._supplier_risk_answers_problem(smallint, text, jsonb, boolean) from public, anon, authenticated, service_role;
+revoke all on function public._supplier_risk_answers_problem(smallint, text, jsonb, boolean, date) from public, anon, authenticated, service_role;
 
-comment on function public._supplier_risk_answers_problem(smallint, text, jsonb, boolean) is
-  'Private (0481). What is wrong with a review''s answers, as a fixed word, or null: bad_rules_version, bad_data_level, answers_not_an_object, answer_unknown_question, answer_not_applicable, answer_bad_shape, answer_bad_value, answer_bad_note, answer_date_not_allowed, answer_bad_date, answers_incomplete (p_final, an asked question unanswered). The same words as core''s vendorRiskAnswersProblem. Used by the reviews table''s CHECK. No API role may call it.';
+comment on function public._supplier_risk_answers_problem(smallint, text, jsonb, boolean, date) is
+  'Private (0481). What is wrong with a review''s answers, as a fixed word, or null: bad_rules_version, bad_data_level, answers_not_an_object, answer_unknown_question, answer_not_applicable, answer_bad_shape, answer_bad_value, answer_bad_note, answer_date_not_allowed, answer_bad_date, answer_date_in_future (a date beside the security report or insurance later than p_utc_today plus one day), answer_date_missing (p_final, a Yes to the security report or insurance with no date), answers_incomplete (p_final, an asked question unanswered). The same words as core''s vendorRiskAnswersProblem. Used by the reviews table''s CHECK. Never change it in place once a review is stored. No API role may call it.';
 
 -- ── The rules ────────────────────────────────────────────────────────────────
 -- Core's evaluateVendorRisk, the same rules (rules.ts has them in words),
 -- version 1: starting risk from the level; a Yes to a question whose date is
 -- judged (the security report, insurance), dated more than its months
 -- before p_review_on, counts as Not shown and is listed as out of date (no
--- date, or no p_review_on: not judged); a gap is an asked question answered
--- No or Not shown (an unanswered one counts as Not shown); evidence
+-- p_review_on: not judged; no date: not judged here, and never in a stored
+-- final, which the answers check holds to have it); a gap is an asked
+-- question answered No or Not shown (an unanswered one counts as Not
+-- shown); evidence
 -- not_needed (nothing asked), insufficient (a key paper Not shown, or more
 -- than half Not shown), weak (a key paper No, or three gaps or more),
 -- adequate (one or two gaps), strong (none); with student data a hard stop
@@ -724,9 +844,11 @@ create table public.supplier_risk_reviews (
     check (data_level in ('none', 'staff', 'student')),
   constraint supplier_risk_reviews_current_is_final
     check (not is_current or status = 'final'),
-  -- The answers, against the fixed list: every row, every path.
+  -- The answers, against the fixed list: every row, every path; a final's
+  -- dates against the UTC day it was finished on (a draft has none).
   constraint supplier_risk_reviews_answers
-    check (public._supplier_risk_answers_problem(rules_version, data_level, answers, status = 'final') is null),
+    check (public._supplier_risk_answers_problem(rules_version, data_level, answers, status = 'final',
+                                                 (reviewed_at at time zone 'UTC')::date) is null),
   -- A draft has no result, review time, next date, override or reminder; a
   -- final has all that the rules give, equal to the rules applied to its
   -- answers, and its time and next date.
@@ -754,10 +876,11 @@ create table public.supplier_risk_reviews (
             and override_result in ('approve', 'approve_with_conditions', 'more_information', 'do_not_use')
             and override_result is distinct from computed_result
             and public._supplier_risk_reason_ok(override_reason))),
+  -- The names kept beside a link: plain text by the text rule.
   constraint supplier_risk_reviews_supplier_name
-    check (char_length(supplier_name) between 1 and 300),
+    check (public._supplier_risk_text_ok(supplier_name, 1, 300)),
   constraint supplier_risk_reviews_reviewer_name
-    check (char_length(reviewer_name) between 1 and 200),
+    check (public._supplier_risk_text_ok(reviewer_name, 1, 200)),
   constraint supplier_risk_reviews_next_review_on
     check (next_review_on is null or next_review_on between date '2000-01-01' and date '2200-12-31')
 );
@@ -851,7 +974,7 @@ create table public.supplier_risk_items (
   constraint supplier_risk_items_action
     check (public._supplier_risk_text_ok(action, 1, 1000)),
   constraint supplier_risk_items_owner_name
-    check (owner_name is null or char_length(owner_name) between 1 and 200),
+    check (owner_name is null or public._supplier_risk_text_ok(owner_name, 1, 200)),
   -- An owner is always named; a name with no link is an owner whose account
   -- was deleted.
   constraint supplier_risk_items_owner_named
@@ -859,12 +982,12 @@ create table public.supplier_risk_items (
   constraint supplier_risk_items_due_on
     check (due_on is null or due_on between date '2000-01-01' and date '2200-12-31'),
   constraint supplier_risk_items_changed_by_name
-    check (char_length(changed_by_name) between 1 and 200),
+    check (public._supplier_risk_text_ok(changed_by_name, 1, 200)),
   -- Accepted exactly when there is a reason and the name of who accepted it.
   constraint supplier_risk_items_accepted
     check ((status = 'accepted') = (accepted_reason is not null and accepted_by_name is not null)
        and (accepted_by is null or accepted_by_name is not null)
-       and (accepted_by_name is null or char_length(accepted_by_name) between 1 and 200)
+       and (accepted_by_name is null or public._supplier_risk_text_ok(accepted_by_name, 1, 200))
        and (accepted_reason is null or public._supplier_risk_reason_ok(accepted_reason)))
 );
 
@@ -885,7 +1008,7 @@ comment on column public.supplier_risk_items.owner_name is
 comment on column public.supplier_risk_items.changed_by_name is
   'Who changed the item last (at first, who finished its review), as their name (or email) was then: kept when the account is deleted.';
 comment on column public.supplier_risk_items.accepted_reason is
-  'Why the risk was accepted (the reason rule: 20 to 2000 characters, not one character repeated). Present exactly when the status is accepted, with accepted_by_name.';
+  'Why the risk was accepted (the reason rule: at most 2000 characters with no hidden character, at least 20 once each run of spaces is one, at least 5 different). Present exactly when the status is accepted, with accepted_by_name.';
 
 -- RLS on and no policy: no API role reads or writes a row directly.
 alter table public.supplier_risk_reviews enable row level security;
@@ -976,23 +1099,24 @@ create trigger supplier_risk_items_kept
   for each row execute function public._supplier_risk_items_guard();
 
 -- ── People ───────────────────────────────────────────────────────────────────
--- A person's name as a review or an item keeps it.
+-- A person's name as a review or an item keeps it, as plain text.
 create function public._supplier_risk_person_name(p_user_id uuid)
 returns text
 language sql
 stable
 set search_path = ''
 as $$
-  select pg_catalog.left(coalesce(
-           (select coalesce(nullif(pg_catalog.btrim(p.full_name), ''), nullif(pg_catalog.btrim(p.email::text), ''))
+  select coalesce(
+           (select coalesce(public._supplier_risk_plain_name(p.full_name, 200),
+                            public._supplier_risk_plain_name(p.email::text, 200))
               from public.user_profiles p where p.id = p_user_id),
-           'Unknown'), 200);
+           'Unknown');
 $$;
 
 revoke all on function public._supplier_risk_person_name(uuid) from public, anon, authenticated, service_role;
 
 comment on function public._supplier_risk_person_name(uuid) is
-  'Private (0481). A person''s name for a snapshot: their full name, else their email, else Unknown, at most 200 characters. SECURITY INVOKER: its callers run as their owner. No API role may call it.';
+  'Private (0481). A person''s name for a snapshot, as plain text (_supplier_risk_plain_name): their full name, else their email, else Unknown, at most 200 characters. SECURITY INVOKER: its callers run as their owner. No API role may call it.';
 
 -- Is this person a current owner or admin of the organization: an accepted
 -- membership with the role owner or admin that is not an act-as seat, on an
@@ -1134,7 +1258,7 @@ begin
            coalesce(s.name, ln.supplier_name),
            c.supplier_name,
            coalesce(s.id is not null and c.id is not null
-                    and pg_catalog.left(coalesce(nullif(pg_catalog.btrim(s.name), ''), '(no name)'), 300)
+                    and coalesce(public._supplier_risk_plain_name(s.name, 300), '(no name)')
                         is distinct from c.supplier_name, false),
            case when s.id is null then 'deleted' when s.deleted_at is not null then 'archived' else 'active' end,
            s.deleted_at,
@@ -1372,7 +1496,7 @@ begin
   return query
     select i.id, i.review_id, r.supplier_id, coalesce(s.name, r.supplier_name), r.supplier_name,
            coalesce(s.id is not null
-                    and pg_catalog.left(coalesce(nullif(pg_catalog.btrim(s.name), ''), '(no name)'), 300)
+                    and coalesce(public._supplier_risk_plain_name(s.name, 300), '(no name)')
                         is distinct from r.supplier_name, false),
            case when s.id is null then 'deleted' when s.deleted_at is not null then 'archived' else 'active' end,
            i.question_key, i.answer, i.severity, i.finding, i.action, i.owner_user_id, i.owner_name,
@@ -1452,12 +1576,12 @@ begin
     raise exception 'supplier_archived' using errcode = '22023', hint = 'supplier_archived';
   end if;
 
-  v_problem := public._supplier_risk_answers_problem(1::smallint, p_data_level, p_answers, false);
+  v_problem := public._supplier_risk_answers_problem(1::smallint, p_data_level, p_answers, false, (pg_catalog.now() at time zone 'UTC')::date);
   if v_problem is not null then
     raise exception '%', v_problem using errcode = '22023', hint = v_problem;
   end if;
 
-  v_name := pg_catalog.left(coalesce(nullif(pg_catalog.btrim(v_name), ''), '(no name)'), 300);
+  v_name := coalesce(public._supplier_risk_plain_name(v_name, 300), '(no name)');
 
   update public.supplier_risk_reviews r
      set data_level = p_data_level,
@@ -1490,7 +1614,7 @@ revoke all on function public.supplier_risk_draft_save(uuid, uuid, text, jsonb) 
 grant execute on function public.supplier_risk_draft_save(uuid, uuid, text, jsonb) to authenticated;
 
 comment on function public.supplier_risk_draft_save(uuid, uuid, text, jsonb) is
-  'Writes the one draft review of a supplier (0481): updates it when there is one, else makes version max + 1; keeps the caller as the reviewer and the supplier''s name. Answers may be partial (every given key must be asked at the level). Returns {review_id, version, updated_at}. 42501 supplier_risk_not_allowed (not an admin or owner of the organization), mfa_required, aal2_required, supplier_risk_act_as_read_only (a support seat); 22023 supplier_not_found (none, or of another organization), supplier_archived, and the answer words of _supplier_risk_answers_problem (bad_data_level, answers_not_an_object, answer_unknown_question, answer_not_applicable, answer_bad_shape, answer_bad_value, answer_bad_note, answer_date_not_allowed, answer_bad_date). Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
+  'Writes the one draft review of a supplier (0481): updates it when there is one, else makes version max + 1; keeps the caller as the reviewer and the supplier''s name (as plain text: hidden characters out, each run of spaces one space). Answers may be partial (every given key must be asked at the level; a Yes may wait for its date), and a date beside the security report or insurance may be at most one day after today in UTC. Returns {review_id, version, updated_at}. 42501 supplier_risk_not_allowed (not an admin or owner of the organization), mfa_required, aal2_required, supplier_risk_act_as_read_only (a support seat); 22023 supplier_not_found (none, or of another organization), supplier_archived, and the answer words of _supplier_risk_answers_problem (bad_data_level, answers_not_an_object, answer_unknown_question, answer_not_applicable, answer_bad_shape, answer_bad_value, answer_bad_note, answer_date_not_allowed, answer_bad_date, answer_date_in_future). Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
 
 create function public.supplier_risk_finalise(
   p_organization_id uuid,
@@ -1555,9 +1679,9 @@ begin
   if v_archived is not null then
     raise exception 'supplier_archived' using errcode = '22023', hint = 'supplier_archived';
   end if;
-  v_name := pg_catalog.left(coalesce(nullif(pg_catalog.btrim(v_name), ''), '(no name)'), 300);
+  v_name := coalesce(public._supplier_risk_plain_name(v_name, 300), '(no name)');
 
-  v_problem := public._supplier_risk_answers_problem(1::smallint, p_data_level, p_answers, true);
+  v_problem := public._supplier_risk_answers_problem(1::smallint, p_data_level, p_answers, true, (pg_catalog.now() at time zone 'UTC')::date);
   if v_problem is not null then
     raise exception '%', v_problem using errcode = '22023', hint = v_problem;
   end if;
@@ -1724,7 +1848,7 @@ revoke all on function public.supplier_risk_finalise(uuid, uuid, text, jsonb, da
 grant execute on function public.supplier_risk_finalise(uuid, uuid, text, jsonb, date, text, text, jsonb) to authenticated;
 
 comment on function public.supplier_risk_finalise(uuid, uuid, text, jsonb, date, text, text, jsonb) is
-  'Finishes a supplier''s review in one transaction (0481): the open draft (or a new version) becomes final and current with these answers (every question asked at the level answered), what the database''s rules give on the organization''s today (never a result sent to it; a security report or insurance dated more than 12 months before today counts as Not shown, out of date), the override and its reason if any, the caller as the reviewer, now, and the next review date (p_next_review_on after today and at most 3 years ahead, days in the organization''s zone; null: 12 months, 6 with student data); the review that was current becomes history; one item is written for each gap from p_items, an array of {question_key, finding, action, owner_user_id (a current owner or admin, or null), due_on (today to 3 years ahead, or null)} with exactly one element for each gap the rules found (No, Not shown, or out of date) and no other field (the severity and the answer are the rules''; the caller is written as who changed each item last). Returns {review_id, version, superseded_review_id, starting_risk, evidence, residual_risk, hard_stops, pending_hard_stops, out_of_date, computed_result, override_result, result, next_review_on, items}. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only; 22023 supplier_not_found, supplier_archived, the answer words (answers_incomplete included), bad_next_review_on, bad_override (no result, not one of the four, or the computed one; or a reason with no result), bad_override_reason (20 to 2000 characters of plain text, not one character repeated), items_not_an_array, items_do_not_match_answers, bad_item, bad_item_text (finding 1 to 500, action 1 to 1000), item_owner_not_an_admin, bad_item_due_on. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
+  'Finishes a supplier''s review in one transaction (0481): the open draft (or a new version) becomes final and current with these answers (every question asked at the level answered; a Yes to the security report or insurance with the date on the document, at most one day after today in UTC), what the database''s rules give on the organization''s today (never a result sent to it; a security report or insurance dated more than 12 months before today counts as Not shown, out of date), the override and its reason if any, the caller as the reviewer, now, and the next review date (p_next_review_on after today and at most 3 years ahead, days in the organization''s zone; null: 12 months, 6 with student data); the review that was current becomes history; one item is written for each gap from p_items, an array of {question_key, finding, action, owner_user_id (a current owner or admin, or null), due_on (today to 3 years ahead, or null)} with exactly one element for each gap the rules found (No, Not shown, or out of date) and no other field (the severity and the answer are the rules''; the caller is written as who changed each item last). Returns {review_id, version, superseded_review_id, starting_risk, evidence, residual_risk, hard_stops, pending_hard_stops, out_of_date, computed_result, override_result, result, next_review_on, items}. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only; 22023 supplier_not_found, supplier_archived, the answer words (answer_date_in_future, answer_date_missing and answers_incomplete included), bad_next_review_on, bad_override (no result, not one of the four, or the computed one; or a reason with no result), bad_override_reason (the reason rule: 1 to 2000 characters with no hidden character, at least 20 once each run of spaces is one, at least 5 different), items_not_an_array, items_do_not_match_answers, bad_item, bad_item_text (finding 1 to 500, action 1 to 1000), item_owner_not_an_admin, bad_item_due_on. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
 
 create function public.supplier_risk_draft_discard(p_organization_id uuid, p_supplier_id uuid)
 returns boolean
@@ -2150,6 +2274,7 @@ comment on function public.supplier_risk_due_reminder_sent(uuid) is
 --   drop function if exists public._supplier_risk_caller_is_act_as(uuid);
 --   drop function if exists public._supplier_risk_is_current_admin(uuid, uuid);
 --   drop function if exists public._supplier_risk_person_name(uuid);
+--   drop function if exists public._supplier_risk_plain_name(text, integer);
 --   drop function if exists public._supplier_risk_org_zone(uuid);
 --   drop function if exists public._supplier_risk_default_next_review(text, date);
 --   drop table if exists public.supplier_risk_items;
@@ -2158,9 +2283,11 @@ comment on function public.supplier_risk_due_reminder_sent(uuid) is
 --   drop function if exists public._supplier_risk_reviews_guard();
 --   drop function if exists public._supplier_risk_computed_ok(smallint, text, jsonb, date, text, text, text, text[], text);
 --   drop function if exists public._supplier_risk_evaluate(smallint, text, jsonb, date);
---   drop function if exists public._supplier_risk_answers_problem(smallint, text, jsonb, boolean);
+--   drop function if exists public._supplier_risk_answers_problem(smallint, text, jsonb, boolean, date);
 --   drop function if exists public._supplier_risk_reason_ok(text);
 --   drop function if exists public._supplier_risk_text_ok(text, integer, integer);
+--   drop function if exists public._supplier_risk_space_chars();
+--   drop function if exists public._supplier_risk_hidden_chars();
 --   drop function if exists public._supplier_risk_question_key_ok(text);
 --   drop function if exists public._supplier_risk_questions();
 --   commit;

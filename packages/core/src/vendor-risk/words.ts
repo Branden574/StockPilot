@@ -61,11 +61,11 @@ export const VENDOR_RISK_RULES_TEXT: readonly string[] = [
   'A gap is a question answered No or Not shown to us. Not shown to us is never counted as Yes.',
   'Starting risk comes from what they hold: Low with no data of ours, Moderate with staff contact details, High with student data.',
   `Evidence is Not enough to judge when a key paper (${VENDOR_RISK_KEY_PAPERS_WORDS}) was not shown to us, or more than half the answers were not shown to us; Weak when a key paper is No or there are three gaps or more; Adequate with one or two gaps; Strong with none.`,
-  'A security report or proof of insurance dated more than 12 months before the review counts as Not shown to us (out of date), and its item says so.',
+  'A Yes for the security report or proof of insurance needs the date on the document, and that date cannot be in the future. One dated more than 12 months before the review counts as Not shown to us (out of date), and its item says so.',
   'With student data, seven answers stop the review on their own: no signed data agreement; no time for telling us about a breach; a contract that does not keep student data under our direct control, does not limit its use to the service we buy, or does not forbid passing it on without our permission; a contract that does not forbid selling student data or using it for advertising; a contract that does not forbid using it to train AI.',
   'Risk left is High when one of those applies; Low when the evidence is Strong or not needed; one step below the starting risk when it is Adequate; the starting risk otherwise.',
   'The result is Do not use when one of those seven applies; More information needed when one of them was not shown to us (so any Student data question not shown to us), the evidence is Not enough to judge, or there are more than three gaps; Approve only when every answer is Yes; Approve with conditions otherwise, and the items are the conditions.',
-  'You can set a different result. Write down why, in at least 20 characters: the reason is kept with the review.',
+  'You can set a different result. Write down why, in at least 20 characters with at least 5 different ones: the reason is kept with the review.',
   'The rules are versioned: a review keeps the rules version it was judged under.',
 ];
 
@@ -119,23 +119,28 @@ export const VENDOR_RISK_REFUSAL_WORDS: Readonly<Record<VendorRiskRefusal, strin
     'One answer is for a question that is not asked for what they hold. Clear it and try again.',
   answer_bad_shape: 'One answer could not be read. Reload the page and try again.',
   answer_bad_value: 'Answer each question Yes, No or Not shown to us.',
-  answer_bad_note: 'A note must be 1 to 1,000 characters of plain text.',
+  answer_bad_note: 'A note must be 1 to 1,000 characters of plain text, with no hidden characters.',
   answer_date_not_allowed: 'One answer has a date where the question takes none.',
   answer_bad_date: 'A date must be a real date between 2000 and 2100.',
+  answer_date_in_future:
+    'The date beside the security report or the insurance cannot be in the future. Give the date on the document.',
+  answer_date_missing:
+    'Give the date on the document beside a Yes for the security report and for the insurance.',
   answers_incomplete: 'Answer every question before you finish the review.',
   supplier_not_found: 'This supplier was not found in this workspace.',
   supplier_archived: 'This supplier is archived. Restore it to review it.',
   bad_next_review_on: 'The next review must be after today and within three years.',
   bad_override: 'Choose a different result from the one the rules give, or none.',
   bad_override_reason:
-    'Write why you set a different result: 20 to 2,000 characters of plain text, not one character repeated.',
+    'Write why you set a different result: 20 to 2,000 characters of plain text with at least 5 different ones, and no hidden characters.',
   items_not_an_array: 'The items could not be read. Reload the page and try again.',
   bad_item: 'One item could not be read. Reload the page and try again.',
-  bad_item_text: 'A finding must be 1 to 500 characters and an action 1 to 1,000, in plain text.',
+  bad_item_text:
+    'A finding must be 1 to 500 characters and an action 1 to 1,000, in plain text with no hidden characters.',
   items_do_not_match_answers: 'The items do not match the answers. Reload the page and try again.',
   item_owner_not_an_admin: 'An item owner must be a current owner or admin of this workspace.',
   bad_item_reason:
-    'Write why the risk is accepted: 20 to 2,000 characters of plain text, not one character repeated. A reason goes only with Risk accepted.',
+    'Write why the risk is accepted: 20 to 2,000 characters of plain text with at least 5 different ones, and no hidden characters. A reason goes only with Risk accepted.',
   bad_item_due_on: 'A due date must be today or later, and within three years.',
   bad_item_status: 'Choose Open, In progress, Done or Risk accepted.',
   item_not_found: 'This item was not found in this workspace.',

@@ -12,7 +12,7 @@
 --   2. Privileges, for anon, authenticated and service_role on every object:
 --      no table privilege for any of them and none to PUBLIC; the eight admin
 --      functions EXECUTE to authenticated only, the three job functions to
---      service_role only, the fifteen helpers to nobody; SECURITY DEFINER
+--      service_role only, the eighteen helpers to nobody; SECURITY DEFINER
 --      exactly for the eleven; search_path pinned on all; reads STABLE; the
 --      security invariants' INV-25 finds every authenticated function gated.
 --   3. The question list (the core list's twin) and the rules: the case table
@@ -64,6 +64,13 @@
 --      S4 an item's owner an owner or admin; S6 a support seat reads and never
 --      writes; Q4 the thresholds and the dates beside the answers; Q7 the due
 --      reminder's second chance and its confirmation.
+--  13. The review of ccbf4d094 (round 2): R2-S1 no stored text holds a hidden
+--      character (one list, checked at every code point that holds one), a
+--      reason counts what can be seen (spaces collapsed, 20 and 5 different),
+--      the names the functions copy are plain text, and an account deletion
+--      succeeds for rows holding texts at the edges of the rules; R2-S2 a Yes
+--      on the security report or the insurance needs its date, never one
+--      later than tomorrow in UTC (the dated cases table, run by core too).
 --
 -- Every vendor, person and organization below is made up. Namespace
 -- a0481000. Wrapped in begin/rollback: nothing leaks. Run via `supabase test
@@ -71,7 +78,7 @@
 
 begin;
 
-select plan(155);
+select plan(170);
 
 set local timezone = 'UTC';
 
@@ -194,16 +201,23 @@ $f$;
 
 -- The answers of a review: every question asked at the level Yes, then the
 -- overrides ({key: no | not_shown | yes | missing}, any of the first three
--- with "@YYYY-MM-DD" for the date beside it; missing leaves it out).
-create function pg_temp.answers(p_level text, p_over jsonb default '{}') returns jsonb language sql as $f$
+-- with "@YYYY-MM-DD" for the date beside it, or a bare "@" for none; missing
+-- leaves it out). A Yes to a question whose date is judged (the security
+-- report, insurance) given without "@" has the date p_dated_on beside it, as
+-- a finished review needs (by default today in UTC; null: none).
+create function pg_temp.answers(p_level text, p_over jsonb default '{}', p_dated_on date default current_date)
+returns jsonb language sql as $f$
   select coalesce(jsonb_object_agg(k.key, jsonb_build_object('answer', split_part(k.a, '@', 1))
-                                          || case when k.a like '%@%' then jsonb_build_object('date', split_part(k.a, '@', 2))
+                                          || case when k.a like '%@_%' then jsonb_build_object('date', split_part(k.a, '@', 2))
+                                                  when k.a = 'yes' and k.judged and p_dated_on is not null
+                                                    then jsonb_build_object('date', p_dated_on::text)
                                                   else '{}'::jsonb end), '{}'::jsonb)
-    from (select q.key, coalesce(p_over ->> q.key, 'yes') as a
+    from (select q.key, coalesce(p_over ->> q.key, 'yes') as a, q.date_max_months is not null as judged
             from public._supplier_risk_questions() q
            where p_level <> 'none' and (not q.student_only or p_level = 'student')
           union all
-          select o.key, o.value #>> '{}'
+          select o.key, o.value #>> '{}',
+                 coalesce((select q.date_max_months is not null from public._supplier_risk_questions() q where q.key = o.key), false)
             from jsonb_each(p_over) o
            where not exists (select 1 from public._supplier_risk_questions() q
                               where q.key = o.key and p_level <> 'none'
@@ -249,8 +263,8 @@ returns void language sql as $f$
          e ->> 'starting_risk', e ->> 'evidence', e ->> 'residual_risk',
          array(select jsonb_array_elements_text(e -> 'hard_stops')), e ->> 'result',
          null, 'Made-up Reviewer', p_reviewed, a.day, p_next, p_r30, p_rdue
-    from (select pg_temp.answers('staff', '{"insurance": "no"}') as ans,
-                 (p_reviewed at time zone public._supplier_risk_org_zone(p_org))::date as day) a,
+    from (select d.day, pg_temp.answers('staff', '{"insurance": "no"}', d.day) as ans
+            from (select (p_reviewed at time zone public._supplier_risk_org_zone(p_org))::date as day) d) a,
          lateral public._supplier_risk_evaluate(1::smallint, 'staff', a.ans, a.day) e;
 $f$;
 
@@ -439,9 +453,12 @@ insert into vr_fns values
   ('public.supplier_risk_due_reminder_sent(uuid)', 'job_write'),
   ('public._supplier_risk_questions()', 'private'),
   ('public._supplier_risk_question_key_ok(text)', 'private'),
+  ('public._supplier_risk_hidden_chars()', 'private'),
+  ('public._supplier_risk_space_chars()', 'private'),
   ('public._supplier_risk_text_ok(text, integer, integer)', 'private'),
   ('public._supplier_risk_reason_ok(text)', 'private'),
-  ('public._supplier_risk_answers_problem(smallint, text, jsonb, boolean)', 'private'),
+  ('public._supplier_risk_plain_name(text, integer)', 'private'),
+  ('public._supplier_risk_answers_problem(smallint, text, jsonb, boolean, date)', 'private'),
   ('public._supplier_risk_evaluate(smallint, text, jsonb, date)', 'private'),
   ('public._supplier_risk_computed_ok(smallint, text, jsonb, date, text, text, text, text[], text)', 'private'),
   ('public._supplier_risk_default_next_review(text, date)', 'private'),
@@ -458,7 +475,7 @@ select is(
     where p.pronamespace = 'public'::regnamespace
       and (p.proname like 'supplier\_risk\_%' or p.proname like '\_supplier\_risk\_%')),
   (select array_agg(f.fn::text order by f.fn::text) from vr_fns f),
-  '0481/19: the file makes exactly these twenty-six functions');
+  '0481/19: the file makes exactly these twenty-nine functions');
 select is(
   (select string_agg(f.fn::text || '=' || pg_temp.grants_of(f.fn), ' ; ' order by f.fn::text)
      from vr_fns f where pg_temp.grants_of(f.fn) <> case f.kind when 'admin_read' then 'authenticated:EXECUTE'
@@ -467,7 +484,7 @@ select is(
                                                                 when 'job_write' then 'service_role:EXECUTE'
                                                                 else '' end),
   null,
-  '0481/20: the eight admin functions have exactly one grant, EXECUTE to authenticated; the three job functions exactly EXECUTE to service_role; the fifteen helpers none (nothing to PUBLIC)');
+  '0481/20: the eight admin functions have exactly one grant, EXECUTE to authenticated; the three job functions exactly EXECUTE to service_role; the eighteen helpers none (nothing to PUBLIC)');
 select is(
   (select array_agg(f.kind || ':' || has_function_privilege(r.role, f.fn, 'execute')::text order by f.kind, r.n)
      from (select distinct on (kind) kind, fn from vr_fns order by kind, fn::text) f,
@@ -489,7 +506,7 @@ select is(
                                          when 'job_write' then r.role = 'service_role'
                                          else false end))),
   0,
-  '0481/22: every one of the twenty-six, for each of anon, authenticated and service_role, has exactly the EXECUTE its kind says');
+  '0481/22: every one of the twenty-nine, for each of anon, authenticated and service_role, has exactly the EXECUTE its kind says');
 select is(
   (select string_agg(p.proname, ',' order by p.proname) from pg_proc p join vr_fns f on f.fn = p.oid where p.prosecdef),
   'supplier_risk_draft_discard,supplier_risk_draft_save,supplier_risk_due_reminder_sent,supplier_risk_finalise,supplier_risk_history,'
@@ -645,7 +662,7 @@ insert into vr_cases (n, level, answers, starting_risk, evidence, residual_risk,
 select is(
   (select string_agg(c.n || ': ' || coalesce(e::text, 'null'), ' ; ' order by c.n)
      from vr_cases c,
-          lateral (select public._supplier_risk_evaluate(1::smallint, c.level, pg_temp.answers(c.level, c.answers), date '2026-06-30')
+          lateral (select public._supplier_risk_evaluate(1::smallint, c.level, pg_temp.answers(c.level, c.answers, null), date '2026-06-30')
                           - 'pending_hard_stops' - 'gaps') x(e)
     where e is distinct from jsonb_build_object(
             'starting_risk', c.starting_risk, 'evidence', c.evidence, 'residual_risk', c.residual_risk,
@@ -705,65 +722,81 @@ select is(
 
 -- ── 4. The answers check and the text rule ──────────────────────────────────
 select is(
-  array[public._supplier_risk_answers_problem(1::smallint, 'staff', pg_temp.answers('staff'), true),
-        public._supplier_risk_answers_problem(1::smallint, 'student', pg_temp.answers('student'), true),
-        public._supplier_risk_answers_problem(1::smallint, 'none', '{}', true),
-        public._supplier_risk_answers_problem(1::smallint, 'staff', '{}', false),
+  array[public._supplier_risk_answers_problem(1::smallint, 'staff', pg_temp.answers('staff'), true, current_date),
+        public._supplier_risk_answers_problem(1::smallint, 'student', pg_temp.answers('student'), true, current_date),
+        public._supplier_risk_answers_problem(1::smallint, 'none', '{}', true, current_date),
+        public._supplier_risk_answers_problem(1::smallint, 'staff', '{}', false, current_date),
         public._supplier_risk_answers_problem(1::smallint, 'student',
           '{"data_agreement": {"answer": "yes", "note": "Signed by both sides.\nOn file.", "date": "2026-03-01"},'
-          ' "insurance": {"answer": "not_shown", "note": null, "date": null}}', false)],
+          ' "insurance": {"answer": "not_shown", "note": null, "date": null}}', false, current_date)],
   array[null, null, null, null, null]::text[],
-  '0481/40: complete answers at each level, an empty draft, and notes and dates where they belong are taken');
+  '0481/40: complete answers at each level (a Yes on the security report and the insurance with its date), an empty draft, and notes and dates where they belong are taken');
 -- The answer-problem table: vendor-risk.parity.test.ts reads these same rows
--- and runs core's vendorRiskAnswersProblem on them (null: taken). Where an
--- object has two wrong keys, the shorter key is read first (jsonb's order;
--- core sorts the same way): rows 32 and 35.
-create temporary table vr_problems (n integer primary key, level text, answers text, final boolean, problem text) on commit drop;
+-- and runs core's vendorRiskAnswersProblem on them (null: taken), with today
+-- in UTC as the row gives it (null: no date judged as in the future). Where
+-- an object has two wrong keys, the shorter key is read first (jsonb's
+-- order; core sorts the same way): rows 32, 35, 48 and 49.
+create temporary table vr_problems (n integer primary key, level text, answers text, final boolean, today date, problem text) on commit drop;
 -- VENDOR RISK ANSWER PROBLEMS BEGIN
-insert into vr_problems (n, level, answers, final, problem) values
-  (1, 'staff', null, false, 'answers_not_an_object'),
-  (2, 'staff', '[]', false, 'answers_not_an_object'),
-  (3, 'staff', '"yes"', false, 'answers_not_an_object'),
-  (4, 'staff', '{"data_listd": {"answer": "yes"}}', false, 'answer_unknown_question'),
-  (5, 'staff', '{"direct_control": {"answer": "yes"}}', false, 'answer_not_applicable'),
-  (6, 'none', '{"insurance": {"answer": "yes"}}', false, 'answer_not_applicable'),
-  (7, 'staff', '{"insurance": "yes"}', false, 'answer_bad_shape'),
-  (8, 'staff', '{"insurance": {"answer": "yes", "source": "web"}}', false, 'answer_bad_shape'),
-  (9, 'staff', '{"insurance": {"note": "no answer"}}', false, 'answer_bad_value'),
-  (10, 'staff', '{"insurance": {"answer": "maybe"}}', false, 'answer_bad_value'),
-  (11, 'staff', '{"insurance": {"answer": "YES"}}', false, 'answer_bad_value'),
-  (12, 'staff', '{"insurance": {"answer": true}}', false, 'answer_bad_value'),
-  (13, 'staff', '{"insurance": {"answer": "yes", "note": ""}}', false, 'answer_bad_note'),
-  (14, 'staff', '{"insurance": {"answer": "yes", "note": "   "}}', false, 'answer_bad_note'),
-  (15, 'staff', '{"insurance": {"answer": "yes", "note": 5}}', false, 'answer_bad_note'),
-  (16, 'staff', '{"hosting_known": {"answer": "yes", "date": "2026-01-01"}}', false, 'answer_date_not_allowed'),
-  (17, 'staff', '{"insurance": {"answer": "yes", "date": "2026-02-30"}}', false, 'answer_bad_date'),
-  (18, 'staff', '{"insurance": {"answer": "yes", "date": "26-01-01"}}', false, 'answer_bad_date'),
-  (19, 'staff', '{"insurance": {"answer": "yes", "date": "1999-12-31"}}', false, 'answer_bad_date'),
-  (20, 'staff', '{"insurance": {"answer": "yes", "date": "2101-01-01"}}', false, 'answer_bad_date'),
-  (21, 'staff', '{"insurance": {"answer": "yes", "date": 20260101}}', false, 'answer_bad_date'),
-  (22, 'staff', '{"insurance": {"answer": "yes"}}', true, 'answers_incomplete'),
-  (23, 'everyone', '{}', false, 'bad_data_level'),
-  (24, 'staff', '{}', false, null),
-  (25, 'none', '{}', true, null),
-  (26, 'student', '{"data_agreement": {"answer": "yes", "note": "Signed by both sides.\nOn file.", "date": "2026-03-01"}, "insurance": {"answer": "not_shown", "note": null, "date": null}}', false, null),
-  (27, 'staff', '{"insurance": {"answer": "no", "date": "2000-01-01"}, "security_report": {"answer": "yes", "date": "2100-12-31"}}', false, null),
-  (28, 'staff', '{"insurance": {"answer": "yes", "date": "2028-02-29"}}', false, null),
-  (29, 'staff', '{"insurance": {"answer": "yes", "date": "2027-02-29"}}', false, 'answer_bad_date'),
-  (30, 'student', '{"direct_control": {"answer": "yes", "note": null}}', false, null),
-  (31, 'staff', '{"insurance": {"answer": "yes", "note": null, "date": null, "extra": null}}', false, 'answer_bad_shape'),
-  (32, 'staff', '{"data_listd": {"answer": "maybe"}, "insurance": {"answer": "yes"}}', false, 'answer_unknown_question'),
-  (33, 'student', '{"insurance": {"answer": "yes", "note": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"}}', false, null),
-  (34, 'student', '{"insurance": {"answer": "yes", "note": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"}}', false, 'answer_bad_note'),
-  (35, 'staff', '{"insurance": {"answer": "maybe"}, "data_listd": {"answer": "yes"}}', false, 'answer_bad_value');
+insert into vr_problems (n, level, answers, final, today, problem) values
+  (1, 'staff', null, false, null, 'answers_not_an_object'),
+  (2, 'staff', '[]', false, null, 'answers_not_an_object'),
+  (3, 'staff', '"yes"', false, null, 'answers_not_an_object'),
+  (4, 'staff', '{"data_listd": {"answer": "yes"}}', false, null, 'answer_unknown_question'),
+  (5, 'staff', '{"direct_control": {"answer": "yes"}}', false, null, 'answer_not_applicable'),
+  (6, 'none', '{"insurance": {"answer": "yes"}}', false, null, 'answer_not_applicable'),
+  (7, 'staff', '{"insurance": "yes"}', false, null, 'answer_bad_shape'),
+  (8, 'staff', '{"insurance": {"answer": "yes", "source": "web"}}', false, null, 'answer_bad_shape'),
+  (9, 'staff', '{"insurance": {"note": "no answer"}}', false, null, 'answer_bad_value'),
+  (10, 'staff', '{"insurance": {"answer": "maybe"}}', false, null, 'answer_bad_value'),
+  (11, 'staff', '{"insurance": {"answer": "YES"}}', false, null, 'answer_bad_value'),
+  (12, 'staff', '{"insurance": {"answer": true}}', false, null, 'answer_bad_value'),
+  (13, 'staff', '{"insurance": {"answer": "yes", "note": ""}}', false, null, 'answer_bad_note'),
+  (14, 'staff', '{"insurance": {"answer": "yes", "note": "   "}}', false, null, 'answer_bad_note'),
+  (15, 'staff', '{"insurance": {"answer": "yes", "note": 5}}', false, null, 'answer_bad_note'),
+  (16, 'staff', '{"hosting_known": {"answer": "yes", "date": "2026-01-01"}}', false, null, 'answer_date_not_allowed'),
+  (17, 'staff', '{"insurance": {"answer": "yes", "date": "2026-02-30"}}', false, null, 'answer_bad_date'),
+  (18, 'staff', '{"insurance": {"answer": "yes", "date": "26-01-01"}}', false, null, 'answer_bad_date'),
+  (19, 'staff', '{"insurance": {"answer": "yes", "date": "1999-12-31"}}', false, null, 'answer_bad_date'),
+  (20, 'staff', '{"insurance": {"answer": "yes", "date": "2101-01-01"}}', false, null, 'answer_bad_date'),
+  (21, 'staff', '{"insurance": {"answer": "yes", "date": 20260101}}', false, null, 'answer_bad_date'),
+  (22, 'staff', '{"insurance": {"answer": "yes", "date": "2026-01-01"}}', true, null, 'answers_incomplete'),
+  (23, 'everyone', '{}', false, null, 'bad_data_level'),
+  (24, 'staff', '{}', false, null, null),
+  (25, 'none', '{}', true, null, null),
+  (26, 'student', '{"data_agreement": {"answer": "yes", "note": "Signed by both sides.\nOn file.", "date": "2026-03-01"}, "insurance": {"answer": "not_shown", "note": null, "date": null}}', false, null, null),
+  (27, 'staff', '{"insurance": {"answer": "no", "date": "2000-01-01"}, "security_report": {"answer": "yes", "date": "2100-12-31"}}', false, null, null),
+  (28, 'staff', '{"insurance": {"answer": "yes", "date": "2028-02-29"}}', false, null, null),
+  (29, 'staff', '{"insurance": {"answer": "yes", "date": "2027-02-29"}}', false, null, 'answer_bad_date'),
+  (30, 'student', '{"direct_control": {"answer": "yes", "note": null}}', false, null, null),
+  (31, 'staff', '{"insurance": {"answer": "yes", "note": null, "date": null, "extra": null}}', false, null, 'answer_bad_shape'),
+  (32, 'staff', '{"data_listd": {"answer": "maybe"}, "insurance": {"answer": "yes"}}', false, null, 'answer_unknown_question'),
+  (33, 'student', '{"insurance": {"answer": "yes", "note": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"}}', false, null, null),
+  (34, 'student', '{"insurance": {"answer": "yes", "note": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn"}}', false, null, 'answer_bad_note'),
+  (35, 'staff', '{"insurance": {"answer": "maybe"}, "data_listd": {"answer": "yes"}}', false, null, 'answer_bad_value'),
+  (36, 'staff', '{"security_report": {"answer": "yes"}}', true, null, 'answer_date_missing'),
+  (37, 'staff', '{"insurance": {"answer": "yes", "date": null}}', true, '2026-06-30', 'answer_date_missing'),
+  (38, 'staff', '{"security_report": {"answer": "yes"}}', false, '2026-06-30', null),
+  (39, 'staff', '{"security_report": {"answer": "no"}, "insurance": {"answer": "not_shown"}}', true, '2026-06-30', 'answers_incomplete'),
+  (40, 'staff', '{"data_agreement": {"answer": "yes"}}', true, '2026-06-30', 'answers_incomplete'),
+  (41, 'staff', '{"insurance": {"answer": "yes", "date": "2026-07-01"}}', false, '2026-06-30', null),
+  (42, 'staff', '{"insurance": {"answer": "yes", "date": "2026-07-02"}}', false, '2026-06-30', 'answer_date_in_future'),
+  (43, 'staff', '{"security_report": {"answer": "no", "date": "2030-01-01"}}', false, '2026-06-30', 'answer_date_in_future'),
+  (44, 'staff', '{"data_agreement": {"answer": "yes", "date": "2030-01-01"}}', false, '2026-06-30', null),
+  (45, 'staff', '{"insurance": {"answer": "yes", "date": "2028-02-29"}}', false, '2028-02-28', null),
+  (46, 'staff', '{"insurance": {"answer": "yes", "date": "2028-03-01"}}', false, '2028-02-28', 'answer_date_in_future'),
+  (47, 'staff', '{"insurance": {"answer": "yes", "date": "2030-01-01"}}', false, null, null),
+  (48, 'staff', '{"security_report": {"answer": "yes"}, "insurance": {"answer": "yes", "date": "2026-07-02"}}', true, '2026-06-30', 'answer_date_in_future'),
+  (49, 'staff', '{"security_report": {"answer": "yes", "date": "2026-07-02"}, "insurance": {"answer": "yes"}}', true, '2026-06-30', 'answer_date_missing'),
+  (50, 'student', '{"insurance": {"answer": "yes", "note": "Seen", "date": "2026-02-30"}}', true, '2026-06-30', 'answer_bad_date');
 -- VENDOR RISK ANSWER PROBLEMS END
 select is(
   (select string_agg(p.n || ': ' || coalesce(x.problem, 'null'), ' ; ' order by p.n)
      from vr_problems p,
-          lateral (select public._supplier_risk_answers_problem(1::smallint, p.level, p.answers::jsonb, p.final)) x(problem)
+          lateral (select public._supplier_risk_answers_problem(1::smallint, p.level, p.answers::jsonb, p.final, p.today)) x(problem)
     where x.problem is distinct from p.problem),
   null,
-  '0481/41: each kind of wrong answer is refused by its own word, and the right ones are taken (the answer-problem table, 35 rows)');
+  '0481/41: each kind of wrong answer is refused by its own word, and the right ones are taken (the answer-problem table, 50 rows)');
 select is(
   (select array_agg(public._supplier_risk_text_ok(t.s, 1, 20) order by t.n)
      from unnest(array['Plain words.', 'Two' || chr(10) || 'lines' || chr(13) || chr(10) || 'and a' || chr(9) || 'tab',
@@ -778,10 +811,10 @@ select is(
         public._supplier_risk_reason_ok('   The vendor fixed it   '),
         public._supplier_risk_reason_ok(chr(9) || 'The vendor fixed it.' || chr(10)),
         public._supplier_risk_reason_ok(repeat('y', 25)), public._supplier_risk_reason_ok('yyyyy yyyyy yyyyy yyyyy'),
-        public._supplier_risk_reason_ok(repeat('yz', 1000)), public._supplier_risk_reason_ok(repeat('yz', 1000) || 'y'),
-        public._supplier_risk_reason_ok(null)],
-  array[true, false, false, true, false, false, true, false, false],
-  '0481/43: a reason is 20 to 2000 characters, counted after trimming the ends, and not one character repeated (spaces, tabs and line breaks aside)');
+        public._supplier_risk_reason_ok(repeat('abcde', 400)), public._supplier_risk_reason_ok(repeat('abcde', 400) || 'y'),
+        public._supplier_risk_reason_ok(null), public._supplier_risk_reason_ok(repeat('yz', 1000))],
+  array[true, false, false, true, false, false, true, false, false, false],
+  '0481/43: a reason is 20 to 2000 characters, counted after trimming the ends, with at least 5 different characters (spaces, tabs and line breaks aside)');
 
 -- The table holds the same rules on its own, for its owner too.
 select is(
@@ -2006,11 +2039,11 @@ select is(
   '2187:0',
   '0481/145: Q4: with student data, every mix of the seven hard-stop answers (the rest Yes): a No is Do not use, else a Not shown is More information needed, else Approve');
 select is(
-  array[public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"insurance": "yes@2023-02-28"}'), date '2024-02-29') ->> 'result',
-        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"insurance": "yes@2023-02-27"}'), date '2024-02-29') ->> 'out_of_date',
-        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"insurance": "yes@2001-01-01"}'), null) ->> 'result',
-        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"security_report": "yes@2025-03-31"}'), date '2026-03-31') ->> 'result',
-        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"security_report": "yes@2025-03-30"}'), date '2026-03-31') ->> 'evidence'],
+  array[public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"insurance": "yes@2023-02-28"}', date '2024-02-29'), date '2024-02-29') ->> 'result',
+        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"insurance": "yes@2023-02-27"}', date '2024-02-29'), date '2024-02-29') ->> 'out_of_date',
+        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"insurance": "yes@2001-01-01"}', null), null) ->> 'result',
+        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"security_report": "yes@2025-03-31"}', date '2026-03-31'), date '2026-03-31') ->> 'result',
+        public._supplier_risk_evaluate(1::smallint, 'staff', pg_temp.answers('staff', '{"security_report": "yes@2025-03-30"}', date '2026-03-31'), date '2026-03-31') ->> 'evidence'],
   array['approve', '["insurance"]', 'approve', 'approve', 'insufficient'],
   '0481/146: Q4: a dated Yes is out of date when it is more than 12 months before the review day (a month''s last day where the day does not exist); with no review day nothing is judged');
 select jsonb_build_object('security_report', 'yes@' || to_char(pg_temp.today(:'orgA') - 800, 'YYYY-MM-DD'))::text as over_t1 \gset
@@ -2036,7 +2069,7 @@ select is(
           is_current, data_level, answers, starting_risk, evidence, residual_risk, hard_stops, computed_result, reviewer_name, reviewed_at,
           reviewed_on, next_review_on)
           values (%L, %L, 'X', 1, 'final', true, 'staff', %L, 'moderate', %L, %L, '{}', %L, 'X', %L, %L, %L)$$,
-          :'orgA', gen_random_uuid(), pg_temp.answers('staff', '{"security_report": "yes@2020-01-01"}'), t.ev, t.left_risk, t.res,
+          :'orgA', gen_random_uuid(), pg_temp.answers('staff', '{"security_report": "yes@2020-01-01", "insurance": "yes@2020-01-01"}'), t.ev, t.left_risk, t.res,
           t.day::timestamptz, t.day, t.day + 365)) order by t.n)
      from (values (1, date '2020-06-01', 'strong', 'low', 'approve'), (2, date '2021-06-01', 'strong', 'low', 'approve'),
                   (3, date '2021-06-01', 'insufficient', 'moderate', 'more_information')) t(n, day, ev, left_risk, res)),
@@ -2141,6 +2174,381 @@ select is(
            from public.supplier_risk_reviews r where r.supplier_id = :'supM4')],
   array['1', '1', 'true', 'false:final:true,true:draft:false', 'false:draft:false,true:final:true'],
   '0481/155: M1, the finish both ways: B finishing an id that A holds a draft of makes B''s own version 1 and leaves A''s draft; A finishing its own draft of an id that B holds a draft of finishes A''s alone and leaves B''s');
+
+-- ── 13. The review of ccbf4d094 (round 2): R2-S1 and R2-S2 ──────────────────
+-- R2-S1: no stored text holds a hidden character (one list, the same as
+-- core's), a reason is counted over what can be seen, the names the
+-- functions copy are kept as plain text, and an account deletion (whose SET
+-- NULL runs the tables' checks again) succeeds for rows holding texts at the
+-- edges of the rules. R2-S2: a Yes on the security report or the insurance
+-- needs its date, and a date there later than tomorrow in UTC is refused.
+\set ownerHid 'a0481000-0000-0000-0000-0000000000d8'
+\set onlyHid 'a0481000-0000-0000-0000-0000000000d9'
+\set supV1 'a0481000-0000-0000-0000-000000000501'
+\set supV2 'a0481000-0000-0000-0000-000000000502'
+\set supV3 'a0481000-0000-0000-0000-000000000503'
+\set supV4 'a0481000-0000-0000-0000-000000000504'
+\set supV5 'a0481000-0000-0000-0000-000000000505'
+\set supV6 'a0481000-0000-0000-0000-000000000506'
+\set supZ4 'a0481000-0000-0000-0000-000000000507'
+\set supW4 'a0481000-0000-0000-0000-000000000508'
+-- A made-up admin whose full name holds hidden characters and runs of
+-- spaces, and one whose full name is nothing but hidden characters.
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:'ownerHid', 'vr-hidden-owner@test.local',
+   jsonb_build_object('full_name', 'Made-up' || chr(173) || '   Hidden' || chr(8288) || ' ' || chr(9) || 'Owner')),
+  (:'onlyHid', 'vr-only-hidden@test.local', jsonb_build_object('full_name', chr(12644) || chr(8203) || chr(12644)));
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:'orgA', :'ownerHid', 'admin', now(), null),
+  (:'orgA', :'onlyHid', 'admin', now(), null);
+insert into public.suppliers (id, organization_id, name, deleted_at) values
+  (:'supV1', :'orgA', 'Example' || chr(8203) || '  Ink' || chr(9) || chr(9) || 'Co' || chr(8238), null),
+  (:'supV2', :'orgA', chr(12644) || chr(8203), null),
+  (:'supV3', :'orgA', 'Deletion Edge Co',  null),
+  (:'supV4', :'orgA', 'Refused Finish Co', null),
+  (:'supV5', :'orgA', 'Edge Notes Co',     null),
+  (:'supV6', :'orgA', 'Dated Finish Co',   null),
+  (:'supZ4', :'orgZ', 'Island Dated Co',   null),
+  (:'supW4', :'orgW', 'Western Dated Co',  null);
+
+-- The two lists, as code point ranges (hexadecimal): vendor-risk.parity.test.ts
+-- reads these same rows and holds core's VENDOR_RISK_HIDDEN_CHARACTERS and
+-- VENDOR_RISK_SPACE_CHARACTERS, and the migration's two classes, to them.
+create temporary table vr_chars (kind text, lo text, hi text) on commit drop;
+-- VENDOR RISK CHARACTERS BEGIN
+insert into vr_chars (kind, lo, hi) values
+  ('hidden', '0001', '0008'),
+  ('hidden', '000B', '000C'),
+  ('hidden', '000E', '001F'),
+  ('hidden', '007F', '009F'),
+  ('hidden', '00AD', '00AD'),
+  ('hidden', '034F', '034F'),
+  ('hidden', '0600', '0605'),
+  ('hidden', '061C', '061C'),
+  ('hidden', '06DD', '06DD'),
+  ('hidden', '070F', '070F'),
+  ('hidden', '0890', '0891'),
+  ('hidden', '08E2', '08E2'),
+  ('hidden', '115F', '1160'),
+  ('hidden', '17B4', '17B5'),
+  ('hidden', '180B', '180F'),
+  ('hidden', '200B', '200F'),
+  ('hidden', '2028', '202E'),
+  ('hidden', '2060', '206F'),
+  ('hidden', '3164', '3164'),
+  ('hidden', 'FE00', 'FE0F'),
+  ('hidden', 'FEFF', 'FEFF'),
+  ('hidden', 'FFA0', 'FFA0'),
+  ('hidden', 'FFF0', 'FFFB'),
+  ('hidden', '110BD', '110BD'),
+  ('hidden', '110CD', '110CD'),
+  ('hidden', '13430', '1343F'),
+  ('hidden', '1BCA0', '1BCA3'),
+  ('hidden', '1D173', '1D17A'),
+  ('hidden', 'E0000', 'E0FFF'),
+  ('space', '0009', '0009'),
+  ('space', '000A', '000A'),
+  ('space', '000D', '000D'),
+  ('space', '0020', '0020'),
+  ('space', '00A0', '00A0'),
+  ('space', '1680', '1680'),
+  ('space', '2000', '200A'),
+  ('space', '202F', '202F'),
+  ('space', '205F', '205F'),
+  ('space', '3000', '3000');
+-- VENDOR RISK CHARACTERS END
+select is(
+  (with tested as (select n from generate_series(1, 131071) n where n not between 55296 and 57343
+                   union all select n from generate_series(917504, 983039) n
+                   union all select p * 65536 + o from generate_series(2, 16) p, unnest(array[0, 65533]) o where p <> 14),
+        listed as (select c.kind, generate_series(('x' || lpad(c.lo, 8, '0'))::bit(32)::int, ('x' || lpad(c.hi, 8, '0'))::bit(32)::int) as n
+                     from vr_chars c),
+        matched as (select 'hidden' as kind, t.n from tested t where chr(t.n) ~ public._supplier_risk_hidden_chars()
+                    union all select 'space', t.n from tested t where chr(t.n) ~ public._supplier_risk_space_chars())
+   select coalesce(string_agg(x.side || x.kind || ':' || to_hex(x.n), ',' order by x.kind, x.n), '')
+     from ((select '+' as side, m.kind, m.n from matched m except select '+', l.kind, l.n from listed l)
+           union all
+           (select '-', l.kind, l.n from listed l except select '-', m.kind, m.n from matched m)) x),
+  '',
+  '0481/156: R2-S1: the hidden characters and the spaces are exactly the listed ranges, at every code point of planes 0, 1 and 14 (the only ones that hold them) and at the ends of every other plane');
+select is(
+  (select array_agg(public._supplier_risk_text_ok('Ab' || chr(c), 1, 20) order by c)
+     from unnest(array[173, 847, 4447, 4448, 6158, 8288, 8289, 8290, 8291, 8292, 12644, 65440, 917504, 917505, 917569, 917631]) c),
+  array_fill(false, array[16]),
+  '0481/157: R2-S1: the text rule refuses each character the review found let through: U+00AD, U+034F, U+115F, U+1160, U+180E, U+2060 to U+2064, U+3164, U+FFA0, and the tag characters U+E0000, U+E0001, U+E0041, U+E007F');
+select is(
+  array[public._supplier_risk_text_ok(repeat(chr(160), 3), 1, 20), public._supplier_risk_text_ok(chr(12288) || chr(8239) || chr(9), 1, 20),
+        public._supplier_risk_text_ok('a' || chr(160) || 'b', 1, 20), public._supplier_risk_text_ok('a' || chr(12288) || 'b', 1, 20)],
+  array[false, false, true, true],
+  '0481/158: R2-S1: a text of spaces of any kind (no-break, ideographic, narrow, tab) is blank; between words they are taken');
+select is(
+  (select array_agg(public._supplier_risk_reason_ok(t.s) order by t.n)
+     from (values
+       (1, 'a' || repeat(chr(8288), 19)),
+       (2, 'a' || repeat(chr(173), 19)),
+       (3, 'a' || repeat(chr(12644), 19)),
+       (4, 'a' || repeat(chr(160), 19)),
+       (5, 'abcde' || repeat(' ', 30)),
+       (6, 'abcde fghij klmno pq'),
+       (7, 'abcde fghij klmno p'),
+       (8, 'abcde   fghij' || chr(9) || chr(9) || 'klmno' || chr(10) || chr(10) || 'p'),
+       (9, 'abcde' || repeat(chr(160), 3) || 'fghij' || chr(9) || chr(9) || 'klmno' || chr(10) || chr(10) || 'pqrs'),
+       (10, ' ' || chr(12288) || 'abcde fghij klmno pq' || chr(12288) || ' '),
+       (11, 'ab   cd   ef   gh   ij'),
+       (12, repeat('abcd', 5)),
+       (13, repeat('abcde', 4)),
+       (14, 'aaaaa bbbbb ccccc ddddd'),
+       (15, 'aaaaa bbbbb ccccc ddddd e'),
+       (16, repeat(chr(66560) || chr(66561) || chr(66562) || chr(66563) || chr(66564), 4)),
+       (17, repeat('abcde', 400)),
+       (18, repeat('abcde', 400) || 'f'),
+       (19, 'The vendor fixed it all' || chr(12644))) t(n, s)),
+  array[false, false, false, false, false, true, false, false, true, true, false, false, true, false, true, true, true, false, false],
+  '0481/159: R2-S1: a reason counts what can be seen: one letter and 19 invisible characters or spaces is refused (the review''s P6a); each run of spaces is one before counting to 20; at least 5 different characters that are not spaces');
+select is(
+  array[pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'student', %L::jsonb, null, 'approve', %L, %L::jsonb)::text$$,
+          :'orgA', :'supV4', pg_temp.answers('student', '{"data_agreement": "no"}'), 'a' || repeat(chr(8288), 19),
+          pg_temp.items('student', '{"data_agreement": "no"}'))),
+        pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version, status,
+          is_current, data_level, answers, starting_risk, evidence, residual_risk, hard_stops, computed_result, override_result,
+          override_reason, reviewer_name, reviewed_at, reviewed_on, next_review_on)
+          values (%L, %L, 'X', 1, 'final', true, 'staff', %L, 'moderate', 'strong', 'low', '{}', 'approve', 'do_not_use', %L, 'X',
+                  now(), current_date, current_date + 30)$$,
+          :'orgA', :'supV4', pg_temp.answers('staff'), 'a' || repeat(chr(8288), 19))),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', null, null, null, %L)::text$$,
+          :'orgA', :'item_h2', 'a' || repeat(chr(8288), 19))),
+        pg_temp.try(format($$update public.supplier_risk_items set accepted_reason = %L where id = %L$$, 'a' || repeat(chr(8288), 19), :'item_h2')),
+        (select count(*)::text from public.supplier_risk_reviews where supplier_id = :'supV4')],
+  array['ERR 22023 bad_override_reason hint=bad_override_reason', '23514:supplier_risk_reviews_override',
+        'ERR 22023 bad_item_reason hint=bad_item_reason', '23514:supplier_risk_items_accepted', '0'],
+  '0481/160: R2-S1: one letter and 19 word joiners no longer turns student data with no signed agreement into Approve (the review''s P6b), nor accepts a risk: the functions refuse it, and so do the tables'' own checks');
+select is(
+  array[public._supplier_risk_answers_problem(1::smallint, 'staff',
+          jsonb_build_object('insurance', jsonb_build_object('answer', 'no', 'note', 'On' || chr(173) || 'file')), false, null),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+          :'orgA', :'supV4', pg_temp.answers('staff', '{"insurance": "no"}'),
+          jsonb_build_array(jsonb_build_object('question_key', 'insurance', 'finding', 'No proof' || chr(917569), 'action', 'Ask again.')))),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+          :'orgA', :'supV4', pg_temp.answers('staff', '{"insurance": "no"}'),
+          jsonb_build_array(jsonb_build_object('question_key', 'insurance', 'finding', 'No proof.', 'action', 'Ask' || chr(8203) || ' again.')))),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', null, null, %L)::text$$,
+          :'orgA', :'item_h2', 'Ask' || chr(6158) || ' again.')),
+        pg_temp.try(format($$update public.supplier_risk_items set action = %L where id = %L$$, 'Ask' || chr(65279) || ' again.', :'item_h2')),
+        pg_temp.try(format($$update public.supplier_risk_items set finding = finding where id = %L$$, :'item_h2')),
+        pg_temp.try(format($$insert into public.supplier_risk_items (organization_id, review_id, question_key, answer, severity, finding,
+                              action, changed_by_name)
+                            select organization_id, review_id, question_key, answer, severity, %L, action, changed_by_name
+                              from public.supplier_risk_items where id = %L$$, 'No' || chr(8288) || ' proof', :'item_h2'))],
+  array['answer_bad_note', 'ERR 22023 bad_item_text hint=bad_item_text', 'ERR 22023 bad_item_text hint=bad_item_text',
+        'ERR 22023 bad_item_text hint=bad_item_text', '23514:supplier_risk_items_action', 'ok', '23514:supplier_risk_items_finding'],
+  '0481/161: R2-S1: a note, a finding and an action with a hidden character are refused, by the functions and by the table');
+select is(
+  array[pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version, data_level, answers,
+          reviewer_name) values (%L, %L, %L, 1, 'staff', '{}', 'X')$$, :'orgA', :'supV4', 'Name' || chr(8206))),
+        pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version, data_level, answers,
+          reviewer_name) values (%L, %L, 'X', 1, 'staff', '{}', %L)$$, :'orgA', :'supV4', chr(12644))),
+        pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version, data_level, answers,
+          reviewer_name) values (%L, %L, %L, 1, 'staff', '{}', 'X')$$, :'orgA', :'supV4', repeat(chr(160), 3))),
+        pg_temp.try(format($$update public.supplier_risk_items set owner_name = %L where id = %L$$, 'Owner' || chr(8203), :'item_h2')),
+        pg_temp.try(format($$update public.supplier_risk_items set changed_by_name = %L where id = %L$$, chr(917505) || 'Changer', :'item_h2')),
+        pg_temp.try(format($$update public.supplier_risk_items set accepted_by_name = %L where id = %L$$, 'Acceptor' || chr(173), :'item_h2'))],
+  array['23514:supplier_risk_reviews_supplier_name', '23514:supplier_risk_reviews_reviewer_name', '23514:supplier_risk_reviews_supplier_name',
+        '23514:supplier_risk_items_owner_name', '23514:supplier_risk_items_changed_by_name', '23514:supplier_risk_items_accepted'],
+  '0481/162: R2-S1: the tables hold every name they keep to the text rule on their own: no hidden character, not only spaces');
+
+-- The names the functions copy, as plain text.
+select pg_temp.as_user(:'ownerHid', format($$select public.supplier_risk_finalise(%L, %L, 'none', '{}')::text$$, :'orgA', :'supV1')) as fin_v1 \gset
+select pg_temp.as_user(:'onlyHid', format($$select public.supplier_risk_draft_save(%L, %L, 'none', '{}')::text$$, :'orgA', :'supV2')) as draft_v2 \gset
+select is(
+  array[pg_temp.j(:'fin_v1') ->> 'result',
+        (select r.supplier_name || '|' || r.reviewer_name from public.supplier_risk_reviews r where r.supplier_id = :'supV1'),
+        (select r.supplier_name || '|' || r.reviewer_name from public.supplier_risk_reviews r where r.supplier_id = :'supV2'),
+        pg_temp.as_user(:'adminA', format($$select g.reviewed_as_name || '|' || g.name_changed from public.supplier_risk_register(%L) g where g.supplier_id = %L$$,
+          :'orgA', :'supV1')),
+        public._supplier_risk_plain_name(repeat('x', 199) || '  y', 200),
+        coalesce(public._supplier_risk_plain_name(chr(8203) || ' ' || chr(160), 200), 'none')],
+  array['approve', 'Example Ink Co|Made-up Hidden Owner', '(no name)|vr-only-hidden@test.local', 'Example Ink Co|false', repeat('x', 199), 'none'],
+  '0481/163: R2-S1: the names the functions copy are kept as plain text (hidden characters out, each run of spaces one, the ends trimmed; nothing left falls back to the email or ''(no name)''), and the register compares today''s name the same way');
+
+-- An account deletion empties the person links with an update, so the tables'
+-- checks run again on every row it touches. The rows below hold texts at the
+-- edges of the rules: a reason of exactly 20 once its spaces are collapsed
+-- and trimmed, a note of 1000 characters of four-byte letters and no-break
+-- spaces, a finding of 500 two-byte letters, an action of 1000 four-byte
+-- letters and one of tabs, a reason of five four-byte letters, a name cleaned
+-- of hidden characters, and the insurance dated tomorrow in UTC.
+create function pg_temp.delete_account(p uuid) returns text language plpgsql as $f$
+begin
+  delete from auth.users where id = p;
+  return case when found then 'deleted' else 'none' end;
+exception when others then
+  return 'ERR ' || sqlstate || ' ' || sqlerrm;
+end $f$;
+create function pg_temp.v_texts() returns text language sql as $f$
+  select md5(coalesce((select string_agg(r.answers::text || coalesce(r.override_reason, '-') || r.supplier_name || r.reviewer_name, '|' order by r.id)
+                         from public.supplier_risk_reviews r
+                        where r.supplier_id in ('a0481000-0000-0000-0000-000000000501', 'a0481000-0000-0000-0000-000000000503',
+                                                'a0481000-0000-0000-0000-000000000505')), '')
+             || coalesce((select string_agg(i.finding || i.action || coalesce(i.owner_name, '-') || i.changed_by_name
+                                            || coalesce(i.accepted_by_name, '-') || coalesce(i.accepted_reason, '-'), '|' order by i.id)
+                            from public.supplier_risk_items i join public.supplier_risk_reviews r on r.id = i.review_id
+                           where r.supplier_id = 'a0481000-0000-0000-0000-000000000503'), ''))
+$f$;
+select pg_temp.as_user(:'ownerHid', format($$select public.supplier_risk_finalise(%L, %L, 'student', %L::jsonb, null, 'more_information', %L, %L::jsonb)::text$$,
+  :'orgA', :'supV3',
+  pg_temp.answers('student', jsonb_build_object('security_report', 'yes@' || (pg_temp.today(:'orgA') - interval '12 months')::date,
+                                                'insurance', 'yes@' || (current_date + 1)))
+    || jsonb_build_object('data_agreement', jsonb_build_object('answer', 'no', 'note', repeat(chr(66560) || chr(160), 500)),
+                          'hosting_known', jsonb_build_object('answer', 'no', 'note', 'Two' || chr(10) || 'lines,' || chr(9) || 'and a tab')),
+  ' ' || chr(12288) || 'abcde fghij klmno pq' || chr(12288) || ' ',
+  jsonb_build_array(
+    jsonb_build_object('question_key', 'data_agreement', 'finding', repeat(chr(233), 500), 'action', repeat('a' || chr(9), 500),
+                       'owner_user_id', :'ownerHid', 'due_on', pg_temp.today(:'orgA') + 5),
+    jsonb_build_object('question_key', 'hosting_known', 'finding', 'Kept' || repeat(chr(160), 5) || 'apart',
+                       'action', repeat(chr(66560), 1000), 'owner_user_id', :'ownerHid')))) as fin_v3 \gset
+select i.id as item_v3_host from public.supplier_risk_items i join public.supplier_risk_reviews r on r.id = i.review_id
+ where r.supplier_id = :'supV3' and i.question_key = 'hosting_known' \gset
+select i.id as item_v3_agr from public.supplier_risk_items i join public.supplier_risk_reviews r on r.id = i.review_id
+ where r.supplier_id = :'supV3' and i.question_key = 'data_agreement' \gset
+select pg_temp.as_user(:'ownerHid', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', %L, null, null, %L)::text$$,
+  :'orgA', :'item_v3_host', :'ownerHid', repeat(chr(66560) || chr(66561) || chr(66562) || chr(66563) || chr(66564), 4))) as acc_v3 \gset
+select pg_temp.as_user(:'ownerHid', format($$select public.supplier_risk_item_update(%L, %L, 'in_progress', %L, %L::date, %L)::text$$,
+  :'orgA', :'item_v3_agr', :'ownerHid', pg_temp.today(:'orgA') + 5, 'Ask' || repeat(chr(12288), 4) || 'again, in writing.')) as upd_v3 \gset
+select pg_temp.as_user(:'ownerHid', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supV5', jsonb_build_object('insurance', jsonb_build_object('answer', 'no', 'note', repeat(chr(233) || chr(66560), 500)),
+                                        'hosting_known', jsonb_build_object('answer', 'yes', 'note', 'x')))) as draft_v5 \gset
+select pg_temp.v_texts() as texts_before \gset
+select pg_temp.delete_account(:'ownerHid') as del_hid \gset
+update public.suppliers set name = 'Deletion' || chr(8203) || '  Edge ' || chr(160) || 'Co' || chr(65279) where id = :'supV3';
+select is(
+  array[(pg_temp.j(:'fin_v3') ->> 'computed_result') || '>' || (pg_temp.j(:'fin_v3') ->> 'result') || ':' || (pg_temp.j(:'fin_v3') ->> 'items'),
+        pg_temp.j(:'acc_v3') ->> 'status', pg_temp.j(:'upd_v3') ->> 'status', pg_temp.j(:'draft_v5') ->> 'version',
+        :'del_hid', (pg_temp.v_texts() = :'texts_before')::text,
+        (select count(*) filter (where r.reviewer_id is null)::text || '/' || count(*)::text
+           from public.supplier_risk_reviews r where r.supplier_id in (:'supV1', :'supV3', :'supV5')),
+        (select string_agg(i.question_key || ':' || i.status || ':' || coalesce(i.owner_user_id::text, 'none') || ':' || i.owner_name || ':'
+                           || coalesce(i.changed_by::text, 'none') || ':' || i.changed_by_name || ':' || coalesce(i.accepted_by::text, 'none') || ':'
+                           || coalesce(i.accepted_by_name, '-'), ',' order by i.question_key)
+           from public.supplier_risk_items i join public.supplier_risk_reviews r on r.id = i.review_id where r.supplier_id = :'supV3'),
+        pg_temp.as_user(:'adminA', format($$select string_agg(g.question_key || ':' || g.reviewed_as_name || ':' || g.name_changed, ',' order by g.question_key)
+                                              from public.supplier_risk_items_for_organization(%L, false) g where g.supplier_id = %L$$, :'orgA', :'supV3')),
+        pg_temp.as_user(:'adminA', format($$select g.reviewed_as_name || ':' || g.name_changed from public.supplier_risk_register(%L) g where g.supplier_id = %L$$,
+          :'orgA', :'supV3'))],
+  array['do_not_use>more_information:2', 'accepted', 'in_progress', '1', 'deleted', 'true', '3/3',
+        'data_agreement:in_progress:none:Made-up Hidden Owner:none:Made-up Hidden Owner:none:-,'
+        'hosting_known:accepted:none:Made-up Hidden Owner:none:Made-up Hidden Owner:none:Made-up Hidden Owner',
+        'data_agreement:Deletion Edge Co:false,hosting_known:Deletion Edge Co:false', 'Deletion Edge Co:false'],
+  '0481/164: R2-S1: an account deletion runs the tables'' checks again on every row it empties a link of, and still succeeds for rows holding texts at the edges of the new rules (reasons, notes, findings, actions, names, a date tomorrow in UTC); every text stays as written; today''s name with hidden characters and doubled spaces is still the name reviewed, in the open items list and the register');
+
+-- R2-S2: the dated cases. vendor-risk.parity.test.ts reads these same rows
+-- and runs core's answers check and rules on them: (n, question, its answer
+-- and date ("@" alone: none), finished or a draft, the review day, today in
+-- UTC, what it counts as (yes, no, not_shown, out_of_date) or the refusal).
+-- Every other question Yes, the other judged date on the review day.
+create temporary table vr_dated (n integer primary key, q text, given text, final boolean, reviewed_on date, utc_today date, expect text) on commit drop;
+-- VENDOR RISK DATED CASES BEGIN
+insert into vr_dated (n, q, given, final, reviewed_on, utc_today, expect) values
+  (1, 'security_report', 'yes@2026-06-30', true, '2026-06-30', '2026-06-30', 'yes'),
+  (2, 'insurance', 'yes@2026-06-30', true, '2026-06-30', '2026-06-30', 'yes'),
+  (3, 'security_report', 'yes@2025-06-30', true, '2026-06-30', '2026-06-30', 'yes'),
+  (4, 'security_report', 'yes@2025-06-29', true, '2026-06-30', '2026-06-30', 'out_of_date'),
+  (5, 'insurance', 'yes@2025-06-29', true, '2026-06-30', '2026-06-30', 'out_of_date'),
+  (6, 'security_report', 'yes@2027-02-28', true, '2028-02-29', '2028-02-29', 'yes'),
+  (7, 'security_report', 'yes@2027-02-27', true, '2028-02-29', '2028-02-29', 'out_of_date'),
+  (8, 'insurance', 'yes@2028-02-29', true, '2028-02-29', '2028-02-29', 'yes'),
+  (9, 'insurance', 'yes@2028-02-28', true, '2029-02-28', '2029-02-28', 'yes'),
+  (10, 'insurance', 'yes@2028-02-27', true, '2029-02-28', '2029-02-28', 'out_of_date'),
+  (11, 'insurance', 'yes@2028-02-29', true, '2029-02-28', '2029-02-28', 'yes'),
+  (12, 'security_report', 'yes@', true, '2026-06-30', '2026-06-30', 'answer_date_missing'),
+  (13, 'insurance', 'yes@', true, '2026-06-30', '2026-06-30', 'answer_date_missing'),
+  (14, 'security_report', 'yes@', false, '2026-06-30', '2026-06-30', 'yes'),
+  (15, 'insurance', 'yes@', false, '2028-02-29', '2028-02-29', 'yes'),
+  (16, 'security_report', 'yes@2026-07-01', true, '2026-06-30', '2026-06-30', 'yes'),
+  (17, 'security_report', 'yes@2026-07-02', true, '2026-06-30', '2026-06-30', 'answer_date_in_future'),
+  (18, 'insurance', 'yes@2026-07-02', false, '2026-06-30', '2026-06-30', 'answer_date_in_future'),
+  (19, 'insurance', 'yes@2026-07-01', true, '2026-07-01', '2026-06-30', 'yes'),
+  (20, 'insurance', 'yes@2028-02-29', true, '2028-02-28', '2028-02-28', 'yes'),
+  (21, 'insurance', 'yes@2028-03-01', true, '2028-02-28', '2028-02-28', 'answer_date_in_future'),
+  (22, 'security_report', 'yes@2027-01-01', true, '2026-12-31', '2026-12-31', 'yes'),
+  (23, 'security_report', 'yes@2027-01-02', true, '2026-12-31', '2026-12-31', 'answer_date_in_future'),
+  (24, 'insurance', 'no@2030-01-01', false, '2026-06-30', '2026-06-30', 'answer_date_in_future'),
+  (25, 'insurance', 'no@', true, '2026-06-30', '2026-06-30', 'no'),
+  (26, 'security_report', 'not_shown@', true, '2026-06-30', '2026-06-30', 'not_shown'),
+  (27, 'data_agreement', 'yes@', true, '2026-06-30', '2026-06-30', 'yes'),
+  (28, 'data_agreement', 'yes@2030-01-01', true, '2026-06-30', '2026-06-30', 'yes');
+-- VENDOR RISK DATED CASES END
+select is((select count(*)::int from vr_dated), 28, '0481/165: R2-S2: the dated cases table has its 28 rows');
+select is(
+  (select string_agg(d.n || ': ' || x.got, ' ; ' order by d.n)
+     from vr_dated d,
+          lateral (select pg_temp.answers('staff', jsonb_build_object(d.q, d.given), d.reviewed_on) as ans) a,
+          lateral (select coalesce(public._supplier_risk_answers_problem(1::smallint, 'staff', a.ans, d.final, d.utc_today),
+                                   (select case when e -> 'out_of_date' ? d.q then 'out_of_date'
+                                                when e -> 'gaps' ? d.q then a.ans -> d.q ->> 'answer'
+                                                else 'yes' end
+                                      from public._supplier_risk_evaluate(1::smallint, 'staff', a.ans, d.reviewed_on) e)) as got) x
+    where x.got is distinct from d.expect),
+  null,
+  '0481/166: R2-S2: the database gives every dated case (the review day itself, a leap day, a date missing, a date in the future, on the security report and the insurance; the data agreement''s date neither needed nor judged)');
+select is(
+  array[pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgA', :'supV6', pg_temp.answers('staff', '{"security_report": "yes@"}'))),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgA', :'supV6', pg_temp.answers('staff', '{"insurance": "yes@"}'))),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgA', :'supV6', pg_temp.answers('staff', jsonb_build_object('insurance', 'yes@' || (current_date + 2))))),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+          :'orgA', :'supV6', pg_temp.answers('staff', jsonb_build_object('security_report', 'no@' || (current_date + 2))),
+          pg_temp.items('staff', '{"security_report": "no"}'))),
+        pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgA', :'supV6', jsonb_build_object('insurance', jsonb_build_object('answer', 'yes', 'date', current_date + 2)))),
+        (select count(*)::text from public.supplier_risk_reviews r where r.supplier_id = :'supV6')],
+  array['ERR 22023 answer_date_missing hint=answer_date_missing', 'ERR 22023 answer_date_missing hint=answer_date_missing',
+        'ERR 22023 answer_date_in_future hint=answer_date_in_future', 'ERR 22023 answer_date_in_future hint=answer_date_in_future',
+        'ERR 22023 answer_date_in_future hint=answer_date_in_future', '0'],
+  '0481/167: R2-S2: a finish refuses a Yes on the security report or the insurance without its date, and a date there later than tomorrow in UTC (whatever the answer); a draft refuses that date too; nothing is written');
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supV6', pg_temp.answers('staff', '{"security_report": "yes@", "insurance": "yes@"}'))) as draft_v6 \gset
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supV6', pg_temp.answers('staff', '{"security_report": "yes@", "insurance": "yes@"}'))) as fin_v6_bad \gset
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supV6', pg_temp.answers('staff', jsonb_build_object('security_report', 'yes@' || current_date,
+                                                                 'insurance', 'yes@' || (current_date + 1))))) as fin_v6 \gset
+select is(
+  array[pg_temp.j(:'draft_v6') ->> 'version', :'fin_v6_bad',
+        (pg_temp.j(:'fin_v6') ->> 'result') || ':' || (pg_temp.j(:'fin_v6') ->> 'version'),
+        (select string_agg(r.status || ':' || (r.answers -> 'insurance' ->> 'date'), ',') from public.supplier_risk_reviews r where r.supplier_id = :'supV6')],
+  array['1', 'ERR 22023 answer_date_missing hint=answer_date_missing', 'approve:1', 'final:' || (current_date + 1)::text],
+  '0481/168: R2-S2: a draft may keep a Yes whose date is still to come; finishing it without the date is refused and keeps the draft; with the date on the document (tomorrow in UTC at the latest) the draft is finished');
+select is(
+  array[pg_temp.as_user(:'ownerZ', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgZ', :'supZ4', jsonb_build_object('insurance', jsonb_build_object('answer', 'yes', 'date', current_date + 2)))),
+        pg_temp.j(pg_temp.as_user(:'ownerZ', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgZ', :'supZ4', jsonb_build_object('insurance', jsonb_build_object('answer', 'yes', 'date', current_date + 1))))) ->> 'version',
+        pg_temp.j(pg_temp.as_user(:'ownerW', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgW', :'supW4', jsonb_build_object('insurance', jsonb_build_object('answer', 'yes', 'date', current_date + 1))))) ->> 'version',
+        pg_temp.as_user(:'ownerW', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgW', :'supW4', jsonb_build_object('insurance', jsonb_build_object('answer', 'yes', 'date', current_date + 2))))],
+  array['ERR 22023 answer_date_in_future hint=answer_date_in_future', '1', '1', 'ERR 22023 answer_date_in_future hint=answer_date_in_future'],
+  '0481/169: R2-S2: the future is today in UTC plus one day, whatever the organization''s zone: refused at UTC''s day after tomorrow even where that is Z''s tomorrow, taken at UTC''s tomorrow even where that is W''s day after tomorrow');
+select is(
+  (select array_agg(pg_temp.try(format($$insert into public.supplier_risk_reviews (organization_id, supplier_id, supplier_name, version, status,
+          is_current, data_level, answers, starting_risk, evidence, residual_risk, hard_stops, computed_result, reviewer_name, reviewed_at,
+          reviewed_on, next_review_on)
+          values (%L, %L, 'X', 1, %L, %L, 'staff', %L, %s, %s, %s, %s, %s, 'X', %L, %L, %L)$$,
+          :'orgA', :'supV4', t.st, t.st = 'final', pg_temp.answers('staff', t.over::jsonb, date '2026-06-30'),
+          case when t.st = 'final' then '''moderate''' else 'null' end, case when t.st = 'final' then '''strong''' else 'null' end,
+          case when t.st = 'final' then '''low''' else 'null' end, case when t.st = 'final' then '''{}''' else 'null' end,
+          case when t.st = 'final' then '''approve''' else 'null' end,
+          case when t.st = 'final' then t.at end, case when t.st = 'final' then date '2026-06-30' end,
+          case when t.st = 'final' then date '2027-06-30' end)) order by t.n)
+     from (values (1, 'final', '{"insurance": "yes@"}', timestamptz '2026-06-30 12:00+00'),
+                  (2, 'final', '{"insurance": "yes@2026-07-02"}', timestamptz '2026-06-30 12:00+00'),
+                  (3, 'final', '{"insurance": "yes@2026-07-01"}', timestamptz '2026-06-30 12:00+00'),
+                  (4, 'final', '{"insurance": "yes@2026-07-02"}', timestamptz '2026-07-01 05:00+00'),
+                  (5, 'draft', '{"insurance": "yes@"}', null)) t(n, st, over, at)),
+  array['23514:supplier_risk_reviews_answers', '23514:supplier_risk_reviews_answers', 'ok', 'ok', 'ok'],
+  '0481/170: R2-S2: the reviews table holds it on its own: a final with a Yes on the insurance and no date, or a date later than the day after reviewed_at in UTC, is refused (not the organization''s review day: a review finished late on 30 June in Los Angeles is 1 July in UTC); a draft may wait for the date');
 
 select * from finish();
 rollback;

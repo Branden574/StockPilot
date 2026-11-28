@@ -160,10 +160,13 @@ export interface VendorRiskQuestion {
   /** What counts as Yes. */
   help: string;
   /**
-   * A date the form asks for beside the answer (optional; never invented), or
-   * null when none applies. maxAgeMonths: a Yes dated more than this many
-   * months before the review counts as Not shown to us (out of date); null when
-   * the date is kept but not judged. A Yes with no date is not judged.
+   * A date the form asks for beside the answer (never invented), or null when
+   * none applies. maxAgeMonths: the date is judged. A Yes then NEEDS its date
+   * (the date on the document: a finished review without it is refused,
+   * answer_date_missing), the date may not be later than tomorrow in UTC
+   * (answer_date_in_future, whatever the answer), and a Yes dated more than
+   * this many months before the review counts as Not shown to us (out of
+   * date). null: the date is kept, optional and not judged.
    */
   date: { label: string; maxAgeMonths: number | null } | null;
   /**
@@ -318,7 +321,7 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     key: 'security_report',
     group: 'proof',
     text: 'Have they shown us a SOC 2 Type II or ISO 27001 report that covers this product?',
-    help: 'Yes only for the report itself, and only when it covers the product we use. A badge, a claim on their website or a report on another product is No. A report whose period ended more than 12 months before the review counts as Not shown to us.',
+    help: 'Yes only for the report itself, and only when it covers the product we use. A badge, a claim on their website or a report on another product is No. Give the date its period ended: a report whose period ended more than 12 months before the review counts as Not shown to us.',
     date: { label: 'Report period end', maxAgeMonths: 12 },
     studentDataOnly: false,
     keyEvidence: true,
@@ -339,8 +342,8 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
     key: 'insurance',
     group: 'proof',
     text: 'Have they shown us proof of cyber insurance?',
-    help: 'Yes when we have seen a certificate of insurance. One dated more than 12 months before the review counts as Not shown to us.',
-    date: { label: 'Cover ends', maxAgeMonths: 12 },
+    help: 'Yes when we have seen a certificate of insurance; give the date on it. One dated more than 12 months before the review counts as Not shown to us.',
+    date: { label: 'Date on the certificate', maxAgeMonths: 12 },
     studentDataOnly: false,
     keyEvidence: false,
     hardStop: null,
@@ -352,7 +355,8 @@ export const VENDOR_RISK_QUESTIONS: readonly VendorRiskQuestion[] = [
         'The proof of cyber insurance we have seen is out of date: dated more than 12 months before this review.',
     },
     action: 'Ask for a certificate of their cyber insurance.',
-    followUp: 'Please send us a certificate of your cyber insurance, with the date the cover ends.',
+    followUp:
+      'Please send us a certificate of your cyber insurance, dated within the last 12 months.',
   },
   {
     key: 'direct_control',

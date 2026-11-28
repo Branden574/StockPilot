@@ -20,8 +20,11 @@ import {
   addVendorRiskMonths,
   evaluateVendorRisk,
   VENDOR_RISK_EVIDENCE_LEVELS,
+  VENDOR_RISK_HIDDEN_CHARACTERS,
+  VENDOR_RISK_OVERRIDE_REASON_MIN_DIFFERENT,
   VENDOR_RISK_RESULTS,
   VENDOR_RISK_RISK_LEVELS,
+  VENDOR_RISK_SPACE_CHARACTERS,
   vendorRiskAnswersProblem,
   vendorRiskDefaultNextReview,
   vendorRiskDueDateAllowed,
@@ -46,6 +49,20 @@ function answers(
   for (const [k, v] of Object.entries(over)) {
     if (v === 'missing') delete out[k];
     else if (v) out[k] = { answer: v };
+  }
+  return out as VendorRiskAnswers;
+}
+
+/** As answers(), with the date `on` beside a Yes to the security report and to insurance (a finished review needs it). */
+function datedAnswers(
+  level: VendorRiskDataLevel,
+  on: string,
+  over: Partial<Record<string, VendorRiskAnswer | 'missing'>> = {},
+): VendorRiskAnswers {
+  const out = answers(level, over) as Record<string, { answer: VendorRiskAnswer; date?: string }>;
+  for (const q of vendorRiskQuestionsFor(level)) {
+    if (q.date?.maxAgeMonths && out[q.key]?.answer === 'yes')
+      out[q.key] = { answer: 'yes', date: on };
   }
   return out as VendorRiskAnswers;
 }
@@ -629,22 +646,23 @@ describe('what the database refuses', () => {
     expect(vendorRiskTextOk('\u{10400}'.repeat(20), 1, 20)).toBe(true);
   });
 
-  it('holds a reason to 20 to 2000 characters once the ends are trimmed, and not one character repeated', () => {
+  it('holds a reason to 20 to 2000 characters once the ends are trimmed, with at least 5 different ones', () => {
     expect(vendorRiskOverrideReasonOk('The vendor fixed it.')).toBe(true);
     expect(vendorRiskOverrideReasonOk('The vendor fixed it')).toBe(false);
     expect(vendorRiskOverrideReasonOk('   The vendor fixed it   ')).toBe(false);
-    expect(vendorRiskOverrideReasonOk('xy'.repeat(1000))).toBe(true);
-    expect(vendorRiskOverrideReasonOk('xy'.repeat(1000) + 'z')).toBe(false);
+    expect(vendorRiskOverrideReasonOk('abcde'.repeat(400))).toBe(true);
+    expect(vendorRiskOverrideReasonOk('abcde'.repeat(400) + 'f')).toBe(false);
+    expect(vendorRiskOverrideReasonOk('xy'.repeat(1000))).toBe(false);
     expect(vendorRiskOverrideReasonOk('a'.repeat(20))).toBe(false);
     expect(vendorRiskOverrideReasonOk('aaaa aaaa aaaa aaaa aaaa')).toBe(false);
-    expect(vendorRiskOverrideReasonOk('aaaa aaaa\taaaa\naaaa aaab')).toBe(true);
+    expect(vendorRiskOverrideReasonOk('aaaa bbbb\tcccc\ndddd eeee')).toBe(true);
     expect(vendorRiskOverrideReasonOk(null)).toBe(false);
   });
 
   it("names each wrong answer with the database's word", () => {
     const cases: Array<[unknown, unknown, boolean, string | null]> = [
-      ['staff', answers('staff'), true, null],
-      ['student', answers('student'), true, null],
+      ['staff', datedAnswers('staff', '2026-06-30'), true, null],
+      ['student', datedAnswers('student', '2026-06-30'), true, null],
       ['none', {}, true, null],
       ['staff', {}, false, null],
       [
@@ -686,7 +704,7 @@ describe('what the database refuses', () => {
       ['staff', { insurance: { answer: 'yes', date: '1999-12-31' } }, false, 'answer_bad_date'],
       ['staff', { insurance: { answer: 'yes', date: '2101-01-01' } }, false, 'answer_bad_date'],
       ['staff', { insurance: { answer: 'yes', date: 20260101 } }, false, 'answer_bad_date'],
-      ['staff', { insurance: { answer: 'yes' } }, true, 'answers_incomplete'],
+      ['staff', { insurance: { answer: 'yes', date: '2026-01-01' } }, true, 'answers_incomplete'],
       ['everyone', {}, false, 'bad_data_level'],
     ];
     for (const [level, a, final, want] of cases) {
@@ -694,6 +712,201 @@ describe('what the database refuses', () => {
         want,
       );
     }
+  });
+});
+
+/** Is this code point in one of the ranges. */
+function inRanges(ranges: readonly (readonly [number, number])[], cp: number): boolean {
+  return ranges.some(([lo, hi]) => cp >= lo && cp <= hi);
+}
+
+describe('round 2 (R2-S1): no stored text holds a hidden character, and a reason counts what can be seen', () => {
+  it('keeps the hidden characters and the spaces as two lists of ranges in order, apart from each other', () => {
+    for (const list of [VENDOR_RISK_HIDDEN_CHARACTERS, VENDOR_RISK_SPACE_CHARACTERS]) {
+      for (let i = 0; i < list.length; i += 1) {
+        const [lo, hi] = list[i]!;
+        expect(lo).toBeLessThanOrEqual(hi);
+        if (i > 0) expect(lo).toBeGreaterThan(list[i - 1]![1]);
+      }
+    }
+    for (const [lo, hi] of VENDOR_RISK_SPACE_CHARACTERS) {
+      for (let cp = lo; cp <= hi; cp += 1)
+        expect(inRanges(VENDOR_RISK_HIDDEN_CHARACTERS, cp)).toBe(false);
+    }
+  });
+
+  it('names the characters the review found let through, and the other kinds the rule is for', () => {
+    const named = [
+      // word joiner and the invisible operators; soft hyphen; combining grapheme joiner; the Hangul fillers;
+      // Mongolian vowel separator; halfwidth Hangul filler; tag characters (the first, the language tag, A, cancel)
+      0x2060,
+      0x2061, 0x2062, 0x2063, 0x2064, 0x00ad, 0x034f, 0x115f, 0x1160, 0x180e, 0x3164, 0xffa0,
+      0xe0000, 0xe0001, 0xe0041, 0xe007f,
+      // controls (C0 but tab and line breaks, delete, C1); zero width space, non-joiner, joiner; direction marks,
+      // embeddings, overrides and isolates; line and paragraph separators; byte order mark; variation selectors;
+      // the Arabic letter mark; interlinear annotation; the variation selectors supplement
+      0x0001,
+      0x000b, 0x000c, 0x001b, 0x007f, 0x0085, 0x009f, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f,
+      0x202a, 0x202e, 0x2066, 0x2069, 0x2028, 0x2029, 0xfeff, 0xfe00, 0xfe0f, 0x061c, 0xfff9,
+      0xfffb, 0xe0100, 0xe01ef,
+    ];
+    for (const cp of named) {
+      expect(inRanges(VENDOR_RISK_HIDDEN_CHARACTERS, cp), cp.toString(16)).toBe(true);
+    }
+    for (const cp of [0x09, 0x0a, 0x0d, 0x20, 0xa0, 0x3000, 0x202f]) {
+      expect(inRanges(VENDOR_RISK_SPACE_CHARACTERS, cp), cp.toString(16)).toBe(true);
+    }
+  });
+
+  it('refuses exactly the hidden characters, at every code point', () => {
+    let wrong = 0;
+    for (let cp = 1; cp <= 0x10ffff; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const ok = vendorRiskTextOk(`Ab${String.fromCodePoint(cp)}`, 1, 20);
+      if (ok === inRanges(VENDOR_RISK_HIDDEN_CHARACTERS, cp)) wrong += 1;
+    }
+    expect(wrong).toBe(0);
+  }, 60_000);
+
+  it('takes no text made of spaces of any kind, and takes a space of any kind between words', () => {
+    for (const [lo, hi] of VENDOR_RISK_SPACE_CHARACTERS) {
+      for (let cp = lo; cp <= hi; cp += 1) {
+        const sp = String.fromCodePoint(cp);
+        expect(vendorRiskTextOk(sp.repeat(3), 1, 20), cp.toString(16)).toBe(false);
+        expect(vendorRiskTextOk(`a${sp}b`, 1, 20), cp.toString(16)).toBe(true);
+      }
+    }
+  });
+
+  it('refuses a note, a finding, an action or a reason with a hidden character', () => {
+    expect(vendorRiskTextOk('Signed\u2060 by both', 1, 1000)).toBe(false);
+    expect(vendorRiskTextOk('Ask for the \u{E0041}report', 1, 500)).toBe(false);
+    expect(
+      vendorRiskAnswersProblem(
+        'staff',
+        { insurance: { answer: 'no', note: 'On\u00ADfile' } },
+        false,
+      ),
+    ).toBe('answer_bad_note');
+    expect(vendorRiskOverrideReasonOk('The vendor fixed it all\u3164')).toBe(false);
+  });
+
+  it('counts a reason over what can be seen: one letter and 19 invisible or space characters is not a reason', () => {
+    for (const pad of [
+      '\u2060',
+      '\u2061',
+      '\u00AD',
+      '\u3164',
+      '\u115F',
+      '\u{E0020}',
+      '\u00A0',
+      ' ',
+      '\u3000',
+    ]) {
+      expect(vendorRiskOverrideReasonOk(`a${pad.repeat(19)}`), JSON.stringify(pad)).toBe(false);
+      expect(vendorRiskOverrideReasonOk(`abcde${pad.repeat(30)}`), JSON.stringify(pad)).toBe(false);
+    }
+  });
+
+  it('collapses each run of spaces to one before counting 20, and needs 5 different characters', () => {
+    expect(VENDOR_RISK_OVERRIDE_REASON_MIN_DIFFERENT).toBe(5);
+    const cases: Array<[string, boolean]> = [
+      ['abcde fghij klmno pq', true], // 20
+      ['abcde fghij klmno p', false], // 19
+      ['abcde   fghij\t\tklmno\n\np', false], // 19 once collapsed
+      ['abcde\u00A0\u00A0\u00A0fghij\t\tklmno\n\npqrs', true], // 22 once collapsed
+      [' \u3000abcde fghij klmno pq\u3000 ', true], // 20 once trimmed
+      ['ab   cd   ef   gh   ij', false], // 14 once collapsed
+      ['abcd'.repeat(5), false], // 20, four different
+      ['abcde'.repeat(4), true], // 20, five different
+      ['aaaaa bbbbb ccccc ddddd', false], // the space is not one of the five
+      ['aaaaa bbbbb ccccc ddddd e', true],
+      ['\u{10400}\u{10401}\u{10402}\u{10403}\u{10404}'.repeat(4), true], // letters outside the basic plane
+      ['\u00E9\u00E8\u00EA\u00EB\u00E0'.repeat(4), true],
+    ];
+    for (const [s, want] of cases)
+      expect(vendorRiskOverrideReasonOk(s), JSON.stringify(s)).toBe(want);
+  });
+});
+
+describe('round 2 (R2-S2): a Yes on the security report or insurance needs its date, and never one in the future', () => {
+  const T = { utcToday: '2026-06-30' };
+
+  it('refuses a finished Yes without its date on either question, and takes it in a draft', () => {
+    for (const key of ['security_report', 'insurance'] as const) {
+      const a = datedAnswers('staff', '2026-06-30');
+      for (const missing of [{ answer: 'yes' }, { answer: 'yes', date: null }]) {
+        const without = { ...a, [key]: missing };
+        expect(vendorRiskAnswersProblem('staff', without, true, T), key).toBe(
+          'answer_date_missing',
+        );
+        expect(vendorRiskAnswersProblem('staff', without, true), key).toBe('answer_date_missing');
+        expect(vendorRiskAnswersProblem('staff', without, false, T), key).toBeNull();
+      }
+      // No and Not shown need no date.
+      for (const other of ['no', 'not_shown'] as const) {
+        expect(
+          vendorRiskAnswersProblem('staff', { ...a, [key]: { answer: other } }, true, T),
+        ).toBeNull();
+      }
+    }
+    // The data agreement keeps a date but needs none.
+    const agreement = { ...datedAnswers('staff', '2026-06-30'), data_agreement: { answer: 'yes' } };
+    expect(vendorRiskAnswersProblem('staff', agreement, true, T)).toBeNull();
+  });
+
+  it('refuses a date later than tomorrow in UTC on either question, whatever the answer, draft or finish', () => {
+    for (const key of ['security_report', 'insurance'] as const) {
+      for (const answer of ['yes', 'no', 'not_shown'] as const) {
+        const at = (date: string) => ({ [key]: { answer, date } });
+        expect(vendorRiskAnswersProblem('staff', at('2026-07-01'), false, T), key).toBeNull();
+        expect(vendorRiskAnswersProblem('staff', at('2026-06-30'), false, T), key).toBeNull();
+        for (const final of [false, true]) {
+          expect(
+            vendorRiskAnswersProblem(
+              'staff',
+              { ...datedAnswers('staff', '2026-06-30'), ...at('2026-07-02') },
+              final,
+              T,
+            ),
+            key,
+          ).toBe('answer_date_in_future');
+        }
+      }
+    }
+    // A leap day and the turn of a year are tomorrow like any other day.
+    const ins = (date: string) => ({ insurance: { answer: 'yes', date } });
+    expect(
+      vendorRiskAnswersProblem('staff', ins('2028-02-29'), false, { utcToday: '2028-02-28' }),
+    ).toBeNull();
+    expect(
+      vendorRiskAnswersProblem('staff', ins('2028-03-01'), false, { utcToday: '2028-02-28' }),
+    ).toBe('answer_date_in_future');
+    expect(
+      vendorRiskAnswersProblem('staff', ins('2027-01-01'), false, { utcToday: '2026-12-31' }),
+    ).toBeNull();
+    expect(
+      vendorRiskAnswersProblem('staff', ins('2027-01-02'), false, { utcToday: '2026-12-31' }),
+    ).toBe('answer_date_in_future');
+    // Without today, no date is judged in the future; the data agreement's date never is.
+    expect(vendorRiskAnswersProblem('staff', ins('2030-01-01'), false)).toBeNull();
+    expect(
+      vendorRiskAnswersProblem(
+        'staff',
+        { data_agreement: { answer: 'yes', date: '2030-01-01' } },
+        false,
+        T,
+      ),
+    ).toBeNull();
+    expect(() => vendorRiskAnswersProblem('staff', {}, false, { utcToday: '2026-02-30' })).toThrow(
+      RangeError,
+    );
+  });
+
+  it('asks for the date on the certificate, not the end of the cover, and the rules say a Yes needs its date', () => {
+    const insurance = VENDOR_RISK_QUESTIONS.find((q) => q.key === 'insurance')!;
+    expect(insurance.date?.label).toBe('Date on the certificate');
+    expect(JSON.stringify(insurance)).not.toMatch(/cover ends/i);
   });
 });
 

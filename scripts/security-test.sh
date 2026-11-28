@@ -1162,6 +1162,9 @@ PGTAP_TESTS=(
   # never reviewed. The answers are held to the fixed question list and a
   # final's result to the rules by the table's own CHECKs (the case table is
   # core's too: vendor-risk.parity.test.ts); an override needs its reason;
+  # no stored text holds a hidden character (one list, core's too) and a
+  # reason is counted over what can be seen; a Yes on the security report or
+  # the insurance needs its date, never later than tomorrow in UTC;
   # one current review and one draft per supplier; a final review and an
   # item's finding are kept as written on every path; an account deleted
   # keeps the name and loses the link; the reminder claim stamps once. The

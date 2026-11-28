@@ -18,9 +18,13 @@
  *   - Asked: with "No data of ours", nothing; with staff contact details, the
  *     nine questions of the first three groups; with student data, all
  *     fourteen.
- *   - Out of date: a Yes to the security report or to insurance whose date is
- *     more than 12 months before the review counts as Not shown to us, and
- *     its item says it is out of date. A Yes with no date is not judged.
+ *   - Dates: a Yes to the security report or to insurance needs the date on
+ *     the document (a finished review without it is refused:
+ *     answer_date_missing), a date there later than tomorrow in UTC is
+ *     refused (answer_date_in_future), and a Yes dated more than 12 months
+ *     before the review counts as Not shown to us, its item saying it is out
+ *     of date. (The rules themselves judge only the age; the answers check
+ *     refuses the rest, so a stored final never has a Yes without its date.)
  *   - Gap: an asked question answered No or Not shown to us (out of date
  *     included). Not shown never counts as a pass. (A preview of an
  *     unfinished review counts an unanswered question as Not shown; the
@@ -128,7 +132,10 @@ export const VENDOR_RISK_REMINDER_DAYS_BEFORE = 30;
 
 /** Text limits, the database's own (0481's CHECKs and functions). */
 export const VENDOR_RISK_NOTE_MAX = 1000;
+/** A reason's least length, counted once each run of spaces is one space and the ends are trimmed. */
 export const VENDOR_RISK_OVERRIDE_REASON_MIN = 20;
+/** A reason's least number of different characters that are not spaces. */
+export const VENDOR_RISK_OVERRIDE_REASON_MIN_DIFFERENT = 5;
 export const VENDOR_RISK_OVERRIDE_REASON_MAX = 2000;
 export const VENDOR_RISK_FINDING_MAX = 500;
 export const VENDOR_RISK_ACTION_MAX = 1000;
@@ -456,38 +463,108 @@ export function vendorRiskReviewDue(
 /* ──────────────────────────── what the database refuses ──────────────────────────── */
 
 /**
- * The rule for every text the database stores (a note, a reason, a finding, an
- * action): min to max characters; at least one that is not a space, tab or
- * line break; no control character but tab and line breaks; none of the
- * invisible or direction-changing characters (U+200B to U+200F, U+2028,
- * U+2029, U+202A to U+202E, U+2066 to U+2069, U+FEFF). The database's
+ * THE HIDDEN CHARACTERS: no text the database stores (a note, a reason, a
+ * finding, an action, a name it keeps) may hold one. Code point ranges, in
+ * order: the control characters but tab, line feed and carriage return; the
+ * zero-width and joiner characters; the direction marks, embeddings,
+ * overrides and isolates; the line and paragraph separators; the tag
+ * characters; and the other default-ignorable and format characters of
+ * Unicode (fillers, variation selectors, invisible operators, the
+ * interlinear annotation and shorthand format controls). ONE definition: the
+ * database's _supplier_risk_hidden_chars() is the same list (the parity test
+ * compares them range by range, and the pgTAP file checks the database
+ * against every code point of the planes that hold them).
+ */
+export const VENDOR_RISK_HIDDEN_CHARACTERS: readonly (readonly [number, number])[] = [
+  [0x0001, 0x0008], // controls (C0) before tab
+  [0x000b, 0x000c], // line tabulation, form feed
+  [0x000e, 0x001f], // the other C0 controls
+  [0x007f, 0x009f], // delete and the C1 controls
+  [0x00ad, 0x00ad], // soft hyphen
+  [0x034f, 0x034f], // combining grapheme joiner
+  [0x0600, 0x0605], // Arabic number signs (format)
+  [0x061c, 0x061c], // Arabic letter mark (direction)
+  [0x06dd, 0x06dd], // Arabic end of ayah (format)
+  [0x070f, 0x070f], // Syriac abbreviation mark (format)
+  [0x0890, 0x0891], // Arabic pound and piastre marks above (format)
+  [0x08e2, 0x08e2], // Arabic disputed end of ayah (format)
+  [0x115f, 0x1160], // Hangul choseong and jungseong fillers
+  [0x17b4, 0x17b5], // Khmer inherent vowels
+  [0x180b, 0x180f], // Mongolian variation selectors and vowel separator
+  [0x200b, 0x200f], // zero width space, non-joiner, joiner; left-to-right and right-to-left marks
+  [0x2028, 0x202e], // line and paragraph separators; direction embeddings and overrides
+  [0x2060, 0x206f], // word joiner, invisible operators, direction isolates, deprecated format characters
+  [0x3164, 0x3164], // Hangul filler
+  [0xfe00, 0xfe0f], // variation selectors
+  [0xfeff, 0xfeff], // zero width no-break space (byte order mark)
+  [0xffa0, 0xffa0], // halfwidth Hangul filler
+  [0xfff0, 0xfffb], // unassigned default-ignorables; interlinear annotation
+  [0x110bd, 0x110bd], // Kaithi number sign
+  [0x110cd, 0x110cd], // Kaithi number sign above
+  [0x13430, 0x1343f], // Egyptian hieroglyph format controls
+  [0x1bca0, 0x1bca3], // shorthand format controls
+  [0x1d173, 0x1d17a], // musical symbol format controls
+  [0xe0000, 0xe0fff], // tag characters, variation selectors supplement, and the rest of that block
+];
+
+/**
+ * THE SPACES: Unicode's white space that the hidden list leaves (tab, line
+ * feed, carriage return, space, no-break space, Ogham space mark, the
+ * typographic spaces, narrow no-break, medium mathematical and ideographic
+ * spaces). A text must hold something else; a reason counts each run of
+ * them as one, and none as one of its different characters. The database's
+ * _supplier_risk_space_chars() is the same list.
+ */
+export const VENDOR_RISK_SPACE_CHARACTERS: readonly (readonly [number, number])[] = [
+  [0x0009, 0x0009], // tab
+  [0x000a, 0x000a], // line feed
+  [0x000d, 0x000d], // carriage return
+  [0x0020, 0x0020], // space
+  [0x00a0, 0x00a0], // no-break space
+  [0x1680, 0x1680], // Ogham space mark
+  [0x2000, 0x200a], // en quad to hair space
+  [0x202f, 0x202f], // narrow no-break space
+  [0x205f, 0x205f], // medium mathematical space
+  [0x3000, 0x3000], // ideographic space
+];
+
+function charClass(ranges: readonly (readonly [number, number])[]): string {
+  const u = (cp: number) => `\\u{${cp.toString(16).toUpperCase()}}`;
+  return `[${ranges.map(([lo, hi]) => (lo === hi ? u(lo) : `${u(lo)}-${u(hi)}`)).join('')}]`;
+}
+const HIDDEN = new RegExp(charClass(VENDOR_RISK_HIDDEN_CHARACTERS), 'u');
+const SPACE = new RegExp(charClass(VENDOR_RISK_SPACE_CHARACTERS), 'u');
+const SPACE_RUNS = new RegExp(`${charClass(VENDOR_RISK_SPACE_CHARACTERS)}+`, 'gu');
+
+/**
+ * The rule for every text the database stores (a note, a reason, a finding,
+ * an action, a name): min to max characters; at least one that is not a
+ * space; no hidden character (VENDOR_RISK_HIDDEN_CHARACTERS). The database's
  * _supplier_risk_text_ok is the same rule.
  */
-const FORBIDDEN_CHARS =
-  // eslint-disable-next-line no-control-regex
-  /[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200F\u2028-\u202E\u2066-\u2069\uFEFF]/u;
 export function vendorRiskTextOk(text: unknown, min: number, max: number): boolean {
   if (typeof text !== 'string') return false;
   const len = Array.from(text).length;
   if (len < min || len > max) return false;
-  if (!/[^ \t\r\n]/.test(text)) return false;
-  return !FORBIDDEN_CHARS.test(text);
+  if (text.replace(SPACE_RUNS, '') === '') return false;
+  return !HIDDEN.test(text);
 }
 
 /**
  * A reason (an override's, or a risk accepted): the text rule with 1 to 2000
- * characters, at least 20 once spaces, tabs and line breaks at the ends are
- * trimmed, and not one character repeated (at least two different characters
- * that are not a space, tab or line break).
+ * characters (so no hidden character), at least 20 once each run of spaces is
+ * one space and the ends are trimmed, and at least 5 different characters
+ * that are not spaces. The database's _supplier_risk_reason_ok is the same.
  */
 export function vendorRiskOverrideReasonOk(text: unknown): boolean {
   if (!vendorRiskTextOk(text, 1, VENDOR_RISK_OVERRIDE_REASON_MAX)) return false;
   const t = text as string;
-  if (
-    Array.from(t.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '')).length < VENDOR_RISK_OVERRIDE_REASON_MIN
-  )
-    return false;
-  return new Set(Array.from(t).filter((c) => !/[ \t\r\n]/.test(c))).size >= 2;
+  const squeezed = t.replace(SPACE_RUNS, ' ').replace(/^ | $/g, '');
+  if (Array.from(squeezed).length < VENDOR_RISK_OVERRIDE_REASON_MIN) return false;
+  return (
+    new Set(Array.from(t).filter((c) => !SPACE.test(c))).size >=
+    VENDOR_RISK_OVERRIDE_REASON_MIN_DIFFERENT
+  );
 }
 
 export const VENDOR_RISK_ANSWER_PROBLEMS = [
@@ -500,6 +577,8 @@ export const VENDOR_RISK_ANSWER_PROBLEMS = [
   'answer_bad_note',
   'answer_date_not_allowed',
   'answer_bad_date',
+  'answer_date_in_future',
+  'answer_date_missing',
   'answers_incomplete',
 ] as const;
 export type VendorRiskAnswerProblem = (typeof VENDOR_RISK_ANSWER_PROBLEMS)[number];
@@ -511,16 +590,33 @@ function jsonbKeyOrder(a: string, b: string): number {
   return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
 }
 
+export interface VendorRiskAnswersCheckOptions {
+  /**
+   * Today in UTC, 'YYYY-MM-DD' (not the organization's day: the database's
+   * saves read UTC). A date beside the security report or insurance may be at
+   * most one day later. Without it, no date is judged as in the future.
+   */
+  utcToday?: string | null;
+}
+
 /**
  * What the database would refuse in these answers (the same code), or null
  * when it takes them. `final`: a finished review must answer every question
- * asked at its level. With several problems, the code names one of them.
+ * asked at its level, and give the date beside a Yes whose date is judged
+ * (the security report, insurance). With several problems, the code names
+ * one of them, in the database's order.
  */
 export function vendorRiskAnswersProblem(
   level: unknown,
   answers: unknown,
   final: boolean,
+  options: VendorRiskAnswersCheckOptions = {},
 ): VendorRiskAnswerProblem | null {
+  const utcToday = options.utcToday ?? null;
+  if (utcToday !== null && !parseVendorRiskDate(utcToday)) {
+    throw new RangeError(`not a date: ${utcToday}`);
+  }
+  const latest = utcToday === null ? null : addVendorRiskDays(utcToday, 1);
   if (!isVendorRiskDataLevel(level)) return 'bad_data_level';
   if (answers === null || typeof answers !== 'object' || Array.isArray(answers))
     return 'answers_not_an_object';
@@ -550,6 +646,19 @@ export function vendorRiskAnswersProblem(
       ) {
         return 'answer_bad_date';
       }
+      // A judged date later than tomorrow in UTC (whatever the answer).
+      if (q.date.maxAgeMonths && latest !== null && (entry.date as string) > latest) {
+        return 'answer_date_in_future';
+      }
+    }
+    // A finished Yes to a question whose date is judged needs its date.
+    if (
+      final &&
+      q.date?.maxAgeMonths &&
+      entry.answer === 'yes' &&
+      (entry.date === undefined || entry.date === null)
+    ) {
+      return 'answer_date_missing';
     }
   }
   if (
