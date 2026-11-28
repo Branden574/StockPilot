@@ -26,32 +26,56 @@ import {
  * Unicode normalisation of a run of combining marks out of order took 651 ms
  * at 30,000 characters and 41.6 s at 240,000.
  *
- * For each hostile shape and each function: the median time at N and at 2N
- * characters (each run several calls, after a warm-up), held to a hard
- * ceiling, and the ratio of the two held well under the 4 that a quadratic
- * time gives. N and 2N are both within the raw limits, so the writers do
- * their whole work at both sizes; 240,000 characters is held to a ceiling.
+ * For each hostile shape and each function: the two sizes N and 2N are timed
+ * in turn, run after run (so a busy machine slows both alike), each run long
+ * enough to read the clock well, after a warm-up. The median time at 2N (what a
+ * caller waits) is held to a hard ceiling. The ratio of the fastest run at 2N
+ * to the fastest at N (the function's own cost, without the collector's pauses,
+ * which grow with what a test file run in parallel holds) is held well under
+ * the 4 that a quadratic time gives (linear is 2). N and 2N are both within the
+ * raw limits, so the writers do their whole work at both sizes; 240,000
+ * characters is held to a ceiling.
  */
 const N = 15_000;
-const CALLS = 3;
-const RUNS = 5;
+const RUNS = 7;
+/** A run lasts at least this long (as many calls as that takes at N, at least 2). */
+const RUN_MS = 1;
 const RATIO_MAX = 3;
-const RATIO_FLOOR_MS = 0.3;
+const RATIO_FLOOR_MS = 0.2;
 const CEILING_MS = 150;
 const BIG = 240_000;
 const BIG_CEILING_MS = 300;
 
-function median(fn: (s: string) => unknown, text: string): number {
-  fn(text);
-  fn(text);
-  const times: number[] = [];
+const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!;
+
+/** Times `fn` on `one` and `two` in turn: the median time of each (per call), and the fastest at `two` over the fastest at `one`. */
+function timePair(
+  fn: (s: string) => unknown,
+  one: string,
+  two: string,
+): { one: number; two: number; ratio: number } {
+  fn(one);
+  fn(two);
+  const t0 = performance.now();
+  fn(one);
+  const single = performance.now() - t0;
+  const calls = Math.min(200, Math.max(2, Math.ceil(RUN_MS / Math.max(single, 0.001))));
+  const ones: number[] = [];
+  const twos: number[] = [];
   for (let r = 0; r < RUNS; r += 1) {
-    const t0 = performance.now();
-    for (let c = 0; c < CALLS; c += 1) fn(text);
-    times.push((performance.now() - t0) / CALLS);
+    const a = performance.now();
+    for (let c = 0; c < calls; c += 1) fn(one);
+    const b = performance.now();
+    for (let c = 0; c < calls; c += 1) fn(two);
+    const e = performance.now();
+    ones.push((b - a) / calls);
+    twos.push((e - b) / calls);
   }
-  times.sort((a, b) => a - b);
-  return times[Math.floor(RUNS / 2)]!;
+  return {
+    one: median(ones),
+    two: median(twos),
+    ratio: Math.min(...twos) / Math.max(Math.min(...ones), 0.000001),
+  };
 }
 
 /** `s` repeated to about `n` code points. */
@@ -127,14 +151,14 @@ describe('the text functions run in linear time', () => {
   for (const [shape, make] of SHAPES) {
     for (const [name, fn] of FNS) {
       it(`${name}: ${shape}`, () => {
-        const one = median(fn, make(N));
-        const two = median(fn, make(2 * N));
+        const { one, two, ratio } = timePair(fn, make(N), make(2 * N));
         expect(two, `${name} took ${two.toFixed(2)} ms at ${2 * N}`).toBeLessThan(CEILING_MS);
-        // Below a few tenths of a millisecond the clock's own step and the collector are the ratio; the ceiling decides.
+        // Below a fifth of a millisecond a call is the collector's and the clock's; the ceiling decides.
         if (one >= RATIO_FLOOR_MS) {
-          expect(two / one, `${name}: ${one.toFixed(3)} ms then ${two.toFixed(3)} ms`).toBeLessThan(
-            RATIO_MAX,
-          );
+          expect(
+            ratio,
+            `${name}: ${one.toFixed(3)} ms then ${two.toFixed(3)} ms (fastest runs: ratio ${ratio.toFixed(2)})`,
+          ).toBeLessThan(RATIO_MAX);
         }
       });
     }
