@@ -32,14 +32,24 @@ const UNSEEN = new RegExp(
   'gu',
 );
 
-/** A supplier's name as a notice's body carries it; 'a supplier' when nothing is left. */
-export function supplierNameForNotice(name: string | null | undefined): string {
-  if (typeof name !== 'string') return 'a supplier';
+/**
+ * A supplier's name as a SENTENCE carries it (a notice's body, the questions
+ * to copy for the vendor, a link's label): line breaks and runs of spaces one
+ * space, core's hidden characters and every other control, format and
+ * direction character out, cut to SUPPLIER_RISK_NOTICE_NAME_MAX characters.
+ * '' when nothing is left. On screen, a name stands as typed inside <bdi>.
+ */
+export function supplierNameAsText(name: string | null | undefined): string {
+  if (typeof name !== 'string') return '';
   const clean = name.replace(BREAKS, ' ').replace(UNSEEN, '').replace(/\s+/gu, ' ').trim();
-  if (!clean) return 'a supplier';
   const chars = Array.from(clean);
   if (chars.length <= SUPPLIER_RISK_NOTICE_NAME_MAX) return clean;
   return chars.slice(0, SUPPLIER_RISK_NOTICE_NAME_MAX).join('').trimEnd();
+}
+
+/** A supplier's name as a notice's body carries it; 'a supplier' when nothing is left. */
+export function supplierNameForNotice(name: string | null | undefined): string {
+  return supplierNameAsText(name) || 'a supplier';
 }
 
 /** 'YYYY-MM-DD' as "December 24, 2026" (the day itself, never shifted by a zone). */

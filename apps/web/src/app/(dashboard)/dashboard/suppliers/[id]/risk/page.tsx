@@ -37,6 +37,7 @@ import {
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { sendSupplierRiskRefusalAway } from '@/lib/supplier-risk/page-gate';
+import { supplierNameAsText } from '@/lib/supplier-risk/reminder-words';
 import { SupplierRiskTime } from '@/components/suppliers/risk/when';
 import {
   SUPPLIER_RISK_SUPPLIER_STATE_WORDS,
@@ -236,9 +237,15 @@ export default async function SupplierRiskReviewPage({
       : { dataLevel: null, answers: {}, from: 'empty' as const };
   const followUp =
     currentReview && currentReview.dataLevel
-      ? vendorRiskFollowUpEmail(row.supplierName, currentReview.dataLevel, currentReview.answers, {
-          reviewedOn: currentReview.reviewedOn,
-        })
+      ? // Plain text for an email: the name cleaned of line breaks, control
+        // and direction characters (a manager typed it); core says "your
+        // company" when nothing is left.
+        vendorRiskFollowUpEmail(
+          supplierNameAsText(row.supplierName),
+          currentReview.dataLevel,
+          currentReview.answers,
+          { reviewedOn: currentReview.reviewedOn },
+        )
       : null;
 
   return (

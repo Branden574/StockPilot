@@ -215,4 +215,16 @@ describe('what an owner or admin sees', () => {
     expect(names).toEqual(['<img src=x onerror=alert(1)>', 'Old \u202eName']);
     expect(container.textContent).toMatch(/Reviewed as/);
   });
+
+  it("the review link's label names the supplier cleaned of line breaks and direction marks (S4)", async () => {
+    useRegister({
+      data: [registerRow(1, { supplier_name: 'Example\nSupply \u202eCo\u0007' })],
+      error: null,
+    });
+    const { container } = await page();
+    const link = container.querySelector('tbody a')!;
+    expect(link.getAttribute('aria-label')).toBe('Open the vendor review of Example Supply Co');
+    // On screen the name is shown as typed, isolated in <bdi>.
+    expect(container.querySelector('tbody bdi')?.textContent).toBe('Example\nSupply \u202eCo\u0007');
+  });
 });

@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/table';
 import { editedOptionalText } from '@/lib/edited-optional-text';
 import type { SupplierRiskListCell, SuppliersRiskView } from '@/lib/supplier-risk/list-risk';
+import { supplierNameAsText } from '@/lib/supplier-risk/reminder-words';
 import {
   SUPPLIER_RISK_COULD_NOT_CHECK_CELL,
   SUPPLIER_RISK_NOT_REVIEWED,
@@ -264,7 +265,7 @@ export function SuppliersManager({
                           <Button asChild variant="outline" size="sm">
                             <Link
                               href={`/dashboard/suppliers/${row.id}/risk`}
-                              aria-label={`Vendor review of ${row.name}`}
+                              aria-label={`Vendor review of ${supplierNameAsText(row.name) || 'a supplier'}`}
                             >
                               Review
                             </Link>

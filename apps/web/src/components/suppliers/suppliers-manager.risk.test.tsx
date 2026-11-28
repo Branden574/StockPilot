@@ -140,4 +140,18 @@ describe('the Risk column and the Review link', () => {
     expect(screen.getByRole('link', { name: 'Vendor review of Example Supply Co' })).toBeTruthy();
     expect(screen.queryByRole('link', { name: 'Vendor review of Sample Paper Ltd' })).toBeNull();
   });
+
+  it("the Review link's label names the supplier cleaned of line breaks and direction marks (S4)", () => {
+    render(
+      <SuppliersManager
+        initial={[row(A, 'Example\r\nSupply \u202eCo')]}
+        view="active"
+        canManage
+        risk={OK}
+      />,
+    );
+    expect(
+      screen.getByRole('link', { name: 'Vendor review of Example Supply Co' }).getAttribute('href'),
+    ).toBe(`/dashboard/suppliers/${A}/risk`);
+  });
 });

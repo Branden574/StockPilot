@@ -25,6 +25,7 @@ import {
   supplierRiskResultTone,
   supplierRiskResultWords,
 } from '@/lib/supplier-risk/words';
+import { supplierNameAsText } from '@/lib/supplier-risk/reminder-words';
 import type { SupplierRiskRegisterRow } from '@/server/services/supplier-risk';
 
 const DUE_TONE = {
@@ -139,7 +140,7 @@ export function SupplierRiskRegisterTable({
               <Link
                 href={`/dashboard/suppliers/${row.supplierId}/risk`}
                 className="text-accent hover:text-foreground underline-offset-4 hover:underline"
-                aria-label={`Open the vendor review of ${row.supplierName}`}
+                aria-label={`Open the vendor review of ${supplierNameAsText(row.supplierName) || 'a supplier'}`}
               >
                 Open
               </Link>
