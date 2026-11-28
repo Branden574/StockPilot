@@ -333,6 +333,31 @@ export function evaluateVendorRisk(
   };
 }
 
+/**
+ * What a finished review says about its hard stops, beside its result: the
+ * ones that apply (a No), else the ones not ruled out (a hard-stop question
+ * answered Not shown to us, or not answered), else none. The database stores
+ * only the hard stops that apply, so a page that reads a stored review must
+ * ask this of its answers before it says "none": a data agreement not shown
+ * to us is More information needed, never "No hard stop applies". It reads
+ * the evaluation's own lists and changes no rule. Words:
+ * VENDOR_RISK_HARD_STOP_SUMMARY_WORDS[kind].
+ */
+export type VendorRiskHardStopSummary =
+  | { kind: 'found'; stops: VendorRiskHardStop[] }
+  | { kind: 'not_ruled_out'; stops: VendorRiskHardStop[] }
+  | { kind: 'none'; stops: [] };
+
+export function vendorRiskHardStopSummary(
+  evaluation: Pick<VendorRiskEvaluation, 'hardStops' | 'pendingHardStops'>,
+): VendorRiskHardStopSummary {
+  if (evaluation.hardStops.length > 0) return { kind: 'found', stops: [...evaluation.hardStops] };
+  if (evaluation.pendingHardStops.length > 0) {
+    return { kind: 'not_ruled_out', stops: [...evaluation.pendingHardStops] };
+  }
+  return { kind: 'none', stops: [] };
+}
+
 /** The result in force: the admin's override when there is one, else the computed result. */
 export function vendorRiskResultInForce(
   computed: VendorRiskResult,
@@ -565,6 +590,106 @@ export function vendorRiskOverrideReasonOk(text: unknown): boolean {
     new Set(Array.from(t).filter((c) => !SPACE.test(c))).size >=
     VENDOR_RISK_OVERRIDE_REASON_MIN_DIFFERENT
   );
+}
+
+/* ───────────────────────── for the pages (added for the web half) ───────────────────────── */
+// Additive helpers over the same lists, for the pages: they change no rule
+// above and nothing the database checks.
+
+const HIDDEN_ALL = new RegExp(charClass(VENDOR_RISK_HIDDEN_CHARACTERS), 'gu');
+/** The line and paragraph separators (in the hidden list): taken out as a line break, not as nothing. */
+const LINE_SEPARATORS = /[\u2028\u2029]/gu;
+
+/**
+ * Typed or pasted text with every hidden character (VENDOR_RISK_HIDDEN_CHARACTERS,
+ * the one list) taken out, for the page to clean a note, a finding, an action
+ * or a reason BEFORE it is sent and to show the person the cleaned text. A
+ * phone's emoji keyboard adds U+FE0F and joiners; pasted text carries U+00AD,
+ * U+200B, U+FEFF and U+2028. The line and paragraph separators become a line
+ * feed (not counted: nothing is lost); every other hidden character is
+ * removed. `removed`: how many were taken out (a separator turned into a
+ * line break is not counted). The result passes the hidden part of the text
+ * rule (vendorRiskTextOk can still refuse its length or a text of spaces only).
+ */
+export function vendorRiskCleanText(text: string): { text: string; removed: number } {
+  let removed = 0;
+  const cleaned = text.replace(LINE_SEPARATORS, '\n').replace(HIDDEN_ALL, () => {
+    removed += 1;
+    return '';
+  });
+  return { text: cleaned, removed };
+}
+
+/** What the page counts in a reason: graphemes as seen, the spaces' runs as one. */
+export interface VendorRiskReasonCount {
+  /**
+   * Characters as seen (graphemes: an emoji, a flag or a letter with its
+   * accents is one) once each run of spaces is one space and the ends are
+   * trimmed. The blank braille cell U+2800 counts as a space.
+   */
+  seen: number;
+  /** Different graphemes that are not spaces. */
+  different: number;
+  /** It holds a hidden character (clean it with vendorRiskCleanText). */
+  hidden: boolean;
+  /** Longer than the database takes (VENDOR_RISK_OVERRIDE_REASON_MAX code points). */
+  tooLong: boolean;
+  /**
+   * The page's rule: the database's (vendorRiskOverrideReasonOk) AND at least
+   * VENDOR_RISK_OVERRIDE_REASON_MIN seen characters and
+   * VENDOR_RISK_OVERRIDE_REASON_MIN_DIFFERENT different ones. Graphemes are
+   * never more than code points, so the page asks for at least the database's
+   * floor, and a reason it takes the database takes.
+   */
+  ok: boolean;
+}
+
+const COUNT_SPACE = new RegExp(
+  `^[${charClass(VENDOR_RISK_SPACE_CHARACTERS).slice(1, -1)}\\u{2800}]+$`,
+  'u',
+);
+
+function graphemes(text: string): string[] {
+  const Segmenter = (
+    Intl as unknown as {
+      Segmenter?: new (
+        l?: string,
+        o?: { granularity: 'grapheme' },
+      ) => { segment(t: string): Iterable<{ segment: string }> };
+    }
+  ).Segmenter;
+  if (typeof Segmenter !== 'function') return Array.from(text);
+  return Array.from(
+    new Segmenter(undefined, { granularity: 'grapheme' }).segment(text),
+    (s) => s.segment,
+  );
+}
+
+/** The reason counter beside a reason field (an override's, or a risk accepted). */
+export function vendorRiskReasonCount(text: string): VendorRiskReasonCount {
+  const parts = graphemes(text);
+  const squeezed: string[] = [];
+  for (const g of parts) {
+    const space = COUNT_SPACE.test(g);
+    if (space) {
+      if (squeezed.length > 0 && squeezed[squeezed.length - 1] !== ' ') squeezed.push(' ');
+    } else {
+      squeezed.push(g);
+    }
+  }
+  if (squeezed[squeezed.length - 1] === ' ') squeezed.pop();
+  const different = new Set(squeezed.filter((g) => g !== ' ')).size;
+  const seen = squeezed.length;
+  return {
+    seen,
+    different,
+    hidden: HIDDEN.test(text),
+    tooLong: Array.from(text).length > VENDOR_RISK_OVERRIDE_REASON_MAX,
+    ok:
+      vendorRiskOverrideReasonOk(text) &&
+      seen >= VENDOR_RISK_OVERRIDE_REASON_MIN &&
+      different >= VENDOR_RISK_OVERRIDE_REASON_MIN_DIFFERENT,
+  };
 }
 
 export const VENDOR_RISK_ANSWER_PROBLEMS = [

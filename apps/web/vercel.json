@@ -78,6 +78,10 @@
       "schedule": "0 16 * * *"
     },
     {
+      "path": "/api/cron/supplier-risk-reminders",
+      "schedule": "0 17 * * *"
+    },
+    {
       "path": "/api/cron/maintenance-orphan-escalations",
       "schedule": "20 15 * * *"
     },

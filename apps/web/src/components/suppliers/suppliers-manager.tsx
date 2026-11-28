@@ -1,15 +1,17 @@
 'use client';
 
-import { Archive, History, Loader2, Plus, RotateCcw, Truck } from 'lucide-react';
+import { Archive, History, Loader2, Plus, RotateCcw, ShieldCheck, Truck } from 'lucide-react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
-import { plainAddressMailtoUrl } from '@stockpilot/core';
+import { plainAddressMailtoUrl, VENDOR_RISK_RISK_WORDS } from '@stockpilot/core';
 
 import { PageHeader } from '@/components/patterns/page-header';
 import { ArchiveViewToggle } from '@/components/ui/archive-view-toggle';
+import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
@@ -32,6 +34,16 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { editedOptionalText } from '@/lib/edited-optional-text';
+import type { SupplierRiskListCell, SuppliersRiskView } from '@/lib/supplier-risk/list-risk';
+import { supplierNameAsText } from '@/lib/supplier-risk/reminder-words';
+import {
+  SUPPLIER_RISK_COULD_NOT_CHECK_CELL,
+  SUPPLIER_RISK_NOT_REVIEWED,
+  SUPPLIER_RISK_REVIEW_DUE_WORDS,
+  supplierRiskDay,
+  supplierRiskResultLabel,
+  supplierRiskResultTone,
+} from '@/lib/supplier-risk/words';
 import {
   archiveSupplierAction,
   createSupplierAction,
@@ -62,14 +74,21 @@ export function SuppliersManager({
   initial,
   view = 'active',
   canManage = true,
+  risk = null,
 }: {
   initial: SupplierRow[];
   view?: 'active' | 'archived';
   /** Hides New / Edit / Archive / Restore buttons when false. */
   canManage?: boolean;
+  /**
+   * The vendor reviews, for an owner or admin only (lib/supplier-risk/
+   * list-risk.ts); null for everyone else: no Risk column, no Review link.
+   */
+  risk?: SuppliersRiskView | null;
 }) {
   const router = useRouter();
   const isArchivedView = view === 'archived';
+  const riskColumn = risk !== null && risk.state !== 'step_up';
   const [editing, setEditing] = React.useState<SupplierRow | null>(null);
   const [open, setOpen] = React.useState(false);
   const [archiveTarget, setArchiveTarget] = React.useState<SupplierRow | null>(null);
@@ -115,7 +134,18 @@ export function SuppliersManager({
             ? 'Suppliers you archived. Restore one to bring it back into pick lists.'
             : 'Vendors, contacts, and where to reorder from.'
         }
-        actions={<ArchiveViewToggle view={view} />}
+        actions={
+          <>
+            {risk !== null ? (
+              <Button asChild variant="outline" size="sm">
+                <Link href="/dashboard/suppliers/risk">
+                  <ShieldCheck className="h-3.5 w-3.5" /> Risk register
+                </Link>
+              </Button>
+            ) : null}
+            <ArchiveViewToggle view={view} />
+          </>
+        }
         primaryAction={
           canManage && !isArchivedView ? (
             <Button
@@ -130,6 +160,19 @@ export function SuppliersManager({
           ) : null
         }
       />
+
+      {risk?.state === 'step_up' ? (
+        <p role="status" className="text-ink-2 text-[13px]" data-slot="suppliers-risk-note">
+          The vendor reviews need your authenticator step before they are shown. Open the risk
+          register to continue.
+        </p>
+      ) : null}
+      {risk?.state === 'could_not_check' ? (
+        <p role="status" className="text-ink-2 text-[13px]" data-slot="suppliers-risk-note">
+          The vendor reviews could not be checked just now. This is not the same as not reviewed:
+          reload the page to try again.
+        </p>
+      ) : null}
 
       {initial.length === 0 ? (
         isArchivedView ? (
@@ -150,13 +193,17 @@ export function SuppliersManager({
           data-slot="suppliers-table"
           className="border-border bg-card min-w-0 overflow-hidden rounded-lg border"
         >
-          <Table scrollLabelledBy="suppliers-title" className="min-w-[640px]">
+          <Table
+            scrollLabelledBy="suppliers-title"
+            className={riskColumn ? 'min-w-[820px]' : 'min-w-[640px]'}
+          >
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead>Name</TableHead>
                 <TableHead>Contact</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Phone</TableHead>
+                {riskColumn ? <TableHead>Risk</TableHead> : null}
                 <TableHead className="w-32 text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -165,6 +212,15 @@ export function SuppliersManager({
                 // A link only for one plain address; any other stored text is
                 // shown as it is, never as a link (core plainAddressMailtoUrl).
                 const mailto = plainAddressMailtoUrl(row.email);
+                const riskCell =
+                  risk?.state === 'ok' ? (risk.bySupplier[row.id.toLowerCase()] ?? null) : null;
+                // The review page opens for a supplier the register lists (every
+                // active one, and an archived one with a review); when the
+                // register could not be read, for an active one.
+                const reviewLink =
+                  risk?.state === 'ok'
+                    ? riskCell !== null || !isArchivedView
+                    : risk?.state === 'could_not_check' && !isArchivedView;
                 return (
                   <TableRow key={row.id}>
                     <TableCell className="text-foreground font-medium">{row.name}</TableCell>
@@ -192,8 +248,35 @@ export function SuppliersManager({
                         '—'
                       )}
                     </TableCell>
+                    {riskColumn ? (
+                      <TableCell data-slot="supplier-risk-cell">
+                        {risk?.state === 'could_not_check' ? (
+                          <span className="text-muted-foreground">
+                            {SUPPLIER_RISK_COULD_NOT_CHECK_CELL}
+                          </span>
+                        ) : risk?.state === 'ok' && !risk.complete && riskCell === null ? (
+                          // Past the rows the register could read: not known,
+                          // never "Not reviewed".
+                          <span className="text-muted-foreground">
+                            {SUPPLIER_RISK_COULD_NOT_CHECK_CELL}
+                          </span>
+                        ) : (
+                          <SupplierRiskCellView cell={riskCell} />
+                        )}
+                      </TableCell>
+                    ) : null}
                     <TableCell>
                       <div className="flex items-center justify-end gap-2">
+                        {reviewLink ? (
+                          <Button asChild variant="outline" size="sm">
+                            <Link
+                              href={`/dashboard/suppliers/${row.id}/risk`}
+                              aria-label={`Vendor review of ${supplierNameAsText(row.name) || 'a supplier'}`}
+                            >
+                              Review
+                            </Link>
+                          </Button>
+                        ) : null}
                         {canManage &&
                           (isArchivedView ? (
                             <Button
@@ -268,6 +351,53 @@ export function SuppliersManager({
         onConfirm={confirmRestore}
       />
     </>
+  );
+}
+
+const DUE_TONE = {
+  overdue: 'destructive',
+  due_today: 'warning',
+  due_soon: 'warning',
+  not_reviewed: 'outline',
+  scheduled: 'secondary',
+} as const;
+
+/**
+ * One supplier's vendor review in the Suppliers list: the result, the risk
+ * left and the next review date (with Overdue or Due soon), or "Not
+ * reviewed" (and a draft waiting, when there is one).
+ */
+function SupplierRiskCellView({ cell }: { cell: SupplierRiskListCell | null }) {
+  if (!cell || !cell.result) {
+    return (
+      <span className="text-muted-foreground">
+        {SUPPLIER_RISK_NOT_REVIEWED}
+        {cell?.draft ? <span className="block text-[12px]">A draft is open.</span> : null}
+      </span>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      <Badge variant={supplierRiskResultTone(cell.result)}>
+        {supplierRiskResultLabel(cell.result, cell.overridden)}
+      </Badge>
+      {cell.residualRisk ? (
+        <span className="text-ink-2 block text-[12px]">
+          Risk left: {VENDOR_RISK_RISK_WORDS[cell.residualRisk]}
+        </span>
+      ) : null}
+      <span className="text-ink-2 block whitespace-nowrap text-[12px]">
+        Next review: {supplierRiskDay(cell.nextReviewOn)}
+      </span>
+      {cell.reviewDue !== 'scheduled' ? (
+        <Badge variant={DUE_TONE[cell.reviewDue]}>
+          {SUPPLIER_RISK_REVIEW_DUE_WORDS[cell.reviewDue]}
+        </Badge>
+      ) : null}
+      {cell.draft ? (
+        <span className="text-muted-foreground block text-[12px]">A draft is open.</span>
+      ) : null}
+    </div>
   );
 }
 
