@@ -2773,11 +2773,15 @@ WEB_TESTS=(
   # The security alerts (part 5, stage 4a: RECORD ONLY). Nothing is sent: the
   # setter and the recipients' lookup are called from nowhere, each of 0480's
   # functions only from its one module, and each module of the alerts imports
-  # exactly its listed modules, calls only its listed functions and tables,
-  # writes nothing and names no fetch or sender, its imports followed one
-  # level deep (alerts-record-only, an allow-list). The alert job fails closed
-  # on its cron secret, makes its calls in the contract's order (every serious
-  # flag before any other claim), takes every refusal as an answer, closes a
+  # exactly its listed modules and the listed names from each, calls only its
+  # listed functions and tables, writes nothing and names no fetch or sender,
+  # its imports followed one level deep, where network, process and
+  # code-loading names are held to the uses judged (alerts-record-only, an
+  # allow-list and a tripwire, not a proof: review stays the control). The
+  # alert job fails closed on its cron secret, makes its calls in the
+  # contract's order (every serious flag before any other claim), opens a new
+  # state after a refused start only under a bucket where the condition
+  # holds, takes every refusal as an answer, closes a
   # handed-out channel, the email floor's second result and the held notice as
   # skipped, always finishes the heartbeat it started, ends inside its
   # deadline, never throws, and reports three missed or failed runs once.

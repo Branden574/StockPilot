@@ -9,52 +9,60 @@ import { describe, expect, it } from 'vitest';
  * Security invariant: release 4a of the security alerts is RECORD ONLY.
  *
  * Nothing in this build may send an alert, look up who would receive one, or
- * change a switch, a threshold or a planned check. This guard is an
- * ALLOW-LIST, not a list of senders to look for (a sender with a neutral name
- * would pass that):
+ * change a switch, a threshold or a planned check.
  *
- *   1. every function of migration 0480 is called (named in a string literal
- *      of code, or in a concatenation or template whose parts are all
- *      written out; comments aside) from exactly the module this release
- *      gives it, and from nowhere else: the job's four, the daily job's
- *      baseline, the retention's purge, the console's list. The setter
+ * WHAT THIS GUARD IS: A TRIPWIRE, NOT A PROOF. It reads the source of the
+ * alerts' modules and fails when a change adds a way to send that it
+ * recognises, so an accidental or careless sender (a mailer imported out of
+ * habit, a helper that posts, a write to the wrong table) fails CI before
+ * anyone relies on review alone. It does not prove that nothing can be sent:
+ * it reads text and names, not what runs, and code written on purpose to get
+ * past it can. A reviewer still reads every change to these modules and to
+ * this guard; that review is the control.
+ *
+ * WHAT IT CATCHES. It is an allow-list, not a list of senders to look for (a
+ * sender with a neutral name would pass that):
+ *   1. CALLERS: every function of migration 0480 is named (in a string
+ *      literal of code, or in a concatenation or template whose parts are
+ *      all written out; comments aside) in exactly the module this release
+ *      gives it, and nowhere else: the job's four, the daily job's baseline,
+ *      the retention's purge, the console's list. The setter
  *      (platform_security_alert_set) and the recipients' lookup
- *      (platform_admin_user_ids) are called from nowhere. Anywhere under src,
- *      an .rpc( whose function is not one plain literal, and could be one of
- *      them, is refused: a name built from parts is not counted, so it may
- *      not be used;
- *   2. each module of the alerts (MODULES: the alert job, its report helper
+ *      (platform_admin_user_ids) are named nowhere. Anywhere under src, an
+ *      .rpc( whose function is not one plain literal, and could be one of
+ *      them, is refused.
+ *   2. MODULES: each module of the alerts (the alert job, its report helper
  *      and its route, the daily job, the retention job, the console's
  *      service, action, section, client and page; every caller in CALLERS
- *      must be one of them) imports EXACTLY the modules listed for it; calls
- *      .rpc only with a function named on its list, and .from only with a
- *      table named on its list (a read: no insert, update, upsert or delete
- *      anywhere); never takes .rpc, .from or any of those as a value (bound,
- *      destructured, or with .call); touches no .functions, .storage,
- *      .channel, .auth, .schema, .realtime or .fetch; takes no property by
- *      a computed name (x[name], { [name]: v }); and names nothing it did not
- *      declare or import beyond the plain language globals in GLOBALS (so no
- *      fetch, globalThis, window, process, require or a sender that was
- *      never imported, under any name);
- *   3. ONE LEVEL DEEP: every module of the app a module of the alerts
- *      imports (that is not itself one of MODULES) is read too, and may
- *      import only what ONE_LEVEL_DEEP lists for it. A new helper is not on
- *      any list, so it fails here until it is judged and listed; a listed
- *      module that starts importing something new fails here as well (look
- *      at what the import does; if it can send, it does not belong here).
- * The self-tests at the bottom plant the ten senders the final review of 4a
- * planted into the job (and more), and each must be found, so this cannot
- * pass by reading nothing.
+ *      must be one of them):
+ *        - imports exactly the modules on its list, and from each exactly
+ *          the names listed for that import (types included; '*' for a
+ *          namespace import, an `export *` or a dynamic import, listed only
+ *          for React in the client). A new name taken from a module already
+ *          allowed fails, whatever that module has come to export;
+ *        - calls .rpc only with a function named in a literal on its list,
+ *          and .from only with a table on its list, and writes nothing
+ *          (insert, update, upsert, delete);
+ *        - does not take .rpc or .from as a value, touches none of the
+ *          client's other doors in DOORS, and takes no property by a
+ *          computed name;
+ *        - names nothing it did not declare or import beyond the plain
+ *          language globals in GLOBALS, and none of the names in NEVER
+ *          (network, process and code-loading names) even if it declares one.
+ *   3. ONE LEVEL DEEP: every module of the app that a module of the alerts
+ *      imports (and that is not one itself) is read too. It may import only
+ *      what ONE_LEVEL_DEEP lists for it, and may name none of NEVER and make
+ *      no dynamic import beyond the few uses ONE_LEVEL_DEEP_JUDGED lists for
+ *      it, by count: one more, or a new one, fails. A new helper is on no
+ *      list, so it fails until it is judged and listed.
+ * The self-tests at the bottom plant senders of each kind above, and each
+ * must be found, so this cannot pass by reading nothing.
  *
- * @stockpilot/core is not followed: it is the pure half (no I/O).
- *
- * WHAT IT CANNOT SEE (so it is a check against mistakes and unreviewed
- * changes, not a proof): a name made at run time from data (a value read
- * from a file, a request, the database); a module beyond one level deep;
- * what a name holds (it reads names, not types, and is not scope-aware: a
- * variable called like an allowed one can hold anything); a call made by
- * an allowed module's own dependency; and anything outside apps/web/src.
- * The review of a change to these modules is still the control.
+ * WHAT IT DOES NOT COVER, in general terms: what a name holds when the code
+ * runs (it reads names, not types, and is not scope-aware); a module more
+ * than one level deep, a package, and @stockpilot/core (the pure half, no
+ * I/O, not followed); and anything outside apps/web/src. It finds the
+ * senders it recognises, not every way code can reach the network.
  *
  * STAGE 4b CHANGES THESE LISTS ON PURPOSE: the sending job will call the
  * recipients' lookup, import a mailer and a push sender, and the console
@@ -79,8 +87,13 @@ const CALLERS: Record<string, string[]> = {
 };
 
 interface ModuleRule {
-  /** Exactly the modules it imports (type-only imports included). */
-  imports: string[];
+  /**
+   * Exactly the modules it imports, and for each exactly the names it takes
+   * from it (types included): 'default' for a default import, '*' for a
+   * namespace import, an `export *` or a dynamic import; [] for an import
+   * of its side effects only (server-only, a stylesheet).
+   */
+  imports: Record<string, string[]>;
   /** The only database functions it may call, by exact name. */
   rpc: string[];
   /** The only tables it may read with .from(), by exact name. */
@@ -90,13 +103,36 @@ interface ModuleRule {
 /** THE MODULES OF THE ALERTS: what each may import and call. */
 const MODULES: Record<string, ModuleRule> = {
   'server/security/alerts-job.ts': {
-    imports: [
-      'server-only',
-      '@/lib/env',
-      '@/lib/supabase/admin',
-      '@/server/security/alerts-reports',
-      '@stockpilot/core',
-    ],
+    imports: {
+      'server-only': [],
+      '@/lib/env': ['env'],
+      '@/lib/supabase/admin': ['createAdminClient'],
+      '@/server/security/alerts-reports': [
+        'alertWhereCode',
+        'reportAlertJob',
+        'AlertJobReportData',
+        'AlertJobReportTag',
+      ],
+      '@stockpilot/core': [
+        'ADMIN_EMAILS_MOST',
+        'ALERT_EXPECTED_CLAIM_REFUSALS',
+        'alertReminderKey',
+        'alertRestartAsk',
+        'dueReminderStep',
+        'planSecurityAlerts',
+        'readSecurityAlertClaim',
+        'readSecurityAlertHeartbeatFinish',
+        'readSecurityAlertHeartbeatStart',
+        'readSecurityAlertInputs',
+        'readSecurityAlertResult',
+        'recordOnlyResult',
+        'AlertClaimAnswer',
+        'AlertClaimAsk',
+        'AlertSpikeHeld',
+        'SecurityAlertInputs',
+        'SecurityAlertPlan',
+      ],
+    },
     rpc: [
       'platform_security_alert_heartbeat',
       'platform_security_alert_inputs',
@@ -106,41 +142,50 @@ const MODULES: Record<string, ModuleRule> = {
     tables: [],
   },
   'server/security/alerts-reports.ts': {
-    imports: ['server-only', '@/lib/error-reporter', '@stockpilot/core'],
+    imports: {
+      'server-only': [],
+      '@/lib/error-reporter': ['reportError'],
+      '@stockpilot/core': ['ALERT_REPORT_GAP_HOURS'],
+    },
     rpc: [],
     tables: [],
   },
   'app/api/cron/security-alerts/route.ts': {
-    imports: [
-      'next/server',
-      '@/lib/env',
-      '@/server/security/alerts-job',
-      '@/server/services/lib/system-context',
-    ],
+    imports: {
+      'next/server': ['NextResponse'],
+      '@/lib/env': ['env'],
+      '@/server/security/alerts-job': ['runSecurityAlerts', 'SECURITY_ALERTS_TAG'],
+      '@/server/services/lib/system-context': ['secretsEqual'],
+    },
     rpc: [],
     tables: [],
   },
   'app/api/cron/security-summary/route.ts': {
-    imports: [
-      'next/server',
-      '@/lib/env',
-      '@/lib/supabase/admin',
-      '@/server/security/alerts-reports',
-      '@/server/services/lib/system-context',
-      '@stockpilot/core',
-    ],
+    imports: {
+      'next/server': ['NextResponse'],
+      '@/lib/env': ['env'],
+      '@/lib/supabase/admin': ['createAdminClient'],
+      '@/server/security/alerts-reports': [
+        'alertWhereCode',
+        'reportAlertJob',
+        'AlertJobReportData',
+        'AlertJobReportTag',
+      ],
+      '@/server/services/lib/system-context': ['secretsEqual'],
+      '@stockpilot/core': ['readSecurityAlertBaseline'],
+    },
     rpc: ['platform_security_alert_baseline'],
     tables: [],
   },
   'app/api/cron/security-events-retention/route.ts': {
-    imports: [
-      'next/server',
-      '@/lib/env',
-      '@/lib/error-reporter',
-      '@/lib/supabase/admin',
-      '@/server/security/passkey-maintenance',
-      '@/server/services/lib/system-context',
-    ],
+    imports: {
+      'next/server': ['NextResponse'],
+      '@/lib/env': ['env'],
+      '@/lib/error-reporter': ['reportError'],
+      '@/lib/supabase/admin': ['createAdminClient'],
+      '@/server/security/passkey-maintenance': ['runPasskeyMaintenance'],
+      '@/server/services/lib/system-context': ['secretsEqual'],
+    },
     rpc: [
       'purge_security_events',
       'purge_sign_in_alerts',
@@ -150,66 +195,107 @@ const MODULES: Record<string, ModuleRule> = {
     tables: [],
   },
   'server/services/platform/security-alerts.ts': {
-    imports: [
-      'server-only',
-      '@/lib/error-reporter',
-      '@/lib/supabase/admin',
-      '@/server/services/lib/fetch-by-ids',
-      '@stockpilot/core',
-    ],
+    imports: {
+      'server-only': [],
+      '@/lib/error-reporter': ['reportError'],
+      '@/lib/supabase/admin': ['createAdminClient'],
+      '@/server/services/lib/fetch-by-ids': ['fetchAllRowsByIds', 'rawErrorText'],
+      '@stockpilot/core': [
+        'ALERT_LIST_DEFAULT',
+        'SECURITY_ALERTS_FAILED',
+        'readSecurityAlertList',
+        'SecurityAlertChange',
+        'SecurityAlertChangeView',
+        'SecurityAlertsResult',
+      ],
+    },
     rpc: ['platform_security_alert_list'],
     tables: ['user_profiles'],
   },
   'server/actions/platform/security-alerts.ts': {
-    imports: [
-      'zod',
-      '@/lib/auth/platform-admin',
-      '@/server/services/platform/security-alerts',
-      '@stockpilot/core',
-    ],
+    imports: {
+      zod: ['z'],
+      '@/lib/auth/platform-admin': ['checkPlatformConsoleRead'],
+      '@/server/services/platform/security-alerts': ['readPlatformSecurityAlerts'],
+      '@stockpilot/core': [
+        'SECURITY_ALERTS_FAILED',
+        'SECURITY_ALERTS_REFUSED',
+        'SecurityAlertsResult',
+      ],
+    },
     rpc: [],
     tables: [],
   },
   'components/platform/platform-security-alerts-section.tsx': {
-    imports: [
-      '@/lib/platform/viewer-time-zone',
-      '@/server/services/platform/security-alerts',
-      './security-alerts/security-alerts-client',
-    ],
+    imports: {
+      '@/lib/platform/viewer-time-zone': ['readPlatformViewerTimeZone'],
+      '@/server/services/platform/security-alerts': ['readPlatformSecurityAlerts'],
+      './security-alerts/security-alerts-client': ['SecurityAlertsClient'],
+    },
     rpc: [],
     tables: [],
   },
   'components/platform/security-alerts/security-alerts-client.tsx': {
-    imports: [
-      'react',
-      '@/components/patterns/state-panel',
-      '@/components/platform/platform-table',
-      '@/components/platform/security-response/security-response-button',
-      '@/components/platform/security-response/security-response-host',
-      '@/components/platform/zoned-time',
-      '@/components/ui/button',
-      '@/components/ui/table',
-      '@/lib/control-flow',
-      '@/lib/platform/dates',
-      '@/lib/platform/last-active',
-      '@/server/actions/platform/security-alerts',
-      '@stockpilot/core',
-    ],
+    imports: {
+      // React's namespace (React.useState and the rest): the one '*' on any list.
+      react: ['*'],
+      '@/components/patterns/state-panel': ['StatePanel'],
+      '@/components/platform/platform-table': ['PlatformTable'],
+      '@/components/platform/security-response/security-response-button': [
+        'SecurityResponseButton',
+      ],
+      '@/components/platform/security-response/security-response-host': [
+        'SecurityResponseHost',
+      ],
+      '@/components/platform/zoned-time': [
+        'ConsoleMoment',
+        'consoleZoneNote',
+        'SECURITY_PAGES_CLOCK',
+        'ZonedWords',
+      ],
+      '@/components/ui/button': ['Button'],
+      '@/components/ui/table': ['TableBody', 'TableCell', 'TableHead', 'TableHeader', 'TableRow'],
+      '@/lib/control-flow': ['isControlFlow'],
+      '@/lib/platform/dates': ['formatMomentInZone'],
+      '@/lib/platform/last-active': ['formatExactUtc'],
+      '@/server/actions/platform/security-alerts': ['readPlatformSecurityAlertsAction'],
+      '@stockpilot/core': [
+        'ALERT_LIST_DEFAULT',
+        'SECURITY_ALERTS_FAILED',
+        'SECURITY_ALERTS_WORDS',
+        'securityAlertCardId',
+        'securityAlertChangeLabel',
+        'securityAlertChangeValueWords',
+        'securityAlertClassLabel',
+        'securityAlertCountsWords',
+        'securityAlertEventsFromMs',
+        'securityAlertPhaseLabel',
+        'securityAlertRuleLabel',
+        'securityAlertSendingLines',
+        'securityAlertsHeartbeatSay',
+        'securityAlertThresholdRows',
+        'securityAlertWhat',
+        'SecurityAlertChangeView',
+        'SecurityAlertRow',
+        'SecurityAlertsResult',
+        'SecurityAlertsView',
+      ],
+    },
     rpc: [],
     tables: [],
   },
   'app/(platform)/platform/security/alerts/page.tsx': {
-    imports: [
-      'next',
-      'react',
-      '@/components/patterns/page-header',
-      '@/components/platform/platform-page',
-      '@/components/platform/platform-security-alerts-section',
-      '@/lib/auth/platform-admin',
-      '@/styles/liquid-glass/pages/admin.css',
-      '@/styles/liquid-glass/pages/platform.css',
-      '@stockpilot/core',
-    ],
+    imports: {
+      next: ['Metadata'],
+      react: ['Suspense'],
+      '@/components/patterns/page-header': ['PageHeader', 'PageHeaderBackLink'],
+      '@/components/platform/platform-page': ['PlatformPage'],
+      '@/components/platform/platform-security-alerts-section': ['PlatformSecurityAlertsSection'],
+      '@/lib/auth/platform-admin': ['requirePlatformAdmin'],
+      '@/styles/liquid-glass/pages/admin.css': [],
+      '@/styles/liquid-glass/pages/platform.css': [],
+      '@stockpilot/core': ['SECURITY_ALERTS_WORDS'],
+    },
     rpc: [],
     tables: [],
   },
@@ -308,6 +394,21 @@ const ONE_LEVEL_DEEP: Record<string, string[]> = {
   ],
 };
 
+/**
+ * ONE LEVEL DEEP, JUDGED: the only uses of a NEVER name, or of a dynamic
+ * import ('import()'), that a module one level deep may make, each by its
+ * exact count as judged on 2026-11-27. Every other module one level deep may
+ * make none. One more use, or a use of another of them, fails.
+ */
+const ONE_LEVEL_DEEP_JUDGED: Record<string, Record<string, number>> = {
+  // Loads its own panel's code (a module already on its list) when the panel opens.
+  'components/platform/security-response/security-response-host.tsx': { 'import()': 1 },
+  // Reads the environment's variables, and tells the server from the browser.
+  'lib/env.ts': { process: 10, window: 1 },
+  // Its own health check of the sign-in service (a GET to the project's URL, no alert in it).
+  'server/security/passkey-maintenance.ts': { fetch: 1 },
+};
+
 /** The language's own globals a module of the alerts may name without importing them. */
 const GLOBALS = new Set([
   'AbortController',
@@ -348,6 +449,7 @@ const NEVER = new Set([
   'require',
   'eval',
   'Function',
+  'Reflect',
   'importScripts',
 ]);
 /** Properties a module of the alerts may not touch: writes, other doors of the client, the network. */
@@ -397,6 +499,53 @@ function importsOf(name: string, text: string): string[] {
   };
   visit(parse(name, text));
   return [...new Set(out)];
+}
+
+/**
+ * The names a file takes from each module it imports or re-exports from:
+ * each named binding by the name the module exports it under, 'default' for
+ * a default import, '*' for a namespace import, an `export *` (or `* as`)
+ * and a dynamic import of a written-out module. An import of side effects
+ * only takes nothing.
+ */
+function takenFrom(name: string, text: string): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  const take = (spec: string, taken?: string) => {
+    const names = out.get(spec) ?? new Set<string>();
+    if (taken !== undefined) names.add(taken);
+    out.set(spec, names);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const spec = node.moduleSpecifier.text;
+      take(spec);
+      const clause = node.importClause;
+      if (clause?.name) take(spec, 'default');
+      const bindings = clause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) take(spec, '*');
+      else if (bindings) for (const e of bindings.elements) take(spec, (e.propertyName ?? e.name).text);
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      const spec = node.moduleSpecifier.text;
+      take(spec);
+      const clause = node.exportClause;
+      if (!clause || ts.isNamespaceExport(clause)) take(spec, '*');
+      else for (const e of clause.elements) take(spec, (e.propertyName ?? e.name).text);
+    } else if (
+      ts.isCallExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      node.arguments[0] &&
+      ts.isStringLiteralLike(node.arguments[0])
+    ) {
+      take(node.arguments[0].text, '*');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(name, text));
+  return out;
 }
 
 /** Whether an identifier sits in a type, not in code (a class's `extends` is code). */
@@ -471,11 +620,23 @@ function isReference(id: ts.Identifier): boolean {
 function problemsIn(name: string, text: string, rule: ModuleRule): string[] {
   const problems: string[] = [];
   const imports = importsOf(name, text);
+  const listed = Object.keys(rule.imports);
   for (const spec of imports) {
-    if (!rule.imports.includes(spec)) problems.push(`imports ${spec} (not on its list)`);
+    if (!listed.includes(spec)) problems.push(`imports ${spec} (not on its list)`);
   }
-  for (const spec of rule.imports) {
+  for (const spec of listed) {
     if (!imports.includes(spec)) problems.push(`no longer imports ${spec} (update its list)`);
+  }
+  // From each import on its list, exactly the names listed for it.
+  for (const [spec, taken] of takenFrom(name, text)) {
+    const names = rule.imports[spec];
+    if (names === undefined) continue;
+    for (const n of [...taken].sort()) {
+      if (!names.includes(n)) problems.push(`takes ${n} from ${spec} (not on its list)`);
+    }
+    for (const n of names) {
+      if (!taken.has(n)) problems.push(`no longer takes ${n} from ${spec} (update its list)`);
+    }
   }
 
   const source = parse(name, text);
@@ -581,16 +742,36 @@ function resolveLocal(from: string, spec: string): string | null {
   return `${base} (not found)`;
 }
 
-/** One level deep: each local module the alerts import must be listed, and import only what is listed for it. */
+/** How many times a file names each of NEVER in its code, and makes a dynamic import ('import()'). */
+function neverUses(name: string, text: string): Map<string, number> {
+  const uses = new Map<string, number>();
+  const count = (what: string) => uses.set(what, (uses.get(what) ?? 0) + 1);
+  const visit = (node: ts.Node) => {
+    if (ts.isIdentifier(node) && NEVER.has(node.text) && isReference(node)) count(node.text);
+    else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      count('import()');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parse(name, text));
+  return uses;
+}
+
+/**
+ * One level deep: each local module the alerts import must be listed, import
+ * only what is listed for it, and use NEVER's names and dynamic imports only
+ * as judged for it, by count.
+ */
 function oneLevelDeepProblems(
   modules: Record<string, ModuleRule>,
   deep: Record<string, string[]>,
   read: (file: string) => string,
+  judged: Record<string, Record<string, number>> = ONE_LEVEL_DEEP_JUDGED,
 ): string[] {
   const problems: string[] = [];
   const followed = new Set<string>();
   for (const [file, rule] of Object.entries(modules)) {
-    for (const spec of rule.imports) {
+    for (const spec of Object.keys(rule.imports)) {
       const dep = resolveLocal(file, spec);
       if (dep === null || dep in modules || followed.has(dep)) continue;
       followed.add(dep);
@@ -600,15 +781,26 @@ function oneLevelDeepProblems(
         );
         continue;
       }
-      for (const imported of importsOf(dep, read(dep))) {
+      const text = read(dep);
+      for (const imported of importsOf(dep, text)) {
         if (!deep[dep]!.includes(imported))
           problems.push(`${dep} imports ${imported} (not on its list)`);
+      }
+      const allowed = judged[dep] ?? {};
+      const uses = neverUses(dep, text);
+      for (const what of [...new Set([...uses.keys(), ...Object.keys(allowed)])].sort()) {
+        const n = uses.get(what) ?? 0;
+        const ok = allowed[what] ?? 0;
+        if (n !== ok) problems.push(`${dep} uses ${what} (${n}; judged for ${ok})`);
       }
     }
   }
   for (const dep of Object.keys(deep)) {
     if (!followed.has(dep))
       problems.push(`${dep} is listed one level deep, but no module of the alerts imports it`);
+  }
+  for (const dep of Object.keys(judged)) {
+    if (!(dep in deep)) problems.push(`${dep} is judged, but is not listed one level deep`);
   }
   return problems;
 }
@@ -1022,7 +1214,7 @@ describe('the guard reads what it says it reads', () => {
   it("one level deep: a new helper put on a module's list is not followed until it is listed", () => {
     const modules = {
       ...MODULES,
-      [JOB]: { ...MODULES[JOB]!, imports: [...MODULES[JOB]!.imports, './alerts-job-delivery'] },
+      [JOB]: { ...MODULES[JOB]!, imports: { ...MODULES[JOB]!.imports, './alerts-job-delivery': [] } },
     };
     expect(oneLevelDeepProblems(modules, ONE_LEVEL_DEEP, readSrc)).toEqual([
       `${JOB} imports server/security/alerts-job-delivery (not found), which this guard does not follow (judge it, then list it)`,
@@ -1034,7 +1226,7 @@ describe('the guard reads what it says it reads', () => {
       ...MODULES,
       [JOB]: {
         ...MODULES[JOB]!,
-        imports: [...MODULES[JOB]!.imports, '@/styles/liquid-glass/pages/not-a-sheet.css'],
+        imports: { ...MODULES[JOB]!.imports, '@/styles/liquid-glass/pages/not-a-sheet.css': [] },
       },
     };
     expect(oneLevelDeepProblems(modules, ONE_LEVEL_DEEP, readSrc)).toEqual([
@@ -1045,6 +1237,99 @@ describe('the guard reads what it says it reads', () => {
     const text = `${readSrc(page)}\nimport '@/styles/liquid-glass/pages/inventory.css';`;
     expect(problemsIn(page, text, MODULES[page]!)).toEqual([
       'imports @/styles/liquid-glass/pages/inventory.css (not on its list)',
+    ]);
+  });
+
+  // Review round 2 (R2-S1): what a module one level deep does with no new import.
+  const DEEP = 'lib/error-reporter.ts';
+  it.each([
+    ['a fetch call', "void fetch('https://hooks.example.test/x', { method: 'POST' });", 'fetch'],
+    ['a call through globalThis', 'globalThis.queueMicrotask(() => undefined);', 'globalThis'],
+    ['the Function constructor', "const make = new Function('return 1');", 'Function'],
+    ['a call through Reflect', 'Reflect.apply(String, undefined, [1]);', 'Reflect'],
+    ['eval', "eval('1');", 'eval'],
+    [
+      'a dynamic import of a module already on its list',
+      "void import('./error-reporter-core');",
+      'import()',
+    ],
+    ['require', "const https = require('node:https');", 'require'],
+  ])('one level deep: a listed module that adds %s is found', (_what, planted, what) => {
+    const read = (file: string) => (file === DEEP ? `${readSrc(file)}\n${planted}` : readSrc(file));
+    expect(oneLevelDeepProblems(MODULES, ONE_LEVEL_DEEP, read)).toEqual([
+      `${DEEP} uses ${what} (1; judged for 0)`,
+    ]);
+  });
+
+  it('one level deep: a judged use is held to its count (one more fetch is found), and a judged use that is gone must come off the list', () => {
+    const health = 'server/security/passkey-maintenance.ts';
+    const read = (file: string) =>
+      file === health
+        ? `${readSrc(file)}\nvoid fetch('https://hooks.example.test/x', { method: 'POST' });`
+        : readSrc(file);
+    expect(oneLevelDeepProblems(MODULES, ONE_LEVEL_DEEP, read)).toEqual([
+      `${health} uses fetch (2; judged for 1)`,
+    ]);
+    const stale = { ...ONE_LEVEL_DEEP_JUDGED, 'lib/control-flow.ts': { fetch: 1 } };
+    expect(oneLevelDeepProblems(MODULES, ONE_LEVEL_DEEP, readSrc, stale)).toEqual([
+      'lib/control-flow.ts uses fetch (0; judged for 1)',
+    ]);
+  });
+
+  it('a re-export through an import already allowed: the new name is refused where a module of the alerts takes it', () => {
+    const REPORTS = 'server/security/alerts-reports.ts';
+    // The error reporter comes to re-export more from a module already on its list ...
+    const read = (file: string) =>
+      file === DEEP
+        ? `${readSrc(file)}\nexport { reportError as reportNow } from './error-reporter-core';\nexport * from './error-reporter-core';`
+        : readSrc(file);
+    // ... which one level deep reads as nothing new (the same import) ...
+    expect(oneLevelDeepProblems(MODULES, ONE_LEVEL_DEEP, read)).toEqual([]);
+    // ... but the report helper taking the new names is refused, name by name.
+    const takes = `${readSrc(REPORTS)}\nimport { reportNow, isNextControlFlowError } from '@/lib/error-reporter';`;
+    expect(problemsIn(REPORTS, takes, MODULES[REPORTS]!)).toEqual([
+      'takes isNextControlFlowError from @/lib/error-reporter (not on its list)',
+      'takes reportNow from @/lib/error-reporter (not on its list)',
+    ]);
+  });
+
+  it.each([
+    [
+      'a namespace import of an allowed module',
+      "import * as reporter from '@/server/security/alerts-reports';",
+      'takes * from @/server/security/alerts-reports (not on its list)',
+    ],
+    [
+      'a dynamic import of an allowed module',
+      "const later = await import('@/lib/supabase/admin');",
+      'takes * from @/lib/supabase/admin (not on its list)',
+    ],
+    [
+      'a re-export of everything an allowed module has',
+      "export * from '@/lib/env';",
+      'takes * from @/lib/env (not on its list)',
+    ],
+    [
+      'a default import of an allowed module',
+      "import admin from '@/lib/supabase/admin';",
+      'takes default from @/lib/supabase/admin (not on its list)',
+    ],
+    [
+      'a name renamed on the way in',
+      "import { createAdminClient as make, createAdminClient as again } from '@/lib/supabase/admin';\nimport { recordOnlyResult as other, isAlertCounts as check } from '@stockpilot/core';",
+      'takes isAlertCounts from @stockpilot/core (not on its list)',
+    ],
+  ])('planted, a name taken from an import already allowed: %s', (_what, planted, problem) => {
+    expect(problemsIn(JOB, `${job()}\n${planted}`, MODULES[JOB]!)).toContain(problem);
+  });
+
+  it('a name on a list that the module no longer takes must come off it', () => {
+    const rule = {
+      ...MODULES[JOB]!,
+      imports: { ...MODULES[JOB]!.imports, '@/lib/env': ['env', 'clientEnv'] },
+    };
+    expect(problemsIn(JOB, job(), rule)).toEqual([
+      'no longer takes clientEnv from @/lib/env (update its list)',
     ]);
   });
 });
