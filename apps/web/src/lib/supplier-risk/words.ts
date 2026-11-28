@@ -35,6 +35,21 @@ const DUE_RANK: Readonly<Record<VendorRiskReviewDue, number>> = {
   scheduled: 4,
 };
 
+/** The history's events (0481's admin-only record), in words; a newer one keeps the database's word. */
+export const SUPPLIER_RISK_EVENT_WORDS: Readonly<Record<string, string>> = {
+  draft_discarded: 'Draft discarded',
+  review_finished: 'Review finished',
+  result_overridden: 'Result set by an admin',
+  item_changed: 'Item changed',
+  risk_accepted: 'Risk accepted',
+};
+
+export function supplierRiskEventWords(event: string): string {
+  return Object.prototype.hasOwnProperty.call(SUPPLIER_RISK_EVENT_WORDS, event)
+    ? SUPPLIER_RISK_EVENT_WORDS[event]!
+    : event;
+}
+
 export const SUPPLIER_RISK_DUE_REMINDER_NOT_SENT = 'The due reminder could not be sent.';
 export const SUPPLIER_RISK_NOT_REVIEWED = 'Not reviewed';
 export const SUPPLIER_RISK_COULD_NOT_CHECK_CELL = 'Could not check';

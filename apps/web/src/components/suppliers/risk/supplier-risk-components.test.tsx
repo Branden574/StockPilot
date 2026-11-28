@@ -10,7 +10,11 @@ import {
   type VendorRiskAnswers,
 } from '@stockpilot/core';
 
-import type { SupplierRiskItem, SupplierRiskReview } from '@/server/services/supplier-risk';
+import type {
+  SupplierRiskEvent,
+  SupplierRiskItem,
+  SupplierRiskReview,
+} from '@/server/services/supplier-risk';
 
 /**
  * Security invariant: what the vendor review page's parts show and send
@@ -60,6 +64,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 import { CleanTextField } from './clean-text-field';
 import { ReasonField } from './reason-field';
 import { SupplierRiskReviewForm } from './review-form';
+import { SupplierRiskHistory } from './history';
 import { SupplierRiskItems } from './review-items';
 import { SupplierRiskReviewSummary } from './review-summary';
 
@@ -557,5 +562,122 @@ describe('every date in the organization zone, the same on the server and in the
     } finally {
       process.env.TZ = before;
     }
+  });
+});
+
+describe("the history: the database's record, every value as text", () => {
+  function event(over: Partial<SupplierRiskEvent> = {}): SupplierRiskEvent {
+    return {
+      id: 'ee000000-0000-4000-8000-000000000001',
+      event: 'item_changed',
+      reviewId: 'e1e1e1e1-0000-4000-8000-000000000001',
+      itemId: '17e17e17-0000-4000-8000-000000000001',
+      version: 3,
+      actorName: 'Rami \u202eExample',
+      at: '2026-11-27T16:30:00Z',
+      detail: {
+        questionKey: 'breach_notice',
+        before: { status: 'open', ownerName: 'Avery Example', dueOn: '2026-12-31' },
+        after: { status: 'accepted', ownerName: 'Blake <b>Example</b>', dueOn: null },
+        reason: 'Line one <img src=x onerror=alert(1)>\n  line two',
+        computedResult: null,
+        result: null,
+      },
+      ...over,
+    };
+  }
+
+  it('who, when (in the organization zone), what changed, and the reason as written', () => {
+    const { container } = render(
+      <SupplierRiskHistory
+        read={{ state: 'ok', value: { events: [event()], next: null } }}
+        timeZone="Asia/Tokyo"
+        olderHref={null}
+        newestHref={null}
+      />,
+    );
+    const li = container.querySelector('[data-event="item_changed"]')!;
+    expect(li.textContent).toMatch(/Item changed/);
+    expect(li.textContent).toMatch(/Version 3/);
+    expect(li.textContent).toContain('November 28, 2026, 1:30 AM GMT+9');
+    expect(li.querySelector('time')?.getAttribute('title')).toBe('27 Nov 2026, 16:30 UTC');
+    const names = Array.from(li.querySelectorAll('bdi')).map((b) => b.textContent);
+    expect(names).toEqual(['Rami \u202eExample', 'Avery Example', 'Blake <b>Example</b>']);
+    expect(li.textContent).toMatch(/Status changed from Open to Risk accepted\./);
+    expect(li.textContent).toMatch(/Due changed from December 31, 2026 to none\./);
+    expect(li.textContent).toContain(
+      'Reason: Line one <img src=x onerror=alert(1)>\n  line two',
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('b')).toBeNull();
+  });
+
+  it("an event this page does not know is shown by the database's word, never hidden", () => {
+    const { container } = render(
+      <SupplierRiskHistory
+        read={{
+          state: 'ok',
+          value: {
+            events: [event({ event: 'something_new', detail: { ...event().detail, before: null, after: null, reason: null } })],
+            next: null,
+          },
+        }}
+        timeZone="UTC"
+        olderHref={null}
+        newestHref={null}
+      />,
+    );
+    expect(container.querySelector('[data-event="something_new"]')?.textContent).toMatch(
+      /something_new/,
+    );
+  });
+
+  it('a finished review with a result set by an admin says both results', () => {
+    const { container } = render(
+      <SupplierRiskHistory
+        read={{
+          state: 'ok',
+          value: {
+            events: [
+              event({
+                event: 'result_overridden',
+                itemId: null,
+                detail: {
+                  questionKey: null,
+                  before: null,
+                  after: null,
+                  reason: 'The vendor showed us a signed letter.',
+                  computedResult: 'do_not_use',
+                  result: 'more_information',
+                },
+              }),
+            ],
+            next: 'cursor',
+          },
+        }}
+        timeZone="UTC"
+        olderHref="/dashboard/suppliers/x/risk?history=cursor"
+        newestHref={null}
+      />,
+    );
+    const li = container.querySelector('[data-event="result_overridden"]')!;
+    expect(li.textContent).toMatch(/Result set by an admin/);
+    expect(li.textContent).toMatch(/The rules gave Do not use; the result is More information needed\./);
+    expect(screen.getByRole('link', { name: 'Older changes' }).getAttribute('href')).toBe(
+      '/dashboard/suppliers/x/risk?history=cursor',
+    );
+  });
+
+  it('a history that could not be read says so; it is never "no change"', () => {
+    const { container } = render(
+      <SupplierRiskHistory
+        read={{ state: 'could_not_check' }}
+        timeZone="UTC"
+        olderHref={null}
+        newestHref={null}
+      />,
+    );
+    expect(container.textContent).toMatch(/The history could not be checked just now/);
+    expect(container.textContent).not.toMatch(/No change recorded/);
   });
 });

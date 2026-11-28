@@ -49,6 +49,7 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: h.report }));
 import { ServiceError } from './context';
 import {
   sameInstant,
+  SUPPLIER_RISK_EVENTS_PAGE,
   SUPPLIER_RISK_BUSY,
   SUPPLIER_RISK_DRAFT_MOVED,
   SUPPLIER_RISK_FORBIDDEN,
@@ -218,6 +219,7 @@ const EVERY_METHOD: Array<[string, (s: SupplierRiskService) => Promise<unknown>]
   ['register', (s) => s.register()],
   ['history', (s) => s.history(SUPPLIER)],
   ['review', (s) => s.review(REVIEW)],
+  ['listEvents', (s) => s.listEvents(SUPPLIER, null)],
   ['ownersAndAdmins', (s) => s.ownersAndAdmins()],
   ['seat', (s) => s.seat()],
   ['saveDraft', (s) => s.saveDraft({ supplierId: SUPPLIER, dataLevel: 'staff', answers: {} })],
@@ -397,6 +399,7 @@ describe('could not check is never nothing', () => {
     ['register', 'supplier_risk_register', (s) => s.register()],
     ['history', 'supplier_risk_history', (s) => s.history(SUPPLIER)],
     ['review', 'supplier_risk_review', (s) => s.review(REVIEW)],
+    ['listEvents', 'supplier_risk_events', (s) => s.listEvents(SUPPLIER, null)],
   ];
 
   for (const code of ['PGRST202', '42883']) {
@@ -811,5 +814,140 @@ describe('the owners and admins an item may be given to', () => {
       'impersonation_expires_at',
       null,
     ]);
+  });
+});
+
+describe("the history: the database's own record of a supplier's reviews, newest first", () => {
+  const EVENT = (n: number, over: Record<string, unknown> = {}) => ({
+    event_id: `ee000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
+    event: 'item_changed',
+    review_id: REVIEW,
+    item_id: ITEM,
+    version: 3,
+    actor_name: 'Avery Example',
+    occurred_at: `2026-11-27T10:${String(59 - (n % 60)).padStart(2, '0')}:00+00:00`,
+    detail: {
+      question_key: 'breach_notice',
+      before: { status: 'open', owner_name: 'Avery Example', due_on: '2026-12-31' },
+      after: { status: 'accepted', owner_name: 'Blake Example', due_on: null },
+      reason: 'Accepted until January.',
+    },
+    ...over,
+  });
+
+  it('one page, read with the context organization and the supplier; no cursor: from the newest', async () => {
+    const { stub, svc } = setup({
+      'rpc:supplier_risk_events': { data: [EVENT(1), EVENT(2)], error: null },
+    });
+    const read = await svc.listEvents(SUPPLIER, null);
+    expect(stub.rpcCalls).toEqual([
+      {
+        name: 'supplier_risk_events',
+        args: {
+          p_organization_id: ORG,
+          p_supplier_id: SUPPLIER,
+          p_before_at: null,
+          p_before_id: null,
+          p_limit: SUPPLIER_RISK_EVENTS_PAGE + 1,
+        },
+      },
+    ]);
+    expect(read.state).toBe('ok');
+    if (read.state !== 'ok') return;
+    expect(read.value.next).toBeNull();
+    expect(read.value.events[0]).toEqual({
+      id: EVENT(1).event_id,
+      event: 'item_changed',
+      reviewId: REVIEW,
+      itemId: ITEM,
+      version: 3,
+      actorName: 'Avery Example',
+      at: EVENT(1).occurred_at,
+      detail: {
+        questionKey: 'breach_notice',
+        before: { status: 'open', ownerName: 'Avery Example', dueOn: '2026-12-31' },
+        after: { status: 'accepted', ownerName: 'Blake Example', dueOn: null },
+        reason: 'Accepted until January.',
+        computedResult: null,
+        result: null,
+      },
+    });
+  });
+
+  it('a full page gives the cursor of its last event, and the cursor reads the page after it', async () => {
+    const rows = Array.from({ length: SUPPLIER_RISK_EVENTS_PAGE + 1 }, (_, i) => EVENT(i + 1));
+    const { stub, svc } = setup({ 'rpc:supplier_risk_events': { data: rows, error: null } });
+    const first = await svc.listEvents(SUPPLIER, null);
+    if (first.state !== 'ok') throw new Error('expected ok');
+    expect(first.value.events).toHaveLength(SUPPLIER_RISK_EVENTS_PAGE);
+    const last = rows[SUPPLIER_RISK_EVENTS_PAGE - 1]!;
+    expect(first.value.next).toBe(`${last.occurred_at}~${last.event_id}`);
+    await svc.listEvents(SUPPLIER, first.value.next);
+    expect(stub.rpcCalls[1]?.args).toMatchObject({
+      p_before_at: last.occurred_at,
+      p_before_id: last.event_id,
+    });
+  });
+
+  it('a cursor that is not one (made up, or tampered with) reads from the newest', async () => {
+    const { stub, svc } = setup({ 'rpc:supplier_risk_events': { data: [], error: null } });
+    for (const bad of ['x', 'not-a-date~' + ITEM, '2026-11-27T10:00:00Z~not-a-uuid', '~']) {
+      await svc.listEvents(SUPPLIER, bad);
+    }
+    for (const c of stub.rpcCalls) {
+      expect(c.args).toMatchObject({ p_before_at: null, p_before_id: null });
+    }
+  });
+
+  it('a supplier id that is not a uuid reads nothing', async () => {
+    const { stub, svc } = setup();
+    expect(await svc.listEvents('nope', null)).toEqual({
+      state: 'ok',
+      value: { events: [], next: null },
+    });
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('an event the page does not know keeps its own word; a detail value that is not text is dropped', async () => {
+    const { svc } = setup({
+      'rpc:supplier_risk_events': {
+        data: [
+          EVENT(1, {
+            event: 'something_new',
+            detail: { reason: { html: '<b>x</b>' }, before: 'oops', question_key: 7 },
+          }),
+          { event: 'item_changed' },
+        ],
+        error: null,
+      },
+    });
+    const read = await svc.listEvents(SUPPLIER, null);
+    if (read.state !== 'ok') throw new Error('expected ok');
+    // The row with no id or time is not an event: it is left out, not guessed.
+    expect(read.value.events).toHaveLength(1);
+    expect(read.value.events[0]?.event).toBe('something_new');
+    expect(read.value.events[0]?.detail).toEqual({
+      questionKey: null,
+      before: null,
+      after: null,
+      reason: null,
+      computedResult: null,
+      result: null,
+    });
+  });
+
+  it('a refusal of the database is thrown, never read as no history', async () => {
+    const { svc } = setup({
+      'rpc:supplier_risk_events': {
+        data: null,
+        error: { message: 'x', code: '42501', hint: 'supplier_risk_not_allowed' },
+      },
+    });
+    expect((await refusal(svc.listEvents(SUPPLIER, null))).message).toBe(SUPPLIER_RISK_FORBIDDEN);
+  });
+
+  it('an answer that is not a list is could_not_check', async () => {
+    const { svc } = setup({ 'rpc:supplier_risk_events': { data: { rows: [] }, error: null } });
+    expect(await svc.listEvents(SUPPLIER, null)).toEqual({ state: 'could_not_check' });
   });
 });

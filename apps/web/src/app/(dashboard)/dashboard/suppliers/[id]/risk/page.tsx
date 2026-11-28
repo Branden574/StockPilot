@@ -16,6 +16,7 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { StatePanel } from '@/components/patterns/state-panel';
 import { SupplierRiskAnswersList } from '@/components/suppliers/risk/answers-list';
 import { CopyText } from '@/components/suppliers/risk/copy-text';
+import { SupplierRiskHistory } from '@/components/suppliers/risk/history';
 import { SupplierRiskReviewForm } from '@/components/suppliers/risk/review-form';
 import { SupplierRiskItems } from '@/components/suppliers/risk/review-items';
 import { SupplierRiskReviewSummary } from '@/components/suppliers/risk/review-summary';
@@ -47,6 +48,7 @@ import {
   assertMayUseSupplierRisk,
   SUPPLIER_RISK_COULD_NOT_CHECK,
   SupplierRiskService,
+  type SupplierRiskEventsPage,
   type SupplierRiskHistoryRow,
   type SupplierRiskPerson,
   type SupplierRiskRead,
@@ -103,7 +105,7 @@ export default async function SupplierRiskReviewPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ version?: string | string[] }>;
+  searchParams: Promise<{ version?: string | string[]; history?: string | string[] }>;
 }) {
   const { id } = await params;
   notFoundUnlessUuid(id);
@@ -123,6 +125,8 @@ export default async function SupplierRiskReviewPage({
   const svc = new SupplierRiskService(ctx);
   const query = await searchParams;
   const versionParam = typeof query.version === 'string' ? query.version.toLowerCase() : null;
+  // The history page to read ('<when>~<event id>', the service's cursor), or the newest.
+  const historyParam = typeof query.history === 'string' ? query.history : null;
 
   let register: SupplierRiskRead<SupplierRiskRegisterRow[]>;
   let history: SupplierRiskRead<SupplierRiskHistoryRow[]>;
@@ -183,14 +187,16 @@ export default async function SupplierRiskReviewPage({
   let draft: SupplierRiskRead<SupplierRiskReview | null>;
   let earlier: SupplierRiskRead<SupplierRiskReview | null>;
   let people: SupplierRiskRead<SupplierRiskPerson[]>;
+  let events: SupplierRiskRead<SupplierRiskEventsPage>;
   let timezone: string | null | undefined;
   try {
     let org;
-    [current, draft, earlier, people, org] = await Promise.all([
+    [current, draft, earlier, people, events, org] = await Promise.all([
       row.reviewId ? svc.review(row.reviewId) : NONE,
       draftRow ? svc.review(draftRow.reviewId) : NONE,
       viewing ? svc.review(viewing.reviewId) : NONE,
       svc.ownersAndAdmins(),
+      svc.listEvents(supplierId, historyParam),
       getOrgRowForRequest(ctx.organizationId),
     ]);
     timezone = org?.timezone;
@@ -483,6 +489,22 @@ export default async function SupplierRiskReviewPage({
           </Table>
         </DetailSection>
       ) : null}
+
+      {/* The history: the database's own record (0481's admin-only events),
+          never the shared audit log. Its own "could not check": a history
+          that could not be read does not stop the review being changed. */}
+      <DetailSection title="History" headingLevel={2} headingId="supplier-risk-history-heading">
+        <SupplierRiskHistory
+          read={events}
+          timeZone={timeZone}
+          olderHref={
+            events.state === 'ok' && events.value.next
+              ? `${here}?history=${encodeURIComponent(events.value.next)}`
+              : null
+          }
+          newestHref={historyParam ? here : null}
+        />
+      </DetailSection>
     </div>
   );
 }

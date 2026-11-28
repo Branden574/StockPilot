@@ -448,6 +448,10 @@ const REGISTRY: Record<string, Entry> = {
     'takes_org',
     'Passes the active organization.',
   ],
+  'server/services/supplier-risk.ts::supplier_risk_events': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
   'server/services/supplier-risk.ts::supplier_risk_draft_save': [
     'takes_org',
     'Passes the active organization.',

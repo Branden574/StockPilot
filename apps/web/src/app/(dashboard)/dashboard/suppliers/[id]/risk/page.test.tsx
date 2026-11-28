@@ -143,6 +143,7 @@ interface Setup {
   history?: QueryResult;
   review?: (id: string) => QueryResult;
   seat?: QueryResult;
+  events?: QueryResult;
   role?: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer';
 }
 
@@ -173,6 +174,7 @@ function useStub(s: Setup = {}) {
       ],
       error: null,
     },
+    'rpc:supplier_risk_events': s.events ?? { data: [], error: null },
     'rpc:supplier_risk_review': (call: MockCall) => {
       const id = (call.args[0]?.[0] as { p_review_id: string }).p_review_id;
       return s.review ? s.review(id) : { data: reviewRow(id), error: null };
@@ -196,9 +198,12 @@ function useStub(s: Setup = {}) {
   return stub;
 }
 
-const params = (id = SUPPLIER, version?: string) => ({
+const params = (id = SUPPLIER, version?: string, history?: string) => ({
   params: Promise.resolve({ id }),
-  searchParams: Promise.resolve(version ? { version } : {}),
+  searchParams: Promise.resolve({
+    ...(version ? { version } : {}),
+    ...(history ? { history } : {}),
+  }),
 });
 
 async function thrown(p = params()): Promise<string> {
@@ -392,5 +397,49 @@ describe('dates in the organization zone (S3)', () => {
     const versions = container.querySelector('#supplier-risk-versions')?.closest('section');
     expect(versions?.textContent).toContain('November 27, 2026');
     expect(versions?.textContent).not.toContain('November 28, 2026');
+  });
+});
+
+describe("the history section: the database's record of this supplier's reviews", () => {
+  const EVENT_ID = 'ee000000-0000-4000-8000-000000000001';
+  const event = {
+    event_id: EVENT_ID,
+    event: 'risk_accepted',
+    review_id: CURRENT,
+    item_id: '17e17e17-0000-4000-8000-000000000001',
+    version: 3,
+    actor_name: 'Rami Example',
+    occurred_at: '2026-11-28T01:30:00Z',
+    detail: { question_key: 'breach_notice', reason: 'Accepted until January.' },
+  };
+
+  it('is read for this supplier in this organization, and shown with the time in its zone', async () => {
+    const stub = useStub({ events: { data: [event], error: null } });
+    const { container } = await page();
+    const call = stub.rpcCalls.find((c) => c.name === 'supplier_risk_events');
+    expect(call?.args).toMatchObject({ p_organization_id: ORG, p_supplier_id: SUPPLIER });
+    const history = container.querySelector('[data-slot="supplier-risk-history"]');
+    expect(history?.textContent).toMatch(/Risk accepted/);
+    expect(history?.textContent).toContain('November 27, 2026, 5:30 PM PST');
+    expect(history?.querySelector('bdi')?.textContent).toBe('Rami Example');
+  });
+
+  it('a cursor in the address reads the page after it, with a way back to the newest', async () => {
+    const cursor = `2026-11-28T01:30:00Z~${EVENT_ID}`;
+    const stub = useStub({ events: { data: [], error: null } });
+    await page(params(SUPPLIER, undefined, cursor));
+    const call = stub.rpcCalls.find((c) => c.name === 'supplier_risk_events');
+    expect(call?.args).toMatchObject({ p_before_at: '2026-11-28T01:30:00Z', p_before_id: EVENT_ID });
+    expect(screen.getByRole('link', { name: 'Newest changes' }).getAttribute('href')).toBe(
+      `/dashboard/suppliers/${SUPPLIER}/risk`,
+    );
+  });
+
+  it('the events read missing (not live yet) is "could not check" for the history only: the review still works', async () => {
+    useStub({ events: { data: null, error: { message: 'gone', code: 'PGRST202' } } });
+    await page();
+    expect(screen.getByText(/The history could not be checked just now/)).toBeTruthy();
+    expect(screen.queryByText(/Part of this review could not be read/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save draft' })).toBeTruthy();
   });
 });

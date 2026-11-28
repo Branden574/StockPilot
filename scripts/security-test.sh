@@ -2800,7 +2800,9 @@ WEB_TESTS=(
   # an empty register. Refusals map to core's words by the hint alone.
   # Nothing about a review is written to the shared audit log (every holder
   # of activity_logs:read, a manager by default, reads all of it): a manager's
-  # read of the log after every admin write shows no review. Every
+  # read of the log after every admin write shows no review; the history is
+  # the database's own admin-only record, read like every other read (a
+  # missing function is "could not check"), every value drawn as text. Every
   # action checks its argument with zod before anything is asked. The pages
   # give Page not found to anyone else and to another organization's
   # supplier, no write control to a seat that may not write, names in <bdi>

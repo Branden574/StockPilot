@@ -90,9 +90,13 @@ import {
  * the record is the review tables themselves, read through 0481's admin-only
  * functions: each version keeps who reviewed it and when, an override keeps
  * the result the rules gave and the reason, each item keeps who last changed
- * it and when, and a risk accepted keeps who accepted it and why. (The
- * database keeps only an item's LAST change: QUESTIONS.md, a follow-up.)
- * supplier-risk.audit-log.test.ts fails when a write logs a row again.
+ * it and when, and a risk accepted keeps who accepted it and why. THE HISTORY
+ * of those changes lives in the database too: 0481's admin-only events,
+ * written by the database inside each privileged write (a draft discarded, a
+ * review finished, a result set by an admin, an item changed with its before
+ * and after, a risk accepted with its reason), append-only, and read here by
+ * listEvents, gated like every other read. supplier-risk.audit-log.test.ts
+ * fails when a write logs a row to the shared audit log again.
  */
 
 /* ─────────────────────────────── words ─────────────────────────────── */
@@ -229,6 +233,63 @@ export interface SupplierRiskPerson {
   userId: string;
   name: string;
 }
+
+/**
+ * THE HISTORY READ (listEvents). Built against the shape this half expects of
+ * 0481's events read, until its contract section names it (QUESTIONS.md):
+ *   supplier_risk_events(p_organization_id uuid, p_supplier_id uuid,
+ *     p_before_at timestamptz, p_before_id uuid, p_limit integer)
+ * returning one supplier's events of this organization, newest first
+ * (occurred_at, then event_id, both descending), strictly before the cursor
+ * when one is given: event_id, event, review_id, item_id, version,
+ * actor_name, occurred_at, detail jsonb ({question_key, before {status,
+ * owner_name, due_on}, after {same}, reason, computed_result, result}, each
+ * key optional). Anything else in a row is not read; a value that is not text
+ * is dropped, never shown as something else.
+ */
+export type SupplierRiskEventName =
+  | 'draft_discarded'
+  | 'review_finished'
+  | 'result_overridden'
+  | 'item_changed'
+  | 'risk_accepted';
+
+/** An item's state before or after a change, as the event keeps it. */
+export interface SupplierRiskEventItemState {
+  status: string | null;
+  ownerName: string | null;
+  dueOn: string | null;
+}
+
+export interface SupplierRiskEvent {
+  id: string;
+  /** One of SupplierRiskEventName, or the database's own word for a newer one (shown, never hidden). */
+  event: SupplierRiskEventName | string;
+  reviewId: string | null;
+  itemId: string | null;
+  version: number | null;
+  /** Who did it, as the database kept the name. */
+  actorName: string | null;
+  /** When, an instant. */
+  at: string;
+  detail: {
+    questionKey: string | null;
+    before: SupplierRiskEventItemState | null;
+    after: SupplierRiskEventItemState | null;
+    reason: string | null;
+    computedResult: string | null;
+    result: string | null;
+  };
+}
+
+export interface SupplierRiskEventsPage {
+  events: SupplierRiskEvent[];
+  /** The cursor of the page after this one, or null when this is the last. */
+  next: string | null;
+}
+
+/** Events per page of the history. */
+export const SUPPLIER_RISK_EVENTS_PAGE = 20;
 
 export interface SupplierRiskFinishResult {
   reviewId: string;
@@ -515,6 +576,52 @@ function historyRowOf(raw: Record<string, unknown>): SupplierRiskHistoryRow | nu
   };
 }
 
+function eventItemStateOf(raw: unknown): SupplierRiskEventItemState | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  return { status: text(r.status), ownerName: text(r.owner_name), dueOn: day(r.due_on) };
+}
+
+function eventOf(raw: Record<string, unknown>): SupplierRiskEvent | null {
+  const id = text(raw.event_id);
+  const event = text(raw.event);
+  const at = text(raw.occurred_at);
+  if (!id || !isUuid(id) || !event || !at || !Number.isFinite(Date.parse(at))) return null;
+  const d =
+    raw.detail && typeof raw.detail === 'object' && !Array.isArray(raw.detail)
+      ? (raw.detail as Record<string, unknown>)
+      : {};
+  return {
+    id,
+    event,
+    reviewId: text(raw.review_id),
+    itemId: text(raw.item_id),
+    version: intOf(raw.version),
+    actorName: text(raw.actor_name),
+    at,
+    detail: {
+      questionKey: text(d.question_key),
+      before: eventItemStateOf(d.before),
+      after: eventItemStateOf(d.after),
+      reason: text(d.reason),
+      computedResult: text(d.computed_result),
+      result: text(d.result),
+    },
+  };
+}
+
+/** A history cursor ('<occurred_at>~<event_id>') as its two parts; null for anything else. */
+function eventsCursorOf(cursor: string | null): { at: string; id: string } | null {
+  if (typeof cursor !== 'string' || cursor.length > 120) return null;
+  const cut = cursor.lastIndexOf('~');
+  if (cut <= 0) return null;
+  const at = cursor.slice(0, cut);
+  const id = cursor.slice(cut + 1);
+  if (!isUuid(id) || !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(at) || !Number.isFinite(Date.parse(at)))
+    return null;
+  return { at, id };
+}
+
 function answersOf(raw: unknown): VendorRiskAnswers {
   const out: VendorRiskAnswers = {};
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return out;
@@ -794,6 +901,46 @@ export class SupplierRiskService {
       return { state: 'could_not_check' };
     }
     return { state: 'ok', value: review };
+  }
+
+  /**
+   * One page of the supplier's history, newest first: the database's own
+   * record of each privileged write (see SupplierRiskEvent). `cursor` is the
+   * `next` of the page before, or null for the newest; one that is not a
+   * cursor reads from the newest. Gated like every read; a missing function
+   * (0481's events not live yet) or a failed read is could_not_check, never an
+   * empty history.
+   */
+  async listEvents(
+    supplierId: string,
+    cursor: string | null,
+  ): Promise<SupplierRiskRead<SupplierRiskEventsPage>> {
+    assertMayUseSupplierRisk(this.ctx);
+    if (!isUuid(supplierId)) return { state: 'ok', value: { events: [], next: null } };
+    const from = eventsCursorOf(cursor);
+    const read = await this.settleRead(
+      'supplier_risk_events',
+      this.ctx.supabase.rpc('supplier_risk_events', {
+        p_organization_id: this.ctx.organizationId,
+        p_supplier_id: supplierId,
+        p_before_at: from?.at ?? null,
+        p_before_id: from?.id ?? null,
+        p_limit: SUPPLIER_RISK_EVENTS_PAGE + 1,
+      }),
+    );
+    if (read.state !== 'ok') return read;
+    if (!Array.isArray(read.value)) {
+      report('supplier_risk_events', 'not_a_list', this.ctx.organizationId, 'error');
+      return { state: 'could_not_check' };
+    }
+    const raw = read.value as Array<Record<string, unknown>>;
+    const events = raw
+      .slice(0, SUPPLIER_RISK_EVENTS_PAGE)
+      .map(eventOf)
+      .filter((e): e is SupplierRiskEvent => e !== null);
+    const last = events[events.length - 1];
+    const next = raw.length > SUPPLIER_RISK_EVENTS_PAGE && last ? `${last.at}~${last.id}` : null;
+    return { state: 'ok', value: { events, next } };
   }
 
   /**
