@@ -423,3 +423,11 @@ async function sendResolvedNotice(
     replyTo: SUPPORT_EMAIL,
   });
 }
+
+/**
+ * A support screenshot that could not be read at its finalize (part 6). Kept
+ * at the end of the file: kept-address-senders.guard.test.ts pins line numbers
+ * above.
+ */
+export const SUPPORT_SCREENSHOT_UNREADABLE_MESSAGE =
+  'Your screenshot could not be read. Attach it again and send.';

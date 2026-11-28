@@ -6,6 +6,7 @@ import { claudeGenerateJsonString } from '@/lib/ai/claude';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { TINY_PNG } from '@/test/upload-fixtures';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 import { POST } from './route';
@@ -69,9 +70,9 @@ function useContext() {
   } as never);
 }
 
-function upload(name: string, type: string, content: string) {
+function upload(name: string, type: string, content: string | Uint8Array) {
   const form = new FormData();
-  form.append('file', new File([content], name, { type }));
+  form.append('file', new File([typeof content === 'string' ? content : new Uint8Array(content)], name, { type }));
   return new Request('https://test.local/api/books/extract-isbns-ai', {
     method: 'POST',
     body: form,
@@ -166,7 +167,9 @@ describe('POST /api/books/extract-isbns-ai when the AI call fails', () => {
     h.env.GEMINI_API_KEY = CONFIGURED;
     h.generateContent.mockRejectedValueOnce(new Error(ENDPOINT_TEXT));
 
-    const res = await POST(upload('photo.png', 'image/png', 'not really a png'));
+    // A real (tiny, made-up) PNG: the upload check (part 6) lets only a
+    // picture through to the model.
+    const res = await POST(upload('photo.png', 'image/png', TINY_PNG));
 
     expect(res.status).toBe(200);
     const { text, body } = await answer(res);

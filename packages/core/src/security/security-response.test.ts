@@ -66,8 +66,17 @@ const ALL_TEXT = [
 const RECORD_REASONS = Object.keys(SECURITY_EVENT_REASON_LABELS).sort();
 
 describe('every reason code of the record has exactly one card', () => {
-  it('the record holds the 46 reasons the content draft was written for', () => {
-    expect(RECORD_REASONS).toHaveLength(46);
+  it('the record holds the 46 reasons the content draft was written for, and the five upload reasons of part 6', () => {
+    expect(RECORD_REASONS).toHaveLength(51);
+    for (const reason of [
+      'upload_wrong_type',
+      'upload_active_content',
+      'upload_hidden_file',
+      'upload_could_not_check',
+      'upload_refused_in_use',
+    ]) {
+      expect(securityResponseCardIdFor(reason), reason).toBeTruthy();
+    }
   });
 
   it('the map from reason to card holds every reason of the record, and nothing else', () => {
@@ -95,7 +104,15 @@ describe('every reason code of the record has exactly one card', () => {
   it('no card is unused, and the card list and the id list are the same, in order', () => {
     expect(SECURITY_RESPONSE_CARDS.map((c) => c.id)).toEqual([...SECURITY_RESPONSE_CARD_IDS]);
     const used = new Set(Object.values(SECURITY_RESPONSE_CARD_OF_REASON));
-    for (const id of SECURITY_RESPONSE_CARD_IDS) expect(used.has(id), id).toBe(true);
+    const general = new Set(Object.values(SECURITY_RESPONSE_GENERAL_CARD));
+    for (const id of SECURITY_RESPONSE_CARD_IDS) expect(used.has(id) || general.has(id), id).toBe(true);
+    // A card that answers no reason is only ever a kind's general card.
+    for (const card of SECURITY_RESPONSE_CARDS) {
+      if (card.reasons.length === 0) expect(general.has(card.id), card.id).toBe(true);
+    }
+    expect(SECURITY_RESPONSE_CARDS.filter((c) => c.reasons.length === 0).map((c) => c.id)).toEqual([
+      'upload-checks',
+    ]);
   });
 
   it('a reason this build does not know has no card and no level', () => {
@@ -146,6 +163,9 @@ describe('the urgency levels', () => {
     expect(by('look_today')).toEqual(
       [
         'counts-past-limit',
+        'upload-checks',
+        'upload-not-checked',
+        'upload-refused-in-use',
         'passkey-wrong-site',
         'repeated-wrong-guesses',
         'second-step-paused',
@@ -157,7 +177,8 @@ describe('the urgency levels', () => {
         'wrong-recovery-code',
       ].sort(),
     );
-    expect(by('stopped')).toHaveLength(11);
+    expect(by('stopped')).toHaveLength(12);
+    expect(SECURITY_RESPONSE_CARD_LEVELS['upload-refused']).toBe('stopped');
   });
 
   it("a reason's level is its card's", () => {
@@ -176,14 +197,14 @@ describe('the general card of each kind', () => {
     }
   });
 
-  it('the choice, kind by kind; a kind nothing records has none', () => {
+  it('the choice, kind by kind; malware has a card of its own that describes the kind (part 6)', () => {
     expect(Object.keys(SECURITY_RESPONSE_GENERAL_CARD)).toEqual([...SECURITY_EVENT_CATEGORIES]);
     expect(SECURITY_RESPONSE_GENERAL_CARD).toEqual({
       password_guessing: 'repeated-wrong-guesses',
       exploit: 'probe-scan',
       bots: 'public-forms-paused',
       phishing: 'sign-in-new-country',
-      malware: null,
+      malware: 'upload-checks',
     });
   });
 
@@ -195,15 +216,127 @@ describe('the general card of each kind', () => {
   });
 });
 
+describe('the upload cards (part 6)', () => {
+  const ownText = (card: SecurityResponseCard): string =>
+    cardTexts(card).join(' ');
+
+  it('the three reasons of a refused file go to the refused-file card, which is Stopped', () => {
+    for (const reason of ['upload_wrong_type', 'upload_active_content', 'upload_hidden_file']) {
+      expect(securityResponseCardIdFor(reason), reason).toBe('upload-refused');
+      expect(securityResponseLevelFor(reason), reason).toBe('stopped');
+    }
+  });
+
+  it('a file that could not be checked has its own card, Look today, never "Stopped: nothing to do"', () => {
+    expect(securityResponseCardIdFor('upload_could_not_check')).toBe('upload-not-checked');
+    expect(securityResponseLevelFor('upload_could_not_check')).toBe('look_today');
+    const card = securityResponseCard('upload-not-checked');
+    expect(card.reasons).toEqual(['upload_could_not_check']);
+    const steps = card.doNow.map(securityResponseStepShown);
+    // Its steps: refused because the checks could not finish; look for more
+    // from the same organization in the list; a run is worth a look, because
+    // a file built to wear out a checker is itself a sign.
+    expect(steps[0]!.text).toMatch(/refused because the checks could not finish/);
+    expect(steps[1]!.text).toMatch(/events list for more of these from the same organization/);
+    expect(steps[1]!.place?.route).toBe('/platform/security');
+    expect(steps[2]!.text).toMatch(/A run of them is worth a look: a file built to wear out a checker is itself a sign/);
+    // Not one step is "Nothing: this was stopped."
+    for (const s of steps) expect(s.text).not.toMatch(/^Nothing/);
+  });
+
+  it('the could-not-check card never promises the file was hostile', () => {
+    const card = securityResponseCard('upload-not-checked');
+    // Everything but "What this cannot tell you", which says it cannot tell.
+    const text = ownText({ ...card, cannotTell: '' });
+    expect(text).not.toMatch(/\b(was|is) (harmful|hostile|malicious|dangerous|an attack)\b/i);
+    expect(text).not.toMatch(/someone (sent|is sending) .* on purpose/i);
+    expect(card.whatThisIs).toMatch(/An honest file can do this/);
+    expect(card.cannotTell).toMatch(/does not say whether the file was harmful/);
+  });
+
+  it("the kind's general card describes the kind and claims no outcome", () => {
+    expect(SECURITY_RESPONSE_GENERAL_CARD.malware).toBe('upload-checks');
+    const card = securityResponseCard('upload-checks');
+    expect(card.title).toBe('A file the upload checks refused or could not check');
+    expect(card.reasons).toEqual([]);
+    // Its first part says what the console's word means here, and what it does not.
+    expect(card.whatThisIs).toMatch(
+      /^Malware here means a file the upload checks refused or could not finish checking, not a confirmed virus\./,
+    );
+    // No outcome an entry may not have: nothing deleted, blocked, stopped or "not used".
+    for (const line of card.alreadyDid) {
+      expect(line, line).not.toMatch(/delet|remov|blocked|stopped|not used|not attached|let through/i);
+    }
+    expect(card.doNow.map(securityResponseStepShown).map((s) => s.text).join(' ')).not.toMatch(
+      /^Nothing/,
+    );
+    // The outcome sentences live on the cards of the reasons.
+    for (const id of ['upload-refused', 'upload-not-checked'] as const) {
+      const did = securityResponseCard(id).alreadyDid.join(' ');
+      expect(did, id).toMatch(/^Blocked: the file was refused/);
+      expect(did, id).toMatch(/A copy that had already reached storage was deleted, unless/);
+    }
+  });
+
+  it('the outcome sentences claim only what holds on every path that records one (part 6 review)', () => {
+    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked', 'upload-refused-in-use'] as const) {
+      const did = securityResponseCard(id).alreadyDid.join(' ');
+      // No card says a refused file was not shown or passed on: a path may keep it (an earlier record still uses it).
+      expect(did, id).not.toMatch(/\bshown\b|passed on/);
+      // The record also keeps where the request came from.
+      expect(did, id).toMatch(/The record keeps the kind of refusal, the organization when there is one, the place it came from and the time/);
+    }
+    // A name or a stated type can pick the kind expected (the ISBN and PO import paths), never widen it.
+    expect(securityResponseCard('upload-refused').alreadyDid.join(' ')).toMatch(
+      /Where a name or a stated type picks the kind of file expected, it can only narrow what the bytes must be\./,
+    );
+  });
+
+  it('a refused file an earlier record still uses has its own card, which never says it was not attached (review round 2, F1)', () => {
+    expect(securityResponseCardIdFor('upload_refused_in_use')).toBe('upload-refused-in-use');
+    expect(securityResponseLevelFor('upload_refused_in_use')).toBe('look_today');
+    const card = securityResponseCard('upload-refused-in-use');
+    const did = card.alreadyDid.join(' ');
+    expect(did).not.toMatch(/not attached|deleted|Blocked/);
+    expect(did).toMatch(/^Flagged, not stopped: this upload was refused/);
+    expect(did).toMatch(/the file itself was kept, because the earlier record still uses it/);
+    expect(card.whatThisIs).toMatch(/still points at that same file/);
+    expect(card.doNow.map(securityResponseStepShown).map((s) => s.id)).toContain('tell-the-owner');
+    expect(card.ifGotThrough.map(securityResponseStepShown).map((s) => s.id)).toContain('look-at-audit');
+  });
+
+  it('no upload card claims every file is checked', () => {
+    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked', 'upload-refused-in-use'] as const) {
+      expect(ownText(securityResponseCard(id)), id).not.toMatch(/\bevery file\b|\ball files\b/i);
+    }
+  });
+});
+
 describe('the card text keeps the rules', () => {
   it('no number at all, so no limit is given as one (review rule 1)', () => {
     for (const text of ALL_TEXT) expect(text, text).not.toMatch(/\d/);
     for (const { place } of securityResponseRoutes()) expect(place.route).not.toMatch(/\d/);
   });
 
-  it("no hidden kind's name: never Phishing or Malware, in any case", () => {
-    for (const text of ALL_TEXT) expect(text, text).not.toMatch(/phishing|malware/i);
-    for (const card of SECURITY_RESPONSE_CARDS) expect(card.id).not.toMatch(/phishing|malware/i);
+  it("no hidden kind's name: never Phishing, in any case (Malware is shown since part 6)", () => {
+    for (const text of ALL_TEXT) expect(text, text).not.toMatch(/phishing/i);
+    // The console's word for the shown kind is said once, in the kind's own card, with its meaning.
+    expect(ALL_TEXT.filter((t) => /malware/i.test(t))).toEqual([
+      securityResponseCard('upload-checks').whatThisIs,
+    ]);
+    for (const card of SECURITY_RESPONSE_CARDS) expect(card.id).not.toMatch(/phishing/i);
+  });
+
+  it('the upload cards claim no virus scan: our own checks read how a file is built (part 6)', () => {
+    // "Malware" only where the general card says what the word means here.
+    const MEANING = securityResponseCard('upload-checks').whatThisIs;
+    for (const id of ['upload-checks', 'upload-refused', 'upload-not-checked', 'upload-refused-in-use'] as const) {
+      for (const text of cardTexts(securityResponseCard(id))) {
+        expect(text, `${id}: ${text}`).not.toMatch(/antivirus|virus scan|infected|quarantin|\bheld\b/i);
+        if (text !== MEANING) expect(text, `${id}: ${text}`).not.toMatch(/malware/i);
+      }
+      expect(securityResponseCard(id).cannotTell, id).toMatch(/hold no list of known viruses/);
+    }
   });
 
   it('no emoji or other pictographs', () => {

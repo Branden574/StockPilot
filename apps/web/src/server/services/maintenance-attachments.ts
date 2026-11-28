@@ -12,10 +12,13 @@ import {
 import { reportError } from '@/lib/error-reporter';
 import { sanitizeFilenameSegment } from '@/lib/exports/filename';
 import { reencodeWithoutMetadata } from '@/lib/image-reencode';
-import { isSniffedKindAllowedInBucket, MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
+import { MIME_FOR_KIND, SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
+import { withOwnSignal } from '@/lib/storage-steps';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { uploadKindsForMimes } from '@/lib/upload-inspect';
+import { checkUploadBytes, checkUploadPrefix, removeAndAudit } from '@/server/security/upload-checks';
 
 import { audit } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, type ServiceContext } from './context';
@@ -106,10 +109,13 @@ const ALREADY_RECORDED = 'This photo was already recorded.';
 type AdminClient = ReturnType<typeof createAdminClient>;
 type AdminBucket = ReturnType<AdminClient['storage']['from']>;
 
-/** The whole object, or null when it cannot be read. */
+/**
+ * The whole object, or null when it cannot be read. With a signal of its own,
+ * so Next's fetch keeps no second copy of it (review round 3, R3-6).
+ */
 async function downloadWhole(store: AdminBucket, path: string): Promise<Uint8Array | null> {
   try {
-    const { data, error } = await store.download(path);
+    const { data, error } = await withOwnSignal((signal) => store.download(path, undefined, { signal }));
     if (error || !data) return null;
     return new Uint8Array(await data.arrayBuffer());
   } catch {
@@ -467,7 +473,10 @@ export class MaintenanceAttachmentsService {
       throw new ServiceError('conflict', ALREADY_RECORDED);
     }
     if (recordedPaths.length > 0) {
-      await store.remove([args.path]);
+      await removeAndAudit(store, [args.path], 'maintenance_photo', 'path_refusal', {
+        organizationId: this.ctx.organizationId,
+        userId: this.ctx.userId,
+      });
       throw new ServiceError('forbidden', 'Invalid upload path.');
     }
 
@@ -517,7 +526,13 @@ export class MaintenanceAttachmentsService {
         throw err;
       }
       if (recorded.includes(args.path)) throw new ServiceError('conflict', ALREADY_RECORDED);
-      await store.remove(recorded.length > 0 ? [args.path] : [args.path, thumbPath]);
+      const removing = recorded.length > 0 ? [args.path] : [args.path, thumbPath];
+      // Part 6: every removal of a refused upload leaves one audit line, of
+      // what storage answered.
+      await removeAndAudit(store, removing, 'maintenance_photo', 'path_refusal', {
+        organizationId: this.ctx.organizationId,
+        userId: this.ctx.userId,
+      });
       if (notify) this.notifyPhotoRejected(requestId, parent);
       throw err;
     };
@@ -550,23 +565,40 @@ export class MaintenanceAttachmentsService {
     // A prefix-read failure here also means "the object was never actually
     // uploaded" (signing a nonexistent object errors) — the finalize-time
     // existence check (no phantom rows for a mint that was never followed by
-    // a real PUT). Nothing to remove.
-    if (!head) {
+    // a real PUT). Nothing to remove. A storage read past its time limit (lab
+    // walk 5) is the same answer: nothing was judged, nothing is removed.
+    if (!head || 'timedOut' in head) {
       this.notifyPhotoRejected(requestId, parent);
       throw new ServiceError('validation_error', 'invalid_image');
     }
+    // An empty object is refused from its size before the check (lab walk 5,
+    // F1): removed, with no security event (an empty file carries nothing).
+    if (head.totalSize === 0) return refuse(new ServiceError('validation_error', 'invalid_image'), true);
 
-    const sniffed = sniffImage(head.prefix);
-    const declaredOk = sniffed !== null && MIME_FOR_KIND[sniffed.kind] === args.declaredMime;
+    // Part 6: the sniff and the declared type are the one upload check's, on
+    // the leading bytes, against the bucket's own kinds (0315: no HEIC), and
+    // a refusal is recorded as a security event in this organization. The
+    // size and pixel limits are this path's own and record nothing. Every
+    // refusal still answers the route's code word invalid_image, which the
+    // phone shows as its own sentence.
+    const kinds = uploadKindsForMimes(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS[BUCKET]);
+    const first = await checkUploadPrefix(head.prefix, {
+      surface: 'maintenance_photo',
+      accept: kinds,
+      declaredMime: args.declaredMime,
+      organizationId: this.ctx.organizationId,
+    });
+    if (!first.ok) return refuse(new ServiceError('validation_error', 'invalid_image'), true);
+    const sniffed = { kind: first.kind as 'jpeg' | 'png' | 'webp', width: first.width, height: first.height };
     const sizeOk = head.totalSize > 0 && head.totalSize <= MAINTENANCE_MAX_PHOTO_BYTES;
     // MAX_INPUT_PIXELS, from the header, before anything is read whole. A
     // WEBP's size is not sniffed (null); the re-encode refuses it from its
     // own header below.
     const pixelsOk =
-      sniffed?.width == null ||
+      sniffed.width == null ||
       sniffed.height == null ||
       sniffed.width * sniffed.height <= MAX_INPUT_PIXELS;
-    if (!sniffed || !declaredOk || !sizeOk || !pixelsOk) {
+    if (!sizeOk || !pixelsOk) {
       return refuse(new ServiceError('validation_error', 'invalid_image'), true);
     }
 
@@ -616,14 +648,20 @@ export class MaintenanceAttachmentsService {
       // stays as the defence behind it.
       throw new ServiceError('conflict', BEING_SAVED);
     }
-    const wholeSniff = sniffImage(whole);
-    if (
-      wholeSniff?.kind !== sniffed.kind ||
-      !isSniffedKindAllowedInBucket(sniffed.kind, 'maintenance-photos')
-    ) {
+    // The whole original, through the one upload check: its kind again, and
+    // a file hidden after the picture (the re-encode below would drop it from
+    // the stored copy, but it says nothing about whether the original was
+    // hostile, so it is refused and recorded here first).
+    const wholeCheck = await checkUploadBytes(whole, {
+      surface: 'maintenance_photo',
+      accept: kinds,
+      declaredMime: args.declaredMime,
+      organizationId: this.ctx.organizationId,
+    });
+    if (!wholeCheck.ok || wholeCheck.kind !== sniffed.kind) {
       return reject();
     }
-    const photoKind = sniffed.kind as 'jpeg' | 'png' | 'webp';
+    const photoKind = sniffed.kind;
     let clean = await reencodeWithoutMetadata(whole, photoKind, { maxInputPixels: MAX_INPUT_PIXELS });
     if (clean && clean.master.byteLength > MAINTENANCE_MAX_PHOTO_BYTES && photoKind !== 'png') {
       // Grown past the cap (a photo saved at a lower quality than 90): once

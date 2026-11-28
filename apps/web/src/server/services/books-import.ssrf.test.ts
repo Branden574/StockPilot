@@ -254,3 +254,53 @@ describe('cover rehost — the legitimate flow still works', () => {
     expect(rehosted).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Security invariant (part 6, stage 6a): the cover's type comes from its
+// BYTES, through the one upload check. The remote server's content-type no
+// longer picks the extension or the stored type; a cover that is not a
+// picture, or hides a file after the picture, is not stored and the book
+// still imports. Nothing is recorded (review round 2, Q22): nobody sent the
+// cover, so it is not a refused upload.
+// ---------------------------------------------------------------------------
+describe('cover rehost — the upload check', () => {
+  const COVER_URL = 'https://books.google.com/books/content?id=abc&printsec=frontcover';
+  /** A JPEG: start, one frame header, end (made up; no pixels). */
+  const TINY_JPEG = new Uint8Array([
+    0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x05, 0x00, 0x04, 0x01, 0x00, 0xff, 0xd9,
+  ]);
+
+  async function importWithStorage(body: Uint8Array) {
+    undiciFetch.mockResolvedValueOnce(okImage(body));
+    thumbnailUrlRef.value = COVER_URL;
+    const s = stub();
+    const upload = vi.fn(async () => ({ data: { path: 'p' }, error: null }));
+    s.client.storage.from = vi.fn(() => ({ upload, remove: vi.fn() })) as never;
+    const svc = new BooksImportService(makeServiceContext(s.client, { organizationId: 'org-test' }));
+    const result = await svc.execute([ISBN], { warehouseId: WAREHOUSE_ID, defaultQuantity: 0 });
+    expect(result.created).toBe(1);
+    return { upload, rows: s.chainArgs.get('item_images.insert') ?? [] };
+  }
+
+  const record = async () => vi.mocked((await import('@/server/security/events')).recordSecurityEvent);
+
+  it('a JPEG served as image/png is stored as a JPEG, byte for byte, and nothing is recorded', async () => {
+    const { upload, rows } = await importWithStorage(TINY_JPEG);
+    expect(rows.length).toBe(1);
+    const [path, bytes, opts] = upload.mock.calls[0]! as unknown as [string, Uint8Array, { contentType: string }];
+    expect(path).toMatch(/\/cover\.jpg$/);
+    expect(opts.contentType).toBe('image/jpeg');
+    expect(Array.from(bytes)).toEqual(Array.from(TINY_JPEG));
+    expect(await record()).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a web page served as a picture', new TextEncoder().encode('<!DOCTYPE html><p>no</p>')],
+    ['an archive after the picture', new Uint8Array([...TINY_JPEG, 0x50, 0x4b, 0x03, 0x04, 0x14, 0x00])],
+  ])('%s: not stored, no row, the book still imports, nothing recorded', async (_what, body) => {
+    const { upload, rows } = await importWithStorage(body);
+    expect(upload).not.toHaveBeenCalled();
+    expect(rows.length).toBe(0);
+    expect(await record()).not.toHaveBeenCalled();
+  });
+});

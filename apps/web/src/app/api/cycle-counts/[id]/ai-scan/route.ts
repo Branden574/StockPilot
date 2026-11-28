@@ -11,13 +11,7 @@ import {
   SHELF_SCAN_RESPONSE_SCHEMA,
   type ShelfScanLineInput,
 } from '@/lib/ai/shelf-scan';
-import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
 import { checkRateLimit } from '@/lib/rate-limit';
-import {
-  isSniffedKindAllowedInBucket,
-  MIME_FOR_KIND,
-  sniffImage,
-} from '@/lib/image-signature';
 import { createAdminClient } from '@/lib/supabase/admin';
 import {
   internalErrorResponse,
@@ -26,6 +20,7 @@ import {
 } from '@/server/lib/api-error-response';
 import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { serviceErrorResponse } from '@/server/lib/service-error-response';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 
 export const runtime = 'nodejs';
@@ -152,23 +147,21 @@ export async function POST(
   // than as the fetch-back-and-delete the attachment finalizes need. Nothing
   // unverified reaches storage at all, and — the point the upload-security
   // brief makes separately — nothing unverified reaches the AI provider.
-  const sniffedPhoto = sniffImage(new Uint8Array(photoBytes));
-  if (!sniffedPhoto || !isSniffedKindAllowedInBucket(sniffedPhoto.kind, 'cycle-count-scans')) {
-    return NextResponse.json(
-      {
-        error: 'invalid_image',
-        message: 'This file could not be uploaded because it failed our security checks.',
-      },
-      { status: 422 },
-    );
-  }
-
+  //
   // And whether anything is hiding after the end of the image. Cheap here
   // because the bytes are already in hand — no second read, no signed URL.
-  const photoThreat = scanDocumentBytes(new Uint8Array(photoBytes), sniffedPhoto.kind);
-  if (photoThreat) {
+  // Both are the one upload check (part 6), which records a refusal as a
+  // security event in this organization. The kinds are the bucket's pin
+  // (cycle-count-scans: PNG, JPEG, WebP).
+  const checkedPhoto = await checkUploadBytes(new Uint8Array(photoBytes), {
+    surface: 'cycle_count_scan',
+    accept: ['png', 'jpeg', 'webp'],
+    organizationId: ctx.organizationId,
+    headers: req.headers,
+  });
+  if (!checkedPhoto.ok) {
     return NextResponse.json(
-      { error: 'invalid_image', message: THREAT_MESSAGES[photoThreat.code] },
+      { error: 'invalid_image', message: checkedPhoto.message },
       { status: 422 },
     );
   }
@@ -178,7 +171,7 @@ export async function POST(
     .upload(photoStoragePath, photoBytes, {
       // The SNIFFED mime, never the declared one — the stored value is what
       // storage later serves this object as.
-      contentType: MIME_FOR_KIND[sniffedPhoto.kind],
+      contentType: checkedPhoto.mime,
       upsert: false,
     });
   if (uploadErr) {

@@ -25,7 +25,7 @@ vi.mock('./context', async (importOriginal) => {
 });
 
 import { mfaGateError, ServiceError } from './context';
-import { SecurityEventsService } from './security-events';
+import { SECURITY_ACTIVITY_ROW_LIMIT, SecurityEventsService } from './security-events';
 
 const ORG = '0f1e2d3c-4b5a-4968-8776-655443322110';
 
@@ -223,6 +223,66 @@ describe('the database’s answers', () => {
       { category: 'password_guessing', events: 42 },
       { category: 'exploit', events: 2 },
     ]);
+  });
+
+  // Part 6: a file the upload checks refused is recorded in the organization,
+  // and its owners and admins see it here like any other row, never hidden.
+  it('a refused file is listed like any other row, and counted in the totals', async () => {
+    const upload = { ...ROW, id: 'a1b2c3d4-0000-4000-8000-000000000003', category: 'malware', reason: 'upload_hidden_file', country: null, city: null, event_count: 1 };
+    const db = client(
+      { data: [upload, ROW], error: null },
+      {
+        data: [
+          { category: 'malware', outcome: 'blocked', reason: 'upload_wrong_type', source: 'web', country: null, events: 4 },
+          { category: 'password_guessing', outcome: 'blocked', reason: 'wrong_password', source: 'web', country: 'NL', events: 3 },
+        ],
+        error: null,
+      },
+    );
+    const { rows, totals } = await service(db).activity();
+    expect(rows.map((r) => [r.category, r.reason])).toEqual([
+      ['malware', 'upload_hidden_file'],
+      ['password_guessing', 'wrong_password'],
+    ]);
+    expect(totals).toEqual([
+      { category: 'password_guessing', events: 3 },
+      { category: 'malware', events: 4 },
+    ]);
+  });
+
+  it('the row limit is of the rows shown: every kind counts toward it, none is dropped after it', async () => {
+    const many = Array.from({ length: SECURITY_ACTIVITY_ROW_LIMIT + 20 }, (_, i) => ({
+      ...ROW,
+      id: `a1b2c3d4-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      category: i % 2 === 0 ? 'malware' : 'password_guessing',
+      reason: i % 2 === 0 ? 'upload_wrong_type' : 'wrong_password',
+    }));
+    const db = client({ data: many, error: null });
+    const { rows } = await service(db).activity();
+    expect(rows).toHaveLength(SECURITY_ACTIVITY_ROW_LIMIT);
+    expect(rows.map((r) => r.id)).toEqual(many.slice(0, SECURITY_ACTIVITY_ROW_LIMIT).map((r) => r.id));
+    expect(new Set(rows.map((r) => r.category))).toEqual(new Set(['malware', 'password_guessing']));
+    // The function is asked for exactly the rows the page shows.
+    expect(db.rpc).toHaveBeenCalledWith('security_events_for_organization', {
+      p_organization_id: ORG,
+      p_limit: SECURITY_ACTIVITY_ROW_LIMIT,
+    });
+  });
+
+  it('no row carries a file name, a path or anything else the function might add', async () => {
+    const upload = {
+      ...ROW,
+      category: 'malware',
+      reason: 'upload_active_content',
+      file_name: 'invoice-of-a-secret-school.pdf',
+      storage_path: 'org/po-imports/x.pdf',
+      detail: 'pdf_javascript',
+    };
+    const { rows } = await service(client({ data: [upload], error: null })).activity();
+    expect(Object.keys(rows[0]!).sort()).toEqual(
+      ['category', 'city', 'count', 'country', 'id', 'lastSeenAt', 'minute', 'outcome', 'reason', 'source'].sort(),
+    );
+    expect(JSON.stringify(rows)).not.toMatch(/secret-school|po-imports|pdf_javascript/);
   });
 
   it('nothing recorded: no totals and no rows', async () => {

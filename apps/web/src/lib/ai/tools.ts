@@ -12,6 +12,7 @@ import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 import {
   assertPermission,
   mfaGateError,
@@ -1804,6 +1805,8 @@ const PHOTO_NOT_DOWNLOADED =
   'The image could not be downloaded from that address. Attach the photo again.';
 const PHOTO_NOT_AN_IMAGE = 'That address did not return an image.';
 const PHOTO_TOO_LARGE = 'That image is too large to read. The limit is 6 MB.';
+const PHOTO_REFUSED =
+  'That image was refused by the upload checks. Attach a fresh copy of the photo in the chat instead.';
 
 /**
  * The address guard's two answers, told apart by type. A failed lookup of the
@@ -1970,6 +1973,25 @@ const identifyFromPhotoTool: ToolExecutor = {
     } finally {
       clearTimeout(timer);
     }
+
+    // Part 6: the bytes go to the model, so they pass the one upload check
+    // first, as on the photo route: the kind is read from the bytes (never
+    // the response's content-type), a file hidden after the picture is
+    // refused, and a refusal is recorded as a security event in this
+    // organization. The model reads the tool's own fixed words, and is
+    // handed the kind the bytes are.
+    const checked = await checkUploadBytes(new Uint8Array(bytes), {
+      surface: 'identify_photo',
+      accept: ['png', 'jpeg', 'webp', 'avif', 'heic'],
+      organizationId: ctx.organizationId,
+      wrongTypeMessage: PHOTO_NOT_AN_IMAGE,
+    });
+    if (!checked.ok) {
+      // An empty answer (no family: nothing recorded) is not an image either.
+      if (checked.family === 'wrong_type' || checked.family === null) throw new ToolRefusal(PHOTO_NOT_AN_IMAGE);
+      throw new ToolRefusal(PHOTO_REFUSED);
+    }
+    mimeType = checked.mime;
 
     const base64 = Buffer.from(bytes).toString('base64');
     const responseSchema: ResponseSchema = {

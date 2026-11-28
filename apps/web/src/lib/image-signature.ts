@@ -76,6 +76,8 @@ export const SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS = {
   // migration 0046:196-205
   'item-images': ['image/png', 'image/jpeg', 'image/webp', 'image/avif', 'image/heic'],
   'org-logos': ['image/png', 'image/jpeg', 'image/webp', 'image/avif'],
+  // migration 0046, the same set as org-logos (its finalize check: part 6).
+  'user-avatars': ['image/png', 'image/jpeg', 'image/webp', 'image/avif'],
   // migration 0315:29-35 — HEIC deliberately excluded.
   'maintenance-photos': ['image/png', 'image/jpeg', 'image/webp'],
   // Added by the upload-hardening audit, 2026-08-21. Both are server-side

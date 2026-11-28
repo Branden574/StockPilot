@@ -38,6 +38,11 @@ import {
   newRackQuestion,
   rackFieldsFromLabel,
 } from '@/components/inventory/new-rack-question';
+import {
+  handPhotoResultsTo,
+  photoResultsToast,
+  type PhotoResult,
+} from '@/components/inventory/photo-results';
 import { PlacementConfirmDialog } from '@/components/inventory/placement-confirm-dialog';
 import { StockAdjustDialog } from '@/components/inventory/stock-adjust-dialog';
 import { composeBookCustomFields } from '@/components/inventory/book-custom-fields';
@@ -1229,8 +1234,15 @@ export function ItemForm({
     });
   }
 
+  /**
+   * Uploads the staged photos to one item. What became of each photo is
+   * returned, each one not added with its own sentence, for the item's page
+   * to show under its uploader (lab walk 6, W6-F2): never a toast of its own,
+   * which the summary toast was drawn over.
+   */
   async function uploadStagedImages(itemId: string) {
-    if (staged.length === 0) return { uploaded: 0, failed: 0 };
+    const results: PhotoResult[] = [];
+    if (staged.length === 0) return { uploaded: 0, failed: 0, results };
     setUploadingImages(true);
     // Byte-weighted progress over the staged originals. The denominator is
     // fixed up front so the percentage cannot travel backwards as each file
@@ -1258,6 +1270,7 @@ export function ItemForm({
         const presign = await createImageUploadAction({ itemId, fileExt: ext });
         if (!presign.ok) {
           failed++;
+          results.push({ name: item.file.name, outcome: 'refused', sentence: presign.error.message });
           continue;
         }
         // XHR, not fetch(): fetch() reports no upload progress whatsoever, so
@@ -1292,6 +1305,11 @@ export function ItemForm({
           batch.settle(progressKey, false);
           publishProgress();
           failed++;
+          results.push({
+            name: item.file.name,
+            outcome: 'unsent',
+            sentence: `Couldn't upload "${item.file.name}". Check your network and try again.`,
+          });
           continue;
         }
         batch.settle(progressKey, true);
@@ -1304,14 +1322,21 @@ export function ItemForm({
           lqip,
           isFirst: i === 0,
         });
-        if (record.ok) uploaded++;
-        else failed++;
+        if (record.ok) {
+          uploaded++;
+          results.push({ name: item.file.name, outcome: 'added' });
+        } else {
+          // The server's own sentence for this photo (a refusal, a limit), so
+          // the person is told why it was not added, not only that it failed.
+          failed++;
+          results.push({ name: item.file.name, outcome: 'refused', sentence: record.error.message });
+        }
       }
     } finally {
       setUploadingImages(false);
       setUploadPercent(null);
     }
-    return { uploaded, failed };
+    return { uploaded, failed, results };
   }
 
   /**
@@ -1468,6 +1493,8 @@ export function ItemForm({
           const r = await uploadStagedImages(variantId);
           totalUploaded += r.uploaded;
           totalFailed += r.failed;
+          // Each variant's page shows its own photos' results under its uploader.
+          handPhotoResultsTo(variantId, r.results);
         }
       }
 
@@ -1480,7 +1507,7 @@ export function ItemForm({
         );
       } else {
         toast.warning(
-          `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded — ${totalFailed} failed.`,
+          `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded — ${totalFailed} failed. Open a variant to see why, under Images.`,
         );
       }
       // A SEPARATE toast rather than another branch of the tree above: photos
@@ -1683,11 +1710,12 @@ export function ItemForm({
     // Photo uploads are only staged in the create flow; edit flow uses the
     // ImageUploader on the item detail page directly against an existing id.
     if (!isEdit && staged.length > 0) {
-      const { uploaded, failed } = await uploadStagedImages(res.data.id);
+      const { uploaded, failed, results } = await uploadStagedImages(res.data.id);
       if (failed > 0) {
-        toast.warning(
-          `Item created. ${uploaded} of ${staged.length} photos uploaded — ${failed} failed.`,
-        );
+        // The page this form goes to next shows each photo not added, with its
+        // sentence, under its uploader; the toast only counts and points there.
+        handPhotoResultsTo(res.data.id, results);
+        toast.warning(`Item created. ${photoResultsToast(results, 'Images below').text}`);
       } else {
         savedRef.current = true;
         toast.success(`Item created with ${uploaded} photo${uploaded === 1 ? '' : 's'}.`);

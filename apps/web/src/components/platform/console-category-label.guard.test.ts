@@ -14,6 +14,16 @@ import { describe, expect, it } from 'vitest';
  * platform pages and core's console modules, and no platform page calls the
  * shared one. (The organization's Blocked activity page test pins that it
  * still says "Phishing".)
+ *
+ * THE OTHER WAY ROUND FOR MALWARE (part 6; the coordinator, 2026-11-24). The
+ * category whose code is malware holds files the upload checks refused or
+ * could not check: the console keeps core's "Malware", and an organization's
+ * own pages say "Refused file" (core's securityMemberCategoryLabel), because
+ * those checks are not an antivirus and a renamed file is not malware. Pinned:
+ * the member label is called only outside the console, the shared label is
+ * called by no web page at all (so a member page cannot say "Malware"), and
+ * the phone app calls neither the shared nor the console label. (The Blocked
+ * activity page test pins "Refused file"; the console's tests pin "Malware".)
  */
 
 const WEB = join(__dirname, '..', '..');
@@ -56,6 +66,19 @@ describe("the platform console's category words", () => {
       'security/security-events.ts',
       'security/security-map.ts',
     ]);
+  });
+
+  it('the member label is called by the organization\'s own pages only, never by the console; in core only by its own module', () => {
+    const web = callers(WEB, 'securityMemberCategoryLabel');
+    expect(web).toContain('app/(dashboard)/dashboard/settings/security/activity/page.tsx');
+    for (const rel of web) expect(rel).not.toMatch(CONSOLE);
+    expect(callers(CORE, 'securityMemberCategoryLabel')).toEqual(['security/security-events.ts']);
+  });
+
+  it('no web page calls the shared label, so a member page cannot say "Malware" and no console page "Phishing"', () => {
+    expect(callers(WEB, 'securityEventCategoryLabel')).toEqual([]);
+    // The phone app, if it ever names a kind, uses the member label.
+    expect(callers(MOBILE, 'securityEventCategoryLabel')).toEqual([]);
   });
 
   it('no platform page calls the shared label, so none can say "Phishing"', () => {

@@ -367,6 +367,22 @@ describe('the table', () => {
     ]);
   });
 
+  it('a refused file is "Malware" on the console, never "Refused file" (part 6), and opens the card of its reason', async () => {
+    h.list.mockResolvedValueOnce([
+      row({ id: 'e6', category: 'malware', reason: 'upload_hidden_file', organizationId: ORG, organizationName: 'Example School District', count: 1 }),
+    ]);
+    await renderPage();
+    const table = screen.getByRole('region', { name: 'Security events' });
+    expect(within(table).getByText(/^Malware · Blocked$/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/Refused file/);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'How to respond: A file with another file hidden inside it was refused' }),
+    );
+    const panel = await screen.findByRole('dialog');
+    expect(panel).toHaveAttribute('data-card', 'upload-refused');
+    expect(panel.textContent).not.toMatch(/Refused file/);
+  });
+
   it('a sign-in alert is named "Sign-in alert": no text on the page or in its card says Phishing or Malware (lab walk 3, F1)', async () => {
     h.list.mockResolvedValueOnce([
       row(),

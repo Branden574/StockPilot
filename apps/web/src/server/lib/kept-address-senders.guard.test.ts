@@ -306,6 +306,14 @@ const REVIEWED_HANDOFFS: Array<{ file: string; enclosing: string; callee: string
  *  embed a kept one (KeptAddressSpec.embeddedFrom). */
 const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: string }> = [
   {
+    file: 'apps/web/src/server/services/upload-still-named.ts',
+    enclosing: 'uploadObjectsStillNamed',
+    why:
+      'Its table is typed UploadRecordTable (the tables whose rows name an upload: item_images, ' +
+      'order_request_attachments, organizations, po_attachments, procedure_videos, support_tickets, ' +
+      'user_profiles), it selects only id to answer yes or no, and it sends nothing: no kept address.',
+  },
+  {
     file: MAINTENANCE_SERVICE,
     enclosing: 'MaintenanceRequestsService.resolveRelatedId',
     why:
