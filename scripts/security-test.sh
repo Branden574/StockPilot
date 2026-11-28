@@ -2831,6 +2831,37 @@ WEB_TESTS=(
   src/server/actions/platform/security-event-samples.test.ts
   src/components/platform/security-response/security-response-samples.test.tsx
   src/components/platform/security-response/security-panels-no-raw-html.guard.test.ts
+  # Vendor risk reviews (part 7, the web half; 0481 is the database's half):
+  # every read and write asks, before anything is read, the Suppliers module,
+  # then the authenticator step, then owners and admins; then 0481's function
+  # with the context's own organization. A support (act-as) seat reads and
+  # never writes, and a seat that could not be read writes nothing. A missing
+  # function or a failed read is "could not check", never "not reviewed" or
+  # an empty register. Refusals map to core's words by the hint alone.
+  # Nothing about a review is written to the shared audit log (every holder
+  # of activity_logs:read, a manager by default, reads all of it): a manager's
+  # read of the log after every admin write shows no review; the history is
+  # the database's own admin-only record, read like every other read (a
+  # missing function is "could not check"), every value drawn as text. Every
+  # action checks its argument with zod before anything is asked. The pages
+  # give Page not found to anyone else and to another organization's
+  # supplier, no write control to a seat that may not write, names in <bdi>
+  # and typed text as text; notes and reasons are cleaned of hidden
+  # characters with core's list and shown cleaned. The register CSV guards
+  # every cell against formulas. The daily reminder checks the cron secret
+  # first, reads the module per organization before anything is claimed,
+  # claims before it sends, confirms after, retries the confirmation and
+  # never the send, and sends each reminder once across overlapping runs.
+  src/server/services/supplier-risk.test.ts
+  src/server/services/supplier-risk.audit-log.test.ts
+  src/server/actions/supplier-risk.test.ts
+  'src/app/(dashboard)/dashboard/suppliers/risk/page.test.tsx'
+  'src/app/(dashboard)/dashboard/suppliers/[id]/risk/page.test.tsx'
+  src/components/suppliers/risk/supplier-risk-components.test.tsx
+  src/components/suppliers/suppliers-manager.risk.test.tsx
+  src/lib/supplier-risk/list-risk.test.ts
+  src/lib/supplier-risk/supplier-risk-helpers.test.ts
+  src/app/api/cron/supplier-risk-reminders/route.test.ts
 
   # The security alerts (part 5, stage 4a: RECORD ONLY). Nothing is sent: the
   # setter and the recipients' lookup are called from nowhere, each of 0480's
@@ -3257,6 +3288,11 @@ CORE_TESTS=(
   # fixed answer; an entry asks for its own kind and UTC hour, never one more
   # than 7 days back.
   src/security/security-event-samples.test.ts
+  # Vendor risk reviews, the pages' cleaner and counter: a note or reason is
+  # cleaned with the hidden-character list the database refuses (0481), and
+  # the reason counter is the database's rule, never looser (a reason the
+  # page passes is one the database takes).
+  src/vendor-risk/page-helpers.test.ts
   # The security alerts' rules (part 5, stage 4a): the contract's lists, a
   # strict reader of every answer, the keys, the state model (a start, its
   # reminders at 1, 6 and 24 hours, an end only after three quiet whole

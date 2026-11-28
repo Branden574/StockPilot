@@ -256,6 +256,28 @@ describe('/dashboard/orders/new opens the phone storefront', () => {
   });
 });
 
+// Vendor risk reviews (security tools part 7): the daily reminder's link is
+// the web risk register. The phone opens its Suppliers list, never home.
+describe('/dashboard/suppliers/risk opens the phone Suppliers screen', () => {
+  it('with or without a query, and the stockpilot:// form', () => {
+    expect(rewriteWebPath('/dashboard/suppliers/risk')).toBe('/suppliers');
+    expect(rewriteWebPath('/dashboard/suppliers/risk?sort=due')).toBe('/suppliers');
+    expect(rewriteWebPath('stockpilot:///dashboard/suppliers/risk')).toBe('/suppliers');
+  });
+
+  // Mutation caught: the row placed below the catch-all (the push opens home),
+  // or a pattern loose enough to take other supplier paths.
+  it('only the register: other supplier paths are unchanged', () => {
+    expect(rewriteWebPath('/dashboard/suppliers/risk')).not.toBe('/');
+    expect(rewriteWebPath('/dashboard/suppliers/risky')).toBe('/');
+    expect(rewriteWebPath('/dashboard/suppliers')).toBe('/');
+  });
+
+  it('the target is a real phone screen', () => {
+    expect(existsSync(path.join(__dirname, '../../app/(drawer)/suppliers.tsx'))).toBe(true);
+  });
+});
+
 // Ordering visibility (0413, design 8.6): the web's Manage order items page
 // opens the native management screen (a real screen, never a WebView), with
 // or without the page's filter query, never home. The cold-start shim under

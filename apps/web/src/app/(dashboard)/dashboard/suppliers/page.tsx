@@ -4,6 +4,8 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { SuppliersManager } from '@/components/suppliers/suppliers-manager';
 import { requireOrgContext } from '@/lib/auth/session';
+import { loadSuppliersRiskView } from '@/lib/supplier-risk/list-risk';
+import { withContext } from '@/server/services/context';
 
 export const metadata: Metadata = { title: 'Suppliers' };
 import { SuppliersService } from '@/server/services/suppliers';
@@ -33,7 +35,13 @@ export default async function SuppliersPage({ searchParams }: SuppliersPageProps
   const isArchivedView = params.view === 'archived';
   const [ctx, svc] = await Promise.all([requireOrgContext(), SuppliersService.forCurrentUser()]);
   const canManage = can(ctx, 'suppliers:manage');
-  const rows = await svc.list({ includeArchived: isArchivedView });
+  // The vendor reviews (owners and admins only; null for everyone else, so no
+  // Risk column and no Review control). Never throws: the list opens even
+  // when the reviews cannot be read, and then says "Could not check".
+  const [rows, risk] = await Promise.all([
+    svc.list({ includeArchived: isArchivedView }),
+    withContext().then(loadSuppliersRiskView),
+  ]);
 
   return (
     // The header (h1, subline, Active / Archived, New supplier) is drawn by
@@ -42,6 +50,7 @@ export default async function SuppliersPage({ searchParams }: SuppliersPageProps
       <SuppliersManager
         view={isArchivedView ? 'archived' : 'active'}
         canManage={canManage}
+        risk={risk}
         initial={rows.map((r) => ({
           id: r.id as string,
           name: r.name as string,
