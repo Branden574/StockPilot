@@ -397,27 +397,43 @@ const AT_SIGN = /@|%(?:25)*40/gi;
  */
 const EMAIL_DOMAIN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
 
+const LETTER_OR_DIGIT = /[A-Za-z0-9]/;
+
 /**
  * An email address (something@something.tld, its `@` sent as itself or
  * encoded, still encoded after three decodes too), with the word around it.
  * An `@` that is not part of one is left to the at_sign rule.
+ *
+ * One pass: the text before each `@` is read once, left to right, for where
+ * the word that ends there starts and where its last letter or digit is, and
+ * the word after an `@` is read only for an address that is kept. So the time
+ * grows with the length of the text, whatever it holds. What is found is what
+ * a walk back and forth from each `@` finds (request-scrub.test.ts compares
+ * the two).
  */
 function findEmail(view: string): Found[] {
   const found: Found[] = [];
+  let read = 0; // view[0, read) has been read for the two below
+  let wordStart = 0; // where the run of EMAIL_WORD characters ending at `read` starts
+  let lastLetterOrDigit = -1; // the last letter or digit before `read`, or -1
   AT_SIGN.lastIndex = 0;
   for (let m = AT_SIGN.exec(view); m !== null; m = AT_SIGN.exec(view)) {
-    let from = m.index;
-    let to = m.index + m[0].length;
     const last = found[found.length - 1];
-    if (last && from < last.to) continue;
-    const at = to;
-    while (from > (last?.to ?? 0) && EMAIL_WORD.test(view[from - 1]!)) from--;
-    while (to < view.length && EMAIL_WORD.test(view[to]!)) to++;
-    const local = view.slice(from, m.index);
-    if (!/[A-Za-z0-9]/.test(local) || !EMAIL_DOMAIN.test(view.slice(at))) {
+    if (last && m.index < last.to) continue;
+    for (; read < m.index; read++) {
+      const ch = view[read]!;
+      if (!EMAIL_WORD.test(ch)) wordStart = read + 1;
+      if (LETTER_OR_DIGIT.test(ch)) lastLetterOrDigit = read;
+    }
+    // The word before the `@`, from the end of the last address found.
+    const from = Math.max(wordStart, last?.to ?? 0);
+    const at = m.index + m[0].length;
+    if (lastLetterOrDigit < from || !EMAIL_DOMAIN.test(view.slice(at))) {
       AT_SIGN.lastIndex = at;
       continue;
     }
+    let to = at;
+    while (to < view.length && EMAIL_WORD.test(view[to]!)) to++;
     found.push({ from, to });
     AT_SIGN.lastIndex = to;
   }

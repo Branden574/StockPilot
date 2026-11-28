@@ -1113,79 +1113,202 @@ describe('the ways through the scrub the independent review found are closed', (
 
 // ── Cost ────────────────────────────────────────────────────────────────────
 
-describe('every rule runs in about linear time (review S2)', () => {
-  const N = 2_000;
+/**
+ * The email rule as it was before it read the text in one pass, kept here
+ * ONLY to compare its finds with the rule as it is (below). Not used anywhere
+ * else.
+ */
+const BEFORE_EMAIL_WORD = /[A-Za-z0-9!$%'*+^_`{|}~.-]/;
+const BEFORE_AT_SIGN = /@|%(?:25)*40/gi;
+const BEFORE_EMAIL_DOMAIN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/;
+function findEmailAsBefore(view: string): Array<{ from: number; to: number }> {
+  const found: Array<{ from: number; to: number }> = [];
+  BEFORE_AT_SIGN.lastIndex = 0;
+  for (let m = BEFORE_AT_SIGN.exec(view); m !== null; m = BEFORE_AT_SIGN.exec(view)) {
+    let from = m.index;
+    let to = m.index + m[0].length;
+    const last = found[found.length - 1];
+    if (last && from < last.to) continue;
+    const at = to;
+    while (from > (last?.to ?? 0) && BEFORE_EMAIL_WORD.test(view[from - 1]!)) from--;
+    while (to < view.length && BEFORE_EMAIL_WORD.test(view[to]!)) to++;
+    const local = view.slice(from, m.index);
+    if (!/[A-Za-z0-9]/.test(local) || !BEFORE_EMAIL_DOMAIN.test(view.slice(at))) {
+      BEFORE_AT_SIGN.lastIndex = at;
+      continue;
+    }
+    found.push({ from, to });
+    BEFORE_AT_SIGN.lastIndex = to;
+  }
+  return found;
+}
 
-  // A slow shared runner moves every time by the same factor, so no absolute
-  // millisecond bound is used as the check: the worst case at 2N must cost
-  // about twice the one at N. A ratio under 6 allows timer noise and fails a
-  // worse-than-quadratic rule; plain quadratic growth (a ratio of about 4) is
-  // caught by the ceiling, on the inputs 20 times longer than N.
-  const CEILING_MS = 2_000;
-  const RATIO_MAX = 6;
-  const RUNS = 7;
+describe('the email rule reads the text once, and finds what it found before', () => {
+  it('the same finds as the rule it replaced, on 200,000 seeded texts', () => {
+    const email = SCRUB_RULES.find((r) => r.name === 'email')!;
+    const seq = sequence(0x5c2b);
+    const PIECES = [
+      ...'aZ9042.-_+%@/&=?; <>()!~`{|',
+      'é',
+      '\u200b',
+      '%40',
+      '%2540',
+      '%252540',
+      '%25',
+      '%4',
+      '.com',
+      '.co',
+      '.a',
+      'a.b',
+      '..',
+      'x1',
+      'name',
+      '.org1',
+      SAMPLE_MARKERS.email,
+      SAMPLE_MARKERS.at,
+      SAMPLE_MARKERS.token,
+    ];
+    // Something shaped like an address, often not quite one.
+    const addressLike = () =>
+      seq.pick(['a', 'x1', 'name', 'a.b', 'a-b', '', '.', '-', '%', '1']) +
+      seq.pick(['@', '@', '%40', '%2540', '%252540', '%2525252540', '%4', '@@']) +
+      seq.pick(['a', 'b-c', 'x1', 'mail.a', '', '-', '.', '1']) +
+      seq.pick(['.com', '.co', '.a', '.org1', '', '.c0m', '..com', '.com.', '.io-']);
+    const same = (a: ReadonlyArray<{ from: number; to: number }>, b: typeof a) =>
+      a.length === b.length && a.every((f, i) => f.from === b[i]!.from && f.to === b[i]!.to);
+    let first: string | null = null;
+    let differences = 0;
+    let withAddress = 0;
+    for (let i = 0; i < 200_000; i++) {
+      let text = '';
+      for (let n = seq.next() < 0.9 ? seq.int(0, 12) : seq.int(12, 60); n > 0; n--) {
+        text += seq.next() < 0.2 ? addressLike() : seq.pick(PIECES);
+      }
+      const now = email.find(text);
+      if (now.length > 0) withAddress++;
+      if (!same(now, findEmailAsBefore(text))) {
+        differences++;
+        first ??= text;
+      }
+    }
+    expect(differences, first ?? '').toBe(0);
+    // Enough of the texts hold an address for the comparison to mean something.
+    expect(withAddress).toBeGreaterThan(40_000);
+  }, 60_000);
+});
+
+describe('what the scrub costs (review S2)', () => {
+  /**
+   * Every time here is the CPU time of this thread, in milliseconds: what a
+   * call costs the server, not how long it waited for a turn. On a busy
+   * runner a wall-clock time stretches when the call is put aside, and a long
+   * call more often than a short one, which once made a ratio of times read
+   * twice what it was. Times on a shared CI runner were still 10 to 15 times
+   * those on the machine this was written on, so every bound is wide and says
+   * what it holds. Each time is a median of three calls after one not timed.
+   */
+  const cpuMs = () => {
+    const used = process.threadCpuUsage();
+    return (used.user + used.system) / 1000;
+  };
   const median = (xs: number[]) => [...xs].sort((x, y) => x - y)[Math.floor(xs.length / 2)]!;
   const timeOf = (work: () => void) => {
-    work(); // warm-up
-    const runs: number[] = [];
-    for (let i = 0; i < RUNS; i++) {
-      const started = performance.now();
+    work();
+    const times: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const started = cpuMs();
       work();
-      runs.push(performance.now() - started);
+      times.push(cpuMs() - started);
     }
-    return median(runs);
+    return median(times);
   };
-  // The same shapes at length N and at 2N.
-  const worst = (n: number) => [
-    'a'.repeat(n),
-    '1'.repeat(n),
-    'f'.repeat(n),
-    '@'.repeat(n),
-    'a@'.repeat(n / 2),
-    '1.'.repeat(n / 2),
-    '12 '.repeat(n / 3),
-    ':'.repeat(n),
-    'a:'.repeat(n / 2),
-    'eyJ'.repeat(n / 3),
-    'eyJaa.'.repeat(n / 6),
-    `${'a'.repeat(15)}.`.repeat(n / 16),
-    'aB1-'.repeat(n / 4),
-    'a='.repeat(n / 2),
-    '%25'.repeat(n / 3),
-    '%2540'.repeat(n / 5),
-  ];
-  const small = worst(N);
-  const large = worst(2 * N);
+  /** The worst-case shapes, each as long as it can be in whole repeats within `n` characters. */
+  const worst = (n: number) =>
+    [
+      'a',
+      '1',
+      'f',
+      '@',
+      'a@',
+      '1.',
+      '12 ',
+      ':',
+      'a:',
+      'eyJ',
+      'eyJaa.',
+      `${'a'.repeat(15)}.`,
+      'aB1-',
+      'a=',
+      '%25',
+      '%2540',
+    ].map((unit) => unit.repeat(Math.floor(n / unit.length)));
+  const rules = SCRUB_RULES.map((r) => [r.name, r] as const);
 
-  it.each(SCRUB_RULES.map((r) => [r.name, r] as const))(
-    '%s, on 2,000-character worst cases',
+  /**
+   * Node refuses a request whose line and headers pass 16 KiB, before any
+   * code of the app runs (apps/web probe-paths.test.ts pins it), so no caller
+   * passes a longer path or query string. Measured at about 1 ms for both
+   * where this was written.
+   */
+  const LONGEST_INPUT = 16 * 1024;
+  const WHOLE_SCRUB_CEILING_MS = 250;
+
+  it('the whole scrub of a path and a query string, as long as it reads and as long as a caller can pass, stays under 250 ms', () => {
+    for (const n of [SAMPLE_INPUT_MAX, LONGEST_INPUT]) {
+      for (const text of worst(n)) {
+        const ms = timeOf(() => {
+          scrubRequestTarget(`/${text}`);
+          scrubRequestSample(text);
+        });
+        expect(ms, `${n}: ${text.slice(0, 12)}`).toBeLessThan(WHOLE_SCRUB_CEILING_MS);
+      }
+    }
+  }, 60_000);
+
+  /** No rule reads more than SAMPLE_INPUT_MAX characters of what was sent. */
+  const RULE_CEILING_MS = 50;
+
+  it.each(rules)(
+    '%s, on each worst case as long as the scrub reads, stays under 50 ms',
     (_name, rule) => {
-      small.forEach((text, i) => {
-        const at = timeOf(() => rule.find(text));
-        const twice = timeOf(() => rule.find(large[i]!));
-        expect(twice, text.slice(0, 12)).toBeLessThan(CEILING_MS);
-        // Under a millisecond a ratio is only timer noise.
-        if (at >= 1) expect(twice / at, text.slice(0, 12)).toBeLessThan(RATIO_MAX);
-      });
+      for (const text of worst(SAMPLE_INPUT_MAX)) {
+        const ms = timeOf(() => rule.find(text));
+        expect(ms, text.slice(0, 12)).toBeLessThan(RULE_CEILING_MS);
+      }
     },
     60_000,
   );
 
-  it('the whole scrub, on the longest input it reads and far past it', () => {
-    const whole = (input: string) => () => {
-      scrubRequestTarget(input);
-      scrubRequestSample(input.slice(1));
-    };
-    small.forEach((text, i) => {
-      for (const [at, twice] of [
-        [`/${text}`, `/${large[i]!}`],
-        [`/${text.repeat(20)}`, `/${large[i]!.repeat(20)}`],
-      ] as const) {
-        const one = timeOf(whole(at));
-        const two = timeOf(whole(twice));
-        expect(two, text.slice(0, 12)).toBeLessThan(CEILING_MS);
-        if (one >= 1) expect(two / one, text.slice(0, 12)).toBeLessThan(RATIO_MAX);
-      }
-    });
-  }, 60_000);
+  /**
+   * Growth, on texts far longer than the scrub reads: four times the length
+   * must cost under eight times as much (linear is about 4, quadratic about
+   * 16). Each side is the lowest of three medians, the two lengths timed in
+   * turn, so a slow spell on a shared runner moves both. A rule that takes
+   * under 5 ms at GROWTH_N is not timed for growth (a ratio of times that
+   * short is mostly noise); were it to grow with the square, it would take
+   * under 0.03 ms on what the scrub reads, and the ceilings above hold it.
+   */
+  const GROWTH_N = 8_000;
+  const GROWTH_MIN_MS = 5;
+  const GROWTH_RATIO_MAX = 8;
+
+  it.each(rules)(
+    '%s, on each worst case that takes 5 ms or more: four times the length costs under eight times as much',
+    (_name, rule) => {
+      const small = worst(GROWTH_N);
+      const large = worst(4 * GROWTH_N);
+      const find = (text: string) => () => rule.find(text);
+      small.forEach((text, i) => {
+        if (timeOf(find(text)) < GROWTH_MIN_MS) return;
+        let atN = Infinity;
+        let at4N = Infinity;
+        for (let round = 0; round < 3; round++) {
+          atN = Math.min(atN, timeOf(find(text)));
+          at4N = Math.min(at4N, timeOf(find(large[i]!)));
+        }
+        expect(at4N / atN, text.slice(0, 12)).toBeLessThan(GROWTH_RATIO_MAX);
+      });
+    },
+    120_000,
+  );
 });
