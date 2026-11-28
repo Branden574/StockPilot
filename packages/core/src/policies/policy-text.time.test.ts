@@ -57,10 +57,10 @@ function median(fn: (s: string) => unknown, text: string): number {
 /** `s` repeated to about `n` code points. */
 const fill = (s: string, n: number) => s.repeat(Math.max(1, Math.floor(n / [...s].length)));
 
-const ACUTE = '́'; // class 230
-const GRAVE_BELOW = '̖'; // class 220
-const KA = 'ཀ';
-const II = 'ཱི'; // Tibetan vowel sign II: two marks (classes 129, 130) in normal form
+const ACUTE = '\u0301'; // class 230
+const GRAVE_BELOW = '\u0316'; // class 220
+const KA = '\u0F40';
+const II = '\u0F73'; // Tibetan vowel sign II: two marks (classes 129, 130) in normal form
 
 const SHAPES: ReadonlyArray<[string, (n: number) => string]> = [
   ['spaces then a letter', (n) => ' '.repeat(n - 1) + 'x'],
@@ -84,12 +84,12 @@ const SHAPES: ReadonlyArray<[string, (n: number) => string]> = [
     (n) => 'x' + GRAVE_BELOW.repeat(n / 2) + ACUTE.repeat(n / 2 - 1),
   ],
   ['Tibetan II, out of order once decomposed', (n) => KA + II.repeat(n - 1)],
-  ['Greek dialytika tonos (U+0344)', (n) => 'x' + '̈́'.repeat(n - 1)],
+  ['Greek dialytika tonos (U+0344)', (n) => 'x' + '\u0344'.repeat(n - 1)],
   [
     'Ol Onal 230 then 220 (the stored body of the review)',
     (n) => 'x' + '\u{1E5EE}'.repeat(n / 2) + '\u{1E5EF}'.repeat(n / 2 - 1),
   ],
-  ['code points unassigned in Unicode 17.0', (n) => 'x' + '͸'.repeat(n - 1)],
+  ['code points unassigned in Unicode 17.0', (n) => 'x' + '\u0378'.repeat(n - 1)],
   [
     'runs of 30 marks out of order between letters',
     (n) => fill('x' + (ACUTE + GRAVE_BELOW).repeat(15), n),
@@ -101,8 +101,8 @@ const SHAPES: ReadonlyArray<[string, (n: number) => string]> = [
   ['runs of 15 Tibetan II (30 marks once decomposed)', (n) => fill(KA + II.repeat(15), n)],
   ['runs of 30 Tibetan II (60 marks once decomposed)', (n) => fill(KA + II.repeat(30), n)],
   ['decomposed accents that compose', (n) => fill('e' + ACUTE, n)],
-  ['Hangul jamo that compose', (n) => fill('각', n)],
-  ['ideographs', (n) => '中'.repeat(n)],
+  ['Hangul jamo that compose', (n) => fill('\u1100\u1161\u11A8', n)],
+  ['ideographs', (n) => '\u4E2D'.repeat(n)],
 ];
 
 const FNS: ReadonlyArray<[string, (s: string) => unknown]> = [

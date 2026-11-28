@@ -19,11 +19,14 @@ const ENGINE_UNICODE = process.versions.unicode ?? '';
 const MARK = /\p{M}/u;
 const MARK_OR_UNASSIGNED = /[\p{M}\p{Cn}]/u;
 /** U+0345 has the highest class (240): a code point that starts with any lower class moves before it. */
-const CLASS_240 = 'ͅ';
+const CLASS_240 = '\u0345';
 
-function isListed(cp: number): boolean {
-  return POLICY_COMBINING_MARK_RANGES.some(([lo, hi]) => cp >= lo && cp <= hi);
-}
+/** One flag per code point: is it in the list (a table, so the sweeps below stay quick). */
+const LISTED = new Uint8Array(0x110000);
+for (const [lo, hi] of POLICY_COMBINING_MARK_RANGES) LISTED.fill(1, lo, hi + 1);
+const isListed = (cp: number) => LISTED[cp] === 1;
+/** The sweeps below visit all 1,112,064 code points; on a busy machine that can take seconds. */
+const SWEEP_MS = 60_000;
 
 function startsWithNonStarter(ch: string): boolean {
   return ch === CLASS_240 || (CLASS_240 + ch).normalize('NFD') !== CLASS_240 + ch.normalize('NFD');
@@ -70,6 +73,7 @@ describe('the list of combining marks', () => {
       expect(missing).toEqual([]);
       expect(extra).toEqual([]);
     },
+    SWEEP_MS,
   );
 });
 
@@ -80,31 +84,39 @@ describe('the core counts every code point this engine can reorder', () => {
     }
   });
 
-  it('every code point whose decomposition starts with a non-starter is counted', () => {
-    const notCounted: string[] = [];
-    let nonStarters = 0;
-    everyCodePoint((cp, ch) => {
-      if (!startsWithNonStarter(ch)) return;
-      nonStarters += 1;
-      if (findPolicyMarkRun('x' + ch.repeat(POLICY_MARK_RUN_MAX + 1)) === null) {
-        notCounted.push(cp.toString(16));
-      }
-    });
-    expect(nonStarters).toBeGreaterThan(900);
-    expect(notCounted).toEqual([]);
-  });
+  it(
+    'every code point whose decomposition starts with a non-starter is counted',
+    () => {
+      const notCounted: string[] = [];
+      let nonStarters = 0;
+      everyCodePoint((cp, ch) => {
+        if (!startsWithNonStarter(ch)) return;
+        nonStarters += 1;
+        if (findPolicyMarkRun('x' + ch.repeat(POLICY_MARK_RUN_MAX + 1)) === null) {
+          notCounted.push(cp.toString(16));
+        }
+      });
+      expect(nonStarters).toBeGreaterThan(900);
+      expect(notCounted).toEqual([]);
+    },
+    SWEEP_MS,
+  );
 
-  it('bounds the non-starters in a row the normaliser can meet: at most 3 after any first character, at most 2 in a counted mark', () => {
-    let trailing = 0;
-    let perMark = 0;
-    everyCodePoint((cp, ch) => {
-      const parts = [...ch.normalize('NFD')];
-      let t = 0;
-      for (let i = parts.length - 1; i >= 0 && startsWithNonStarter(parts[i]!); i -= 1) t += 1;
-      if (!startsWithNonStarter(ch)) trailing = Math.max(trailing, t);
-      if (isListed(cp)) perMark = Math.max(perMark, parts.filter(startsWithNonStarter).length);
-    });
-    expect(trailing).toBeLessThanOrEqual(3);
-    expect(perMark).toBeLessThanOrEqual(2);
-  });
+  it(
+    'bounds the non-starters in a row the normaliser can meet: at most 3 after any first character, at most 2 in a counted mark',
+    () => {
+      let trailing = 0;
+      let perMark = 0;
+      everyCodePoint((cp, ch) => {
+        const parts = [...ch.normalize('NFD')];
+        let t = 0;
+        for (let i = parts.length - 1; i >= 0 && startsWithNonStarter(parts[i]!); i -= 1) t += 1;
+        if (!startsWithNonStarter(ch)) trailing = Math.max(trailing, t);
+        if (isListed(cp)) perMark = Math.max(perMark, parts.filter(startsWithNonStarter).length);
+      });
+      expect(trailing).toBeLessThanOrEqual(3);
+      expect(perMark).toBeLessThanOrEqual(2);
+    },
+    SWEEP_MS,
+  );
 });
