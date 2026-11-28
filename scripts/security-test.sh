@@ -2831,6 +2831,41 @@ WEB_TESTS=(
   src/server/actions/platform/security-event-samples.test.ts
   src/components/platform/security-response/security-response-samples.test.tsx
   src/components/platform/security-response/security-panels-no-raw-html.guard.test.ts
+
+  # The security alerts (part 5, stage 4a: RECORD ONLY). Nothing is sent: the
+  # setter and the recipients' lookup are called from nowhere, each of 0480's
+  # functions only from its one module, and each module of the alerts imports
+  # exactly its listed modules and the listed names from each, calls only its
+  # listed functions and tables, writes nothing and names no fetch or sender,
+  # its imports followed one level deep, where network, process and
+  # code-loading names are held to the uses judged (alerts-record-only, an
+  # allow-list and a tripwire, not a proof: review stays the control). The
+  # alert job fails closed on its cron secret, makes its calls in the
+  # contract's order (every serious flag before any other claim), opens a new
+  # state after a refused start only under a bucket where the condition
+  # holds, takes every refusal as an answer, closes a
+  # handed-out channel, the email floor's second result and the held notice as
+  # skipped, always finishes the heartbeat it started, ends inside its
+  # deadline, never throws, and reports three missed or failed runs once.
+  # Every report of the two jobs goes through one helper: a fixed tag, counts
+  # and codes only, each tag at most once in 6 hours on an instance, the
+  # failing report when the database says so (alerts-reports). The
+  # daily job only computes the baseline and says it sent nothing. On the
+  # console the read is imported by the alerts section and the Check again
+  # action alone, the action asks checkPlatformConsoleRead() first and
+  # answers one frozen refusal, a failed read is "could not check" (never an
+  # empty list), and the page says it is record only first and never says
+  # anything was sent. Each file carries the "Security invariant" marker.
+  src/server/security/alerts-record-only.guard.test.ts
+  src/server/security/alerts-reports.test.ts
+  src/app/api/cron/security-alerts/route.test.ts
+  src/app/api/cron/security-summary/route.test.ts
+  src/server/services/platform/security-alerts.test.ts
+  src/server/services/platform/security-alerts.callers.test.ts
+  src/server/actions/platform/security-alerts.test.ts
+  src/components/platform/platform-security-alerts-section.test.tsx
+  src/components/platform/security-alerts/security-alerts-client.test.tsx
+  'src/app/(platform)/platform/security/alerts/page.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3222,6 +3257,13 @@ CORE_TESTS=(
   # fixed answer; an entry asks for its own kind and UTC hour, never one more
   # than 7 days back.
   src/security/security-event-samples.test.ts
+  # The security alerts' rules (part 5, stage 4a): the contract's lists, a
+  # strict reader of every answer, the keys, the state model (a start, its
+  # reminders at 1, 6 and 24 hours, an end only after three quiet whole
+  # buckets and never from a partial read), built from the events and the
+  # database's own time, never this machine's clock, every serious flag
+  # first; and the console's words, none of which says anything was sent.
+  src/security/security-alerts.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

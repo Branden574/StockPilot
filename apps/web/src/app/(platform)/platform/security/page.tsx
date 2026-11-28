@@ -38,6 +38,7 @@ import {
   securityEventSourceLabel,
   isSecurityProbeKind,
   securityResponseCardIdFor,
+  SECURITY_ALERTS_WORDS,
   SECURITY_RESPONSE_WORDS,
 } from '@stockpilot/core';
 
@@ -119,15 +120,27 @@ export default async function PlatformSecurityEventsPage({
           // The console's header action: the outline button, as Act as this org
           // on an organization's page (a clear button, not a text link: the owner
           // could not find the map, 2026-11-24). Its focus ring is the button's.
-          <Button asChild variant="outline" className="max-sm:h-11">
-            <Link
-              href="/platform/security/map"
-              // Never prefetched: opening the map reads the whole window.
-              prefetch={false}
-            >
-              Open attack map
-            </Link>
-          </Button>
+          // The alerts (part 5, stage 4) sit beside it, the same button.
+          <>
+            <Button asChild variant="outline" className="max-sm:h-11">
+              <Link
+                href="/platform/security/map"
+                // Never prefetched: opening the map reads the whole window.
+                prefetch={false}
+              >
+                Open attack map
+              </Link>
+            </Button>
+            <Button asChild variant="outline" className="max-sm:h-11">
+              <Link
+                href="/platform/security/alerts"
+                // Never prefetched: opening the alerts reads every alert's record.
+                prefetch={false}
+              >
+                {SECURITY_ALERTS_WORDS.openFromSecurity}
+              </Link>
+            </Button>
+          </>
         }
       />
 

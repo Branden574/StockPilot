@@ -228,6 +228,21 @@ describe('the attack map', () => {
     ).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Attack map' })).toBeNull();
   });
+
+  it('the alerts are the same button beside it, never prefetched, and not on this page', async () => {
+    await renderPage();
+    const map = screen.getByRole('link', { name: 'Open attack map' });
+    const alerts = screen.getByRole('link', { name: 'Open alerts' });
+    expect(alerts).toHaveAttribute('href', '/platform/security/alerts');
+    expect(alerts).toHaveAttribute('data-prefetch', 'false');
+    expect(alerts).toHaveAttribute('data-glass', 'button');
+    expect(alerts).toHaveAttribute('data-glass-variant', 'outline');
+    expect(alerts.className).toContain('focus-visible:ring-2');
+    // Beside the map's, after it, in the same row of the header.
+    expect(map.compareDocumentPosition(alerts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(alerts.parentElement).toBe(map.parentElement);
+    expect(screen.queryByRole('region', { name: 'Security alerts' })).toBeNull();
+  });
 });
 
 describe('the table', () => {
