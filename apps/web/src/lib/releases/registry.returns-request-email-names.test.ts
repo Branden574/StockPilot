@@ -277,9 +277,8 @@ describe('the returns request and names release: order, status and date', () => 
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: 'phone-authenticator-set-up-2026-11'): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: without it): the upload checks release is published later, at the top, and reaches every member (its first entry has no audience), so it is read, seen or listed with the newer releases.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
       'upload-checks-2026-11',
-      'recovery-code-signs-out-other-devices-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',

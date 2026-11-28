@@ -11571,9 +11571,8 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
       UPLOAD_ID,
-      RECOVERY_ID,
     );
     // Re-pinned by the What's New publish of ungroup-2026-10 and
     // group-selected-2026-10 (2026-10-12; was: those two drafts): both are
@@ -13189,9 +13188,8 @@ describe('exchanges on returns (returns RX-2) is published', () => {
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
       UPLOAD_ID,
-      RECOVERY_ID,
     );
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
@@ -14872,9 +14870,8 @@ describe('Close the rest (returns RX-4) is published', () => {
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
       UPLOAD_ID,
-      RECOVERY_ID,
     );
     // Re-pinned by the What's New publish of ungroup-2026-10 and
     // group-selected-2026-10 (2026-10-12; was: those two drafts): both are
@@ -16639,9 +16636,8 @@ describe('requesters ask for an exchange themselves (returns RX-3) is published'
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
       UPLOAD_ID,
-      RECOVERY_ID,
     );
     // Re-pinned by the What's New publish of ungroup-2026-10 and
     // group-selected-2026-10 (2026-10-12; was: those two drafts): both are
@@ -18110,9 +18106,8 @@ describe("a return's history shows when the replacement was handed over (D-H1) i
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: PHONE_SET_UP_ID): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
       UPLOAD_ID,
-      RECOVERY_ID,
     );
     // Re-pinned by the What's New publish of ungroup-2026-10 and
     // group-selected-2026-10 (2026-10-12; was: those two drafts): both are

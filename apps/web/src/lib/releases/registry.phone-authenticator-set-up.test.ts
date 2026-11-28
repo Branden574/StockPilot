@@ -76,7 +76,7 @@ const UPLOAD_ID = 'upload-checks-2026-11';
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_AT = '2026-11-21T18:19:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity current password and set-up code release, published later, above the Blocked activity release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_CURRENT_AT = '2026-11-22T05:42:00Z'): the Liquid Glass draft placeholder is now the minute of the sign-in alerts release, published later, above the Blocked activity current password and set-up code release.
 // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: SIGNIN_AT = '2026-11-22T06:08:00Z'): the Liquid Glass draft placeholder is now the minute of the phone large text release, published later, above this one.
-const RECOVERY_AT = '2026-11-23T06:30:00Z';
+const UPLOAD_AT = '2026-11-28T06:57:00Z';
 const EXPORT_RECEIPT_ACCESS_ID = 'export-receipt-access-fixes-2026-11';
 const RECEIVING_ID = 'receiving-shown-to-managers-2026-11';
 /** #604 (which carries #598 and #599), the last of this update's phone changes, merged at this instant. */
@@ -179,7 +179,7 @@ describe('the phone authenticator set-up release: order, status and date', () =>
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[0].publishedAt equal to this release's): the placeholder is the minute of the Blocked activity release, published later, above this one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: SIGNIN_AT): the placeholder is the minute of the phone large text release, published later, above this one.
     // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: RECOVERY_AT): the placeholder is the minute of the upload checks release, published later, below it.
-    expect(RELEASES[0]!.publishedAt).toBe('2026-11-28T06:57:00Z');
+    expect(RELEASES[0]!.publishedAt).toBe(UPLOAD_AT);
     expect(Date.parse(RELEASES[0]!.publishedAt)).toBeGreaterThanOrEqual(at);
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES.slice(2)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(5)): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
