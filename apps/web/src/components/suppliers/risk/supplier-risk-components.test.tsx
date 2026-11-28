@@ -575,16 +575,17 @@ describe("the history: the database's record, every value as text", () => {
       event: 'item_changed',
       reviewId: 'e1e1e1e1-0000-4000-8000-000000000001',
       itemId: '17e17e17-0000-4000-8000-000000000001',
-      version: 3,
+      questionKey: 'breach_notice',
       actorName: 'Rami \u202eExample',
+      actorAccountDeleted: false,
       at: '2026-11-27T16:30:00Z',
       detail: {
-        questionKey: 'breach_notice',
+        version: null,
+        result: null,
+        computedResult: null,
+        reason: 'Line one <img src=x onerror=alert(1)>\n  line two',
         before: { status: 'open', ownerName: 'Avery Example', dueOn: '2026-12-31' },
         after: { status: 'accepted', ownerName: 'Blake <b>Example</b>', dueOn: null },
-        reason: 'Line one <img src=x onerror=alert(1)>\n  line two',
-        computedResult: null,
-        result: null,
       },
       ...over,
     };
@@ -601,7 +602,7 @@ describe("the history: the database's record, every value as text", () => {
     );
     const li = container.querySelector('[data-event="item_changed"]')!;
     expect(li.textContent).toMatch(/Item changed/);
-    expect(li.textContent).toMatch(/Version 3/);
+    expect(li.textContent).toContain('Does the contract say how soon they must tell us about a breach of our data?');
     expect(li.textContent).toContain('November 28, 2026, 1:30 AM GMT+9');
     expect(li.querySelector('time')?.getAttribute('title')).toBe('27 Nov 2026, 16:30 UTC');
     const names = Array.from(li.querySelectorAll('bdi')).map((b) => b.textContent);
@@ -635,6 +636,27 @@ describe("the history: the database's record, every value as text", () => {
     );
   });
 
+  it('a withdrawn acceptance has its words; a deleted account keeps its name and says so', () => {
+    const { container } = render(
+      <SupplierRiskHistory
+        read={{
+          state: 'ok',
+          value: {
+            events: [event({ event: 'risk_acceptance_withdrawn', actorAccountDeleted: true })],
+            next: null,
+          },
+        }}
+        timeZone="UTC"
+        olderHref={null}
+        newestHref={null}
+      />,
+    );
+    const li = container.querySelector('[data-event="risk_acceptance_withdrawn"]')!;
+    expect(li.textContent).toMatch(/Risk acceptance withdrawn/);
+    expect(li.querySelector('bdi')?.textContent).toBe('Rami \u202eExample');
+    expect(li.textContent).toContain('(account since deleted)');
+  });
+
   it('a finished review with a result set by an admin says both results', () => {
     const { container } = render(
       <SupplierRiskHistory
@@ -645,13 +667,14 @@ describe("the history: the database's record, every value as text", () => {
               event({
                 event: 'result_overridden',
                 itemId: null,
+                questionKey: null,
                 detail: {
-                  questionKey: null,
+                  version: 3,
+                  result: 'more_information',
+                  computedResult: 'do_not_use',
+                  reason: 'The vendor showed us a signed letter.',
                   before: null,
                   after: null,
-                  reason: 'The vendor showed us a signed letter.',
-                  computedResult: 'do_not_use',
-                  result: 'more_information',
                 },
               }),
             ],
@@ -665,6 +688,7 @@ describe("the history: the database's record, every value as text", () => {
     );
     const li = container.querySelector('[data-event="result_overridden"]')!;
     expect(li.textContent).toMatch(/Result set by an admin/);
+    expect(li.textContent).toMatch(/Version 3/);
     expect(li.textContent).toMatch(/The rules gave Do not use; the result is More information needed\./);
     expect(screen.getByRole('link', { name: 'Older changes' }).getAttribute('href')).toBe(
       '/dashboard/suppliers/x/risk?history=cursor',

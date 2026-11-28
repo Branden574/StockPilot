@@ -75,16 +75,16 @@ function ItemChanges({
 }
 
 function EventRow({ e, timeZone }: { e: SupplierRiskEvent; timeZone: string }) {
-  const question = e.detail.questionKey
-    ? (vendorRiskQuestion(e.detail.questionKey)?.text ?? e.detail.questionKey)
+  const question = e.questionKey
+    ? (vendorRiskQuestion(e.questionKey)?.text ?? e.questionKey)
     : null;
-  const { computedResult, result, reason } = e.detail;
+  const { computedResult, result, reason, version } = e.detail;
   return (
     <li className="space-y-1 py-3" data-event={e.event}>
       <p className="text-foreground text-[13.5px] font-medium">
         {supplierRiskEventWords(e.event)}
-        {e.version !== null ? (
-          <span className="text-muted-foreground font-normal"> · Version {e.version}</span>
+        {version !== null ? (
+          <span className="text-muted-foreground font-normal"> · Version {version}</span>
         ) : null}
       </p>
       <p className="text-muted-foreground text-[12px]">
@@ -93,6 +93,7 @@ function EventRow({ e, timeZone }: { e: SupplierRiskEvent; timeZone: string }) {
           <>
             {' by '}
             <bdi>{e.actorName}</bdi>
+            {e.actorAccountDeleted ? ' (account since deleted)' : null}
           </>
         ) : null}
       </p>

@@ -822,18 +822,28 @@ describe('the owners and admins an item may be given to', () => {
 });
 
 describe("the history: the database's own record of a supplier's reviews, newest first", () => {
+  // A row as 0481's draft of supplier_risk_events returns it (QUESTIONS.md 14).
+  const OWNER_A = '0a0a0a0a-0000-4000-8000-00000000000a';
+  const OWNER_B = '0b0b0b0b-0000-4000-8000-00000000000b';
   const EVENT = (n: number, over: Record<string, unknown> = {}) => ({
     event_id: `ee000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
-    event: 'item_changed',
     review_id: REVIEW,
     item_id: ITEM,
-    version: 3,
+    question_key: 'breach_notice',
+    event: 'risk_accepted',
+    actor_user_id: OTHER_ADMIN,
     actor_name: 'Avery Example',
-    occurred_at: `2026-11-27T10:${String(59 - (n % 60)).padStart(2, '0')}:00+00:00`,
+    actor_account_deleted: false,
+    happened_at: `2026-11-27T10:${String(59 - (n % 60)).padStart(2, '0')}:00.123456+00:00`,
     detail: {
-      question_key: 'breach_notice',
-      before: { status: 'open', owner_name: 'Avery Example', due_on: '2026-12-31' },
-      after: { status: 'accepted', owner_name: 'Blake Example', due_on: null },
+      status_before: 'open',
+      status_after: 'accepted',
+      owner_before_id: OWNER_A,
+      owner_before_name: 'Avery Example',
+      owner_after_id: OWNER_B,
+      owner_after_name: 'Blake Example',
+      due_on_before: '2026-12-31',
+      due_on_after: null,
       reason: 'Accepted until January.',
     },
     ...over,
@@ -859,22 +869,88 @@ describe("the history: the database's own record of a supplier's reviews, newest
     expect(read.state).toBe('ok');
     if (read.state !== 'ok') return;
     expect(read.value.next).toBeNull();
+    // No account id is carried to the page: the owners and the actor by name only.
     expect(read.value.events[0]).toEqual({
       id: EVENT(1).event_id,
-      event: 'item_changed',
+      event: 'risk_accepted',
       reviewId: REVIEW,
       itemId: ITEM,
-      version: 3,
+      questionKey: 'breach_notice',
       actorName: 'Avery Example',
-      at: EVENT(1).occurred_at,
+      actorAccountDeleted: false,
+      at: EVENT(1).happened_at,
       detail: {
-        questionKey: 'breach_notice',
+        version: null,
+        result: null,
+        computedResult: null,
+        reason: 'Accepted until January.',
         before: { status: 'open', ownerName: 'Avery Example', dueOn: '2026-12-31' },
         after: { status: 'accepted', ownerName: 'Blake Example', dueOn: null },
-        reason: 'Accepted until January.',
-        computedResult: null,
-        result: null,
       },
+    });
+    expect(JSON.stringify(read.value)).not.toContain(OWNER_A);
+    expect(JSON.stringify(read.value)).not.toContain(OTHER_ADMIN);
+  });
+
+  it('each kind reads its own detail keys: a finished review, a result set by an admin, a discarded draft', async () => {
+    const finish = { event_id: EVENT(1).event_id, review_id: REVIEW, item_id: null, question_key: null };
+    const { svc } = setup({
+      'rpc:supplier_risk_events': {
+        data: [
+          EVENT(1, {
+            ...finish,
+            event: 'review_finished',
+            detail: { version: 4, result: 'approve', rules_version: 1 },
+          }),
+          EVENT(2, {
+            ...finish,
+            event_id: EVENT(2).event_id,
+            event: 'result_overridden',
+            detail: {
+              version: 3,
+              rules_version: 1,
+              computed_result: 'do_not_use',
+              chosen_result: 'more_information',
+              reason: 'The vendor showed us a signed letter.',
+            },
+          }),
+          EVENT(3, {
+            ...finish,
+            event_id: EVENT(3).event_id,
+            event: 'draft_discarded',
+            actor_user_id: null,
+            actor_account_deleted: true,
+            detail: {},
+          }),
+        ],
+        error: null,
+      },
+    });
+    const read = await svc.listEvents(SUPPLIER, null);
+    if (read.state !== 'ok') throw new Error('expected ok');
+    const [finished, overridden, discarded] = read.value.events;
+    expect(finished?.detail).toEqual({
+      version: 4,
+      result: 'approve',
+      computedResult: null,
+      reason: null,
+      before: null,
+      after: null,
+    });
+    expect(overridden?.detail).toEqual({
+      version: 3,
+      result: 'more_information',
+      computedResult: 'do_not_use',
+      reason: 'The vendor showed us a signed letter.',
+      before: null,
+      after: null,
+    });
+    expect(discarded).toMatchObject({
+      event: 'draft_discarded',
+      itemId: null,
+      questionKey: null,
+      actorAccountDeleted: true,
+      detail: { version: null, result: null, reason: null, before: null, after: null },
     });
   });
 
@@ -885,10 +961,11 @@ describe("the history: the database's own record of a supplier's reviews, newest
     if (first.state !== 'ok') throw new Error('expected ok');
     expect(first.value.events).toHaveLength(SUPPLIER_RISK_EVENTS_PAGE);
     const last = rows[SUPPLIER_RISK_EVENTS_PAGE - 1]!;
-    expect(first.value.next).toBe(`${last.occurred_at}~${last.event_id}`);
+    // The time exactly as the database gave it (microseconds kept), so no row is skipped or repeated.
+    expect(first.value.next).toBe(`${last.happened_at}~${last.event_id}`);
     await svc.listEvents(SUPPLIER, first.value.next);
     expect(stub.rpcCalls[1]?.args).toMatchObject({
-      p_before_at: last.occurred_at,
+      p_before_at: last.happened_at,
       p_before_id: last.event_id,
     });
   });
@@ -918,7 +995,13 @@ describe("the history: the database's own record of a supplier's reviews, newest
         data: [
           EVENT(1, {
             event: 'something_new',
-            detail: { reason: { html: '<b>x</b>' }, before: 'oops', question_key: 7 },
+            question_key: 7,
+            actor_account_deleted: 'yes',
+            detail: { reason: { html: '<b>x</b>' }, version: 'four', result: 'great' },
+          }),
+          EVENT(2, {
+            event_id: EVENT(2).event_id,
+            detail: { status_before: 9, owner_before_name: ['x'], due_on_before: 'soon' },
           }),
           { event: 'item_changed' },
         ],
@@ -928,16 +1011,24 @@ describe("the history: the database's own record of a supplier's reviews, newest
     const read = await svc.listEvents(SUPPLIER, null);
     if (read.state !== 'ok') throw new Error('expected ok');
     // The row with no id or time is not an event: it is left out, not guessed.
-    expect(read.value.events).toHaveLength(1);
+    expect(read.value.events).toHaveLength(2);
     expect(read.value.events[0]?.event).toBe('something_new');
+    expect(read.value.events[0]?.questionKey).toBeNull();
+    expect(read.value.events[0]?.actorAccountDeleted).toBe(false);
     expect(read.value.events[0]?.detail).toEqual({
-      questionKey: null,
+      version: null,
+      result: null,
+      computedResult: null,
+      reason: null,
       before: null,
       after: null,
-      reason: null,
-      computedResult: null,
-      result: null,
     });
+    expect(read.value.events[1]?.detail.before).toEqual({
+      status: null,
+      ownerName: null,
+      dueOn: null,
+    });
+    expect(read.value.events[1]?.detail.after).toBeNull();
   });
 
   it('a refusal of the database is thrown, never read as no history', async () => {

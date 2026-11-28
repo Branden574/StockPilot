@@ -278,24 +278,33 @@ export interface SupplierRiskPerson {
 }
 
 /**
- * THE HISTORY READ (listEvents). Built against the shape this half expects of
- * 0481's events read, until its contract section names it (QUESTIONS.md):
+ * THE HISTORY READ (listEvents), against 0481's events read as the database
+ * half's draft defines it (its contract section is not written yet;
+ * QUESTIONS.md 14):
  *   supplier_risk_events(p_organization_id uuid, p_supplier_id uuid,
- *     p_before_at timestamptz, p_before_id uuid, p_limit integer)
- * returning one supplier's events of this organization, newest first
- * (occurred_at, then event_id, both descending), strictly before the cursor
- * when one is given: event_id, event, review_id, item_id, version,
- * actor_name, occurred_at, detail jsonb ({question_key, before {status,
- * owner_name, due_on}, after {same}, reason, computed_result, result}, each
- * key optional). Anything else in a row is not read; a value that is not text
- * is dropped, never shown as something else.
+ *     p_limit integer default 50 (1 to 200), p_before_at timestamptz,
+ *     p_before_id uuid)
+ * one supplier's events of this organization, newest first by (happened_at,
+ * event_id); the next page is what comes after (p_before_at, p_before_id) of
+ * the last row read. Each row: event_id, review_id, item_id, question_key (an
+ * item change's question), event, actor_user_id, actor_name,
+ * actor_account_deleted, happened_at, detail. The detail has fixed keys per
+ * kind: review_finished {version, result, rules_version}; result_overridden
+ * {version, rules_version, computed_result, chosen_result, reason};
+ * draft_discarded {}; item_changed, risk_accepted and
+ * risk_acceptance_withdrawn {status_before, status_after, owner_before_id,
+ * owner_before_name, owner_after_id, owner_after_name, due_on_before,
+ * due_on_after}, risk_accepted also {reason}. Nothing else is read (never an
+ * account id); a value of the wrong type is dropped, never shown as something
+ * else.
  */
 export type SupplierRiskEventName =
   | 'draft_discarded'
   | 'review_finished'
   | 'result_overridden'
   | 'item_changed'
-  | 'risk_accepted';
+  | 'risk_accepted'
+  | 'risk_acceptance_withdrawn';
 
 /** An item's state before or after a change, as the event keeps it. */
 export interface SupplierRiskEventItemState {
@@ -310,18 +319,25 @@ export interface SupplierRiskEvent {
   event: SupplierRiskEventName | string;
   reviewId: string | null;
   itemId: string | null;
-  version: number | null;
+  /** An item change's question. */
+  questionKey: string | null;
   /** Who did it, as the database kept the name. */
   actorName: string | null;
+  /** That person's account was deleted since (the name is kept). */
+  actorAccountDeleted: boolean;
   /** When, an instant. */
   at: string;
   detail: {
-    questionKey: string | null;
+    /** The version a finished review made. */
+    version: number | null;
+    /** A finished review's result; for a result set by an admin, the one they chose. */
+    result: VendorRiskResult | null;
+    /** The result the rules gave, when an admin set another. */
+    computedResult: VendorRiskResult | null;
+    /** An override's or an accepted risk's reason, as written. */
+    reason: string | null;
     before: SupplierRiskEventItemState | null;
     after: SupplierRiskEventItemState | null;
-    reason: string | null;
-    computedResult: string | null;
-    result: string | null;
   };
 }
 
@@ -620,16 +636,22 @@ function historyRowOf(raw: Record<string, unknown>): SupplierRiskHistoryRow | nu
   };
 }
 
-function eventItemStateOf(raw: unknown): SupplierRiskEventItemState | null {
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const r = raw as Record<string, unknown>;
-  return { status: text(r.status), ownerName: text(r.owner_name), dueOn: day(r.due_on) };
+/** An item's state on one side of a change (the detail's flat keys); null when the detail has none. */
+function eventItemStateOf(
+  d: Record<string, unknown>,
+  side: 'before' | 'after',
+): SupplierRiskEventItemState | null {
+  const status = `status_${side}`;
+  const owner = `owner_${side}_name`;
+  const due = `due_on_${side}`;
+  if (!(status in d) && !(owner in d) && !(due in d)) return null;
+  return { status: text(d[status]), ownerName: text(d[owner]), dueOn: day(d[due]) };
 }
 
 function eventOf(raw: Record<string, unknown>): SupplierRiskEvent | null {
   const id = text(raw.event_id);
   const event = text(raw.event);
-  const at = text(raw.occurred_at);
+  const at = text(raw.happened_at);
   if (!id || !isUuid(id) || !event || !at || !Number.isFinite(Date.parse(at))) return null;
   const d =
     raw.detail && typeof raw.detail === 'object' && !Array.isArray(raw.detail)
@@ -640,21 +662,22 @@ function eventOf(raw: Record<string, unknown>): SupplierRiskEvent | null {
     event,
     reviewId: text(raw.review_id),
     itemId: text(raw.item_id),
-    version: intOf(raw.version),
+    questionKey: text(raw.question_key),
     actorName: text(raw.actor_name),
+    actorAccountDeleted: raw.actor_account_deleted === true,
     at,
     detail: {
-      questionKey: text(d.question_key),
-      before: eventItemStateOf(d.before),
-      after: eventItemStateOf(d.after),
+      version: intOf(d.version),
+      result: oneOf(VENDOR_RISK_RESULTS, event === 'result_overridden' ? d.chosen_result : d.result),
+      computedResult: oneOf(VENDOR_RISK_RESULTS, d.computed_result),
       reason: text(d.reason),
-      computedResult: text(d.computed_result),
-      result: text(d.result),
+      before: eventItemStateOf(d, 'before'),
+      after: eventItemStateOf(d, 'after'),
     },
   };
 }
 
-/** A history cursor ('<occurred_at>~<event_id>') as its two parts; null for anything else. */
+/** A history cursor ('<happened_at>~<event_id>') as its two parts; null for anything else. */
 function eventsCursorOf(cursor: string | null): { at: string; id: string } | null {
   if (typeof cursor !== 'string' || cursor.length > 120) return null;
   const cut = cursor.lastIndexOf('~');

@@ -42,6 +42,7 @@ export const SUPPLIER_RISK_EVENT_WORDS: Readonly<Record<string, string>> = {
   result_overridden: 'Result set by an admin',
   item_changed: 'Item changed',
   risk_accepted: 'Risk accepted',
+  risk_acceptance_withdrawn: 'Risk acceptance withdrawn',
 };
 
 export function supplierRiskEventWords(event: string): string {

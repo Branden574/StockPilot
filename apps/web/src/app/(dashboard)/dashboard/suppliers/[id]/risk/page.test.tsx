@@ -403,15 +403,28 @@ describe('dates in the organization zone (S3)', () => {
 
 describe("the history section: the database's record of this supplier's reviews", () => {
   const EVENT_ID = 'ee000000-0000-4000-8000-000000000001';
+  // A row as 0481's draft of supplier_risk_events returns it (QUESTIONS.md 14).
   const event = {
     event_id: EVENT_ID,
-    event: 'risk_accepted',
     review_id: CURRENT,
     item_id: '17e17e17-0000-4000-8000-000000000001',
-    version: 3,
+    question_key: 'breach_notice',
+    event: 'risk_accepted',
+    actor_user_id: '22222222-2222-4222-8222-222222222222',
     actor_name: 'Rami Example',
-    occurred_at: '2026-11-28T01:30:00Z',
-    detail: { question_key: 'breach_notice', reason: 'Accepted until January.' },
+    actor_account_deleted: false,
+    happened_at: '2026-11-28T01:30:00Z',
+    detail: {
+      status_before: 'open',
+      status_after: 'accepted',
+      owner_before_id: null,
+      owner_before_name: null,
+      owner_after_id: null,
+      owner_after_name: null,
+      due_on_before: null,
+      due_on_after: null,
+      reason: 'Accepted until January.',
+    },
   };
 
   it('is read for this supplier in this organization, and shown with the time in its zone', async () => {
