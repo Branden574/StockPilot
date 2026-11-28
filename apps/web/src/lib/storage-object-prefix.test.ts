@@ -551,20 +551,59 @@ function labStorage(object: Uint8Array, opts: { ignoresRange?: boolean } = {}) {
   return { impl: impl as typeof fetch, calls };
 }
 
-/** Next 16's own fetch dedupe around a fetch: a GET with options and no signal has its body teed, one branch kept. */
+/**
+ * Next 16's own fetch dedupe around a fetch (the real one): a GET with
+ * options and no signal has its body teed, one branch kept; a request with a
+ * signal of its own is handed back untouched. Used only where the answer does
+ * not depend on how the runtime settles a teed body's cancel.
+ */
 function nextsFetch(inner: typeof fetch): typeof fetch {
   return createDedupeFetch(inner) as typeof fetch;
 }
 
-/** A fetch that keeps a copy of every body it hands out, signal or not: the class whose cancel never settles. */
-function keepsACopy(inner: typeof fetch): typeof fetch {
-  const kept: Response[] = [];
+/**
+ * A fetch that keeps a copy of the body it hands out, as Next 16's dedupe
+ * does inside the app (lab walk 5, F2), MODELLED, not left to the runtime's
+ * own tee (whose cancel settled on CI's Linux runner and not on macOS, with
+ * the same Node 24.22.3): the body handed out reads as the response's own, but its
+ * cancel() settles only once the kept copy lets go of the response, which
+ * here is only when the request's own signal aborts. Nothing ever reads the
+ * kept copy (inside the app it is held until the request ends). Next's rule
+ * (`copyEvenWithSignal: false`): a request with a signal of its own is handed
+ * back untouched, nothing kept. `copyEvenWithSignal: true` keeps a copy
+ * anyway, the class the fix must not depend on Next's rule for.
+ */
+function keepsACopy(inner: typeof fetch, opts: { copyEvenWithSignal: boolean }): typeof fetch {
   return (async (url: RequestInfo | URL, init?: RequestInit) => {
+    const signal = init?.signal ?? null;
     const res = await inner(url, init);
-    kept.push(res.clone());
-    return res;
+    if ((signal && !opts.copyEvenWithSignal) || !res.body) return res;
+    const source = res.body.getReader();
+    const letGo = new Promise<void>((resolve) => {
+      if (!signal) return; // nothing lets the kept copy go
+      if (signal.aborted) resolve();
+      else signal.addEventListener('abort', () => resolve(), { once: true });
+    });
+    const handedOut = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          const { done, value } = await source.read();
+          if (done) controller.close();
+          else controller.enqueue(value);
+        },
+        // The cancel settles only once the kept copy lets go.
+        cancel: () => letGo.then(() => source.cancel()),
+      },
+      { highWaterMark: 0 },
+    );
+    return new Response(handedOut, { status: res.status, statusText: res.statusText, headers: res.headers });
   }) as typeof fetch;
 }
+
+/** Next's rule, modelled: a copy is kept only for a request with no signal of its own. */
+const keepsACopyUnlessSignalled = (inner: typeof fetch) => keepsACopy(inner, { copyEvenWithSignal: false });
+/** A copy is kept even for a request with a signal of its own. */
+const keepsACopyEvenWithSignal = (inner: typeof fetch) => keepsACopy(inner, { copyEvenWithSignal: true });
 
 /** Whether a promise settles inside `ms` (real time). */
 async function settlesWithin<T>(ms: number, p: Promise<T>): Promise<{ settled: true; value: T } | { settled: false }> {
@@ -579,31 +618,63 @@ async function settlesWithin<T>(ms: number, p: Promise<T>): Promise<{ settled: t
   }
 }
 
+/** Reads a body to `size` bytes, then cancels it, and says whether the cancel settled inside `ms`. */
+async function readToSizeThenCancel(res: Response, size: number, ms: number): Promise<boolean> {
+  const reader = res.body!.getReader();
+  let got = 0;
+  while (got < size) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    got += value.byteLength;
+  }
+  expect(got).toBe(size);
+  return (await settlesWithin(ms, reader.cancel())).settled;
+}
+
 describe('a fetch that keeps a copy of the body, as Next 16 does inside the app (lab walk 5, F2)', () => {
   it('the doubles behave as the app saw: a read that stops at the size and awaits its cancel never settles', async () => {
     const object = objectBytes(30798);
-    for (const wrap of [nextsFetch, keepsACopy]) {
+    for (const wrap of [keepsACopyUnlessSignalled, keepsACopyEvenWithSignal]) {
       const res = await wrap(labStorage(object).impl)('https://storage.example/o', { cache: 'no-store' });
-      const reader = res.body!.getReader();
-      let got = 0;
-      while (got < object.byteLength) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        got += value.byteLength;
-      }
-      expect(got).toBe(object.byteLength);
-      expect((await settlesWithin(300, reader.cancel())).settled).toBe(false);
+      expect(await readToSizeThenCancel(res, object.byteLength, 300)).toBe(false);
     }
+    // Once the request's own signal aborts, the kept copy lets go and the cancel settles.
+    const controller = new AbortController();
+    const signalled = await keepsACopyEvenWithSignal(labStorage(object).impl)('https://storage.example/o', {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    const reader = signalled.body!.getReader();
+    await reader.read();
+    const cancelled = reader.cancel();
+    expect((await settlesWithin(100, cancelled)).settled).toBe(false);
+    controller.abort();
+    expect((await settlesWithin(300, cancelled)).settled).toBe(true);
+    // Next's rule: a request with a signal of its own gets the body untouched.
+    const own = await keepsACopyUnlessSignalled(labStorage(object).impl)('https://storage.example/o', {
+      cache: 'no-store',
+      signal: new AbortController().signal,
+    });
+    expect(await readToSizeThenCancel(own, object.byteLength, 300)).toBe(true);
     // The same read off a fetch that keeps nothing settles at once.
     const plain = await labStorage(object).impl('https://storage.example/o', { cache: 'no-store' });
-    const reader = plain.body!.getReader();
-    await reader.read();
-    expect((await settlesWithin(300, reader.cancel())).settled).toBe(true);
+    expect(await readToSizeThenCancel(plain, object.byteLength, 300)).toBe(true);
+  });
+
+  it("on this runtime, Next's real dedupe leaves that cancel unsettled too (documents lab walk 5; skipped where the runtime settles it)", async (ctx) => {
+    const object = objectBytes(30798);
+    const res = await nextsFetch(labStorage(object).impl)('https://storage.example/o', { cache: 'no-store' });
+    const settled = await readToSizeThenCancel(res, object.byteLength, 300);
+    // Whether the runtime settles a teed body's cancel is not something these
+    // tests rely on: CI's Linux runner settled it, macOS does not, both on
+    // Node 24.22.3. The modelled doubles above carry the proof either way.
+    ctx.skip(settled, `this runtime (${process.version}, ${process.platform}) settles the cancel of a teed body`);
+    expect(settled).toBe(false);
   });
 
   for (const [name, wrap] of [
-    ["Next's fetch", nextsFetch],
-    ['a fetch that keeps a copy even with a signal', keepsACopy],
+    ["Next's rule (a copy kept for a request with no signal of its own)", keepsACopyUnlessSignalled],
+    ['a fetch that keeps a copy even with a signal', keepsACopyEvenWithSignal],
   ] as const) {
     describe(`through ${name}`, () => {
       it('the whole read answers with the whole object', async () => {
