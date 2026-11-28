@@ -188,6 +188,10 @@ const READERS: Record<string, { unread: Unread; note: string }> = {
   'app/api/cron/maintenance-draft-reminders/route.ts': { unread: 'error', note: '500; no run' },
   'app/api/cron/price-pull/route.ts': { unread: 'error', note: '500; no run' },
   'app/api/cron/rental-overdue/route.ts': { unread: 'error', note: '500; no run' },
+  'app/api/cron/supplier-risk-reminders/route.ts': {
+    unread: 'error',
+    note: '500; nothing claimed or sent',
+  },
 
   // ── Settings only ─────────────────────────────────────────────────────────
   'server/actions/auto-archive-settings.ts': { unread: 'settings', note: 'reads, then writes settings' },
