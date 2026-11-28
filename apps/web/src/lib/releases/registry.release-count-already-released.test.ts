@@ -83,7 +83,8 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[22]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[25]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[26]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[27]?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+    expect(RELEASES[28]?.id).toBe(ID);
     // Re-pinned by docs/whats-new-invitation-audit (2026-11-15; was: every pinned position one place higher): the invitation audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-api-key-audit (2026-11-15; was: every pinned position one place higher): the API key audit release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-authenticator-set-up-first (2026-11-15; was: every pinned position one place higher): the authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -98,7 +99,8 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[23]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[26]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[27]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[28]?.id).toBe('ai-assistant-plain-words-2026-11');
+    // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+    expect(RELEASES[29]?.id).toBe('ai-assistant-plain-words-2026-11');
     // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: this release, the newest published): the emailed links release is published later, directly above it.
     // Re-pinned by docs/whats-new-unreadable-access-and-settings (2026-11-15; was: every pinned position two places higher): the settings and module check releases are published at the top, below the Liquid Glass draft, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-navigation-keeps-choices (2026-11-15; was: every pinned position one place higher): the navigation release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
@@ -116,7 +118,8 @@ describe('the Release count release', () => {
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: RELEASES[21]): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES[24]): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES[25]): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[26]?.id).toBe('emailed-links-name-their-account-2026-11');
+    // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+    expect(RELEASES[27]?.id).toBe('emailed-links-name-their-account-2026-11');
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-order-request-alerts (2026-11-14; was: the phone authenticator code release): the order request alerts release is published after it, at the top, the newest published release.
@@ -138,7 +141,8 @@ describe('the Release count release', () => {
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: 'phone-authenticator-set-up-2026-11'): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      'recovery-code-signs-out-other-devices-2026-11',
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
+      'upload-checks-2026-11',
     );
     // Migration 0419 reached production at 08:17:32Z; #444's web build went live at 07:54Z.
     expect(release().publishedAt).toBe('2026-11-13T08:18:00Z');
