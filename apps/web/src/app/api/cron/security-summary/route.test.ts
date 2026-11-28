@@ -209,8 +209,22 @@ describe('every other answer is reported once and answers 500', () => {
     expect(String((e as Error).message)).not.toContain(error.message);
   });
 
+  it('a key a later migration adds is ignored: computed, nothing reported', async () => {
+    h.answer = vi.fn(() => ({ data: { ...COMPUTED, added_later: 3 }, error: null }));
+    const { status, body } = await run();
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ ok: true, baseline: 'computed', eventHigh: 42 });
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
   it.each([
-    ['a tenth key', { ...COMPUTED, more: 1 }],
+    [
+      'a key it reads missing',
+      (() => {
+        const { buckets: _gone, ...rest } = COMPUTED;
+        return rest;
+      })(),
+    ],
     ['a word the contract does not name', refusedWith('maybe')],
     ['no answer at all', null],
   ])('an answer this build cannot read (%s)', async (_w, data) => {

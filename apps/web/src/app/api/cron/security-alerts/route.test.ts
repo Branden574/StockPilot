@@ -508,6 +508,22 @@ describe("the contract's order", () => {
     expect((body.serious as Record<string, number>).retry).toBe(1);
   });
 
+  it('a key a later migration adds to every answer is ignored: the same run, nothing unexpected', async () => {
+    db.inputs = { ...rawInputs(EVERYTHING), added_later: 1 };
+    db.seedRetries(EVERYTHING);
+    h.answer = vi.fn((fn: string, args: unknown) => {
+      const a = db.answer(fn, args as Record<string, unknown>);
+      return a.data !== null && typeof a.data === 'object'
+        ? { data: { ...(a.data as object), added_later: 1 }, error: null }
+        : a;
+    });
+    const { body } = await run();
+    expect(labels()).toHaveLength(10);
+    expect(labels().at(-1)).toBe('heartbeat finish');
+    expect(body).toMatchObject({ ran: true, ok: true, finish: 'recorded', unexpected: {} });
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
   it('six cheap alerts do not delay a serious flag', async () => {
     db.inputs = rawInputs({
       aimed: [
@@ -775,8 +791,17 @@ describe('every refusal of the claim is an answer', () => {
   });
 
   it.each([
-    ['a tenth key', { more: 1 }],
-    ['a word the contract does not name', { outcome: 'maybe' }],
+    [
+      'a key it reads missing',
+      (d: Record<string, unknown>) => {
+        const { open_key: _gone, ...rest } = d;
+        return rest;
+      },
+    ],
+    [
+      'a word the contract does not name',
+      (d: Record<string, unknown>) => ({ ...d, outcome: 'maybe' }),
+    ],
   ])(
     'an answer that cannot be read (%s) stops the claims; the run finishes not ok',
     async (_w, change) => {
@@ -785,7 +810,7 @@ describe('every refusal of the claim is an answer', () => {
       h.answer = vi.fn((fn: string, args: unknown) => {
         const a = db.answer(fn, args as Record<string, unknown>);
         return fn === 'platform_security_alert_claim'
-          ? { data: { ...(a.data as object), ...change }, error: null }
+          ? { data: change(a.data as Record<string, unknown>), error: null }
           : a;
       });
       const { body } = await run();
@@ -904,7 +929,8 @@ describe('the inputs', () => {
   });
 
   it('an answer this build cannot read: finish(false), reported once', async () => {
-    db.inputs = { ...rawInputs(), extra: true };
+    const { buckets: _gone, ...withoutBuckets } = rawInputs();
+    db.inputs = withoutBuckets;
     const { body } = await run();
     expect(labels()).toEqual(['heartbeat start', 'inputs', 'heartbeat finish']);
     expect(body).toMatchObject({ ok: false, stop: 'unreadable' });

@@ -433,7 +433,6 @@ describe('the inputs reader: the contract shape or "could not check"', () => {
   });
 
   it.each([
-    ['a key more', (r: Record<string, unknown>) => ({ ...r, extra: 1 })],
     [
       'a key less',
       (r: Record<string, unknown>) => {
@@ -643,7 +642,13 @@ describe('the claim reader: always the nine keys, each as its outcome allows', (
         open_key: 'x',
       },
     ],
-    ['a tenth key', { ...base, more: 1 }],
+    [
+      'a key less',
+      (() => {
+        const { open_key: _gone, ...rest } = base;
+        return rest;
+      })(),
+    ],
   ])('%s is not read', (_what, raw) => {
     expect(readSecurityAlertClaim(raw).ok).toBe(false);
   });
@@ -1454,79 +1459,82 @@ describe("the job's heartbeat, as the page says it", () => {
   });
 });
 
+/** platform_security_alert_list() as the contract shapes it. */
+const rawList = () => ({
+  refused: null,
+  generated_at: pg(NOW),
+  state: {
+    email_on: false,
+    push_on: false,
+    summary_on: false,
+    record_only: true,
+    planned_check_until: null,
+    thresholds: { ...ALERT_THRESHOLD_DEFAULTS },
+    baseline: {
+      event_high: null,
+      source_high: null,
+      from: null,
+      to: null,
+      shortened: null,
+      computed_at: null,
+    },
+    heartbeat: {
+      last_run_started_at: pg(NOW - 4 * MIN),
+      last_run_finished_at: pg(NOW - 3 * MIN),
+      last_run_ok: true,
+      last_run_partial: false,
+      last_ok_at: pg(NOW - 3 * MIN),
+      failures_in_a_row: 0,
+      failure_reported_at: null,
+    },
+  },
+  budget: {
+    serious_pushes_last_hour: 1,
+    serious_pushes_last_day_by_reason: { sign_in_not_me: 1 },
+    volume_pushes_last_day: 2,
+    volume_emails_last_day: 0,
+    record_emails_last_day: 0,
+  },
+  alerts: [
+    {
+      rule: 'aimed_guessing',
+      class: 'volume',
+      subject: ORG_A,
+      organization_name: 'Example School A',
+      event_key: '2026-11-24T11:50Z',
+      phase: 'started',
+      counts: { events: 21, minutes: 30 },
+      disposition: 'record_only',
+      push_planned: false,
+      email_planned: false,
+      push_counted: true,
+      email_floor: null,
+      push_result: null,
+      email_result: null,
+      attempts: 1,
+      claimed_at: pg(NOW - 3 * MIN),
+      resulted_at: null,
+      state_ended_at: null,
+      awaiting_result: false,
+      overdue: false,
+    },
+  ],
+  alerts_truncated: false,
+  changes: [
+    {
+      changed_at: pg(NOW - DAY),
+      actor_user_id: '44444444-4444-4444-8444-444444444444',
+      name: 'planned_check',
+      old_value: null,
+      new_value: pg(NOW - DAY + 30 * MIN),
+    },
+  ],
+  changes_truncated: false,
+  latest_changes: [],
+});
+
 describe('the list reader', () => {
-  const list = () => ({
-    refused: null,
-    generated_at: pg(NOW),
-    state: {
-      email_on: false,
-      push_on: false,
-      summary_on: false,
-      record_only: true,
-      planned_check_until: null,
-      thresholds: { ...ALERT_THRESHOLD_DEFAULTS },
-      baseline: {
-        event_high: null,
-        source_high: null,
-        from: null,
-        to: null,
-        shortened: null,
-        computed_at: null,
-      },
-      heartbeat: {
-        last_run_started_at: pg(NOW - 4 * MIN),
-        last_run_finished_at: pg(NOW - 3 * MIN),
-        last_run_ok: true,
-        last_run_partial: false,
-        last_ok_at: pg(NOW - 3 * MIN),
-        failures_in_a_row: 0,
-        failure_reported_at: null,
-      },
-    },
-    budget: {
-      serious_pushes_last_hour: 1,
-      serious_pushes_last_day_by_reason: { sign_in_not_me: 1 },
-      volume_pushes_last_day: 2,
-      volume_emails_last_day: 0,
-      record_emails_last_day: 0,
-    },
-    alerts: [
-      {
-        rule: 'aimed_guessing',
-        class: 'volume',
-        subject: ORG_A,
-        organization_name: 'Example School A',
-        event_key: '2026-11-24T11:50Z',
-        phase: 'started',
-        counts: { events: 21, minutes: 30 },
-        disposition: 'record_only',
-        push_planned: false,
-        email_planned: false,
-        push_counted: true,
-        email_floor: null,
-        push_result: null,
-        email_result: null,
-        attempts: 1,
-        claimed_at: pg(NOW - 3 * MIN),
-        resulted_at: null,
-        state_ended_at: null,
-        awaiting_result: false,
-        overdue: false,
-      },
-    ],
-    alerts_truncated: false,
-    changes: [
-      {
-        changed_at: pg(NOW - DAY),
-        actor_user_id: '44444444-4444-4444-8444-444444444444',
-        name: 'planned_check',
-        old_value: null,
-        new_value: pg(NOW - DAY + 30 * MIN),
-      },
-    ],
-    changes_truncated: false,
-    latest_changes: [],
-  });
+  const list = rawList;
 
   it('reads it, and its refusal', () => {
     const read = readSecurityAlertList(list());
@@ -1542,13 +1550,6 @@ describe('the list reader', () => {
     [
       'record_only that the switches do not say',
       (l: ReturnType<typeof list>) => ({ ...l, state: { ...l.state, record_only: false } }),
-    ],
-    [
-      'a run token',
-      (l: ReturnType<typeof list>) => ({
-        ...l,
-        state: { ...l.state, heartbeat: { ...l.state.heartbeat, last_run_id: 'x' } },
-      }),
     ],
     [
       'counts with an address',
@@ -1591,5 +1592,205 @@ describe('the list reader', () => {
     ],
   ])('%s is not read', (_what, change) => {
     expect(readSecurityAlertList(change(list())).ok).toBe(false);
+  });
+
+  it('a run token in the heartbeat never reaches the view: the reader keeps only what it reads', () => {
+    const token = '55555555-5555-4555-8555-555555555555';
+    const l = list();
+    const read = readSecurityAlertList({
+      ...l,
+      state: { ...l.state, heartbeat: { ...l.state.heartbeat, last_run_id: token } },
+    });
+    expect(read.ok && read.value !== null).toBe(true);
+    expect(JSON.stringify(read)).not.toContain(token);
+  });
+});
+
+/* ─────────────────── a later additive change to a function (S3) ─────────────────── */
+
+describe('the readers take a key they do not know, and still refuse a needed one missing or mistyped', () => {
+  /** Value maps whose keys are data (a reason, a code, a count's name), not the answer's shape. */
+  const VALUE_MAPS = new Set([
+    'counts',
+    'push_result',
+    'email_result',
+    'serious_pushes_last_day_by_reason',
+  ]);
+  /** Every object of an answer with one key more, as a later migration could add it. */
+  const withKeyMore = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(withKeyMore);
+    if (v === null || typeof v !== 'object') return v;
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) out[k] = VALUE_MAPS.has(k) ? x : withKeyMore(x);
+    out.added_later = { by: 'a later migration', n: 1 };
+    return out;
+  };
+  /** A value of a type the key never takes. */
+  const mistyped = (v: unknown): unknown =>
+    typeof v === 'string' ? 12345 : v === null || typeof v === 'object' ? 7 : 'not this type';
+
+  const claimNotice = {
+    outcome: 'new',
+    refused: null,
+    id: '11111111-1111-4111-8111-111111111111',
+    disposition: 'held_with_notice',
+    push: false,
+    email: false,
+    attempt: 1,
+    open_key: null,
+    notice: {
+      id: '22222222-2222-4222-8222-222222222222',
+      event_key: '2026-11-24T12:00Z',
+      push: false,
+      email: true,
+      attempt: 1,
+    },
+  };
+  const heartbeatStart = {
+    step: 'start',
+    refused: null,
+    run_id: '33333333-3333-4333-8333-333333333333',
+    previous: { started_at: pg(NOW - 10 * MIN), finished_at: pg(NOW - 9 * MIN), ok: true },
+    last_ok_at: pg(NOW - 9 * MIN),
+    missed_runs: 0,
+    failures_in_a_row: 0,
+    report_now: false,
+    marked_not_sent: 0,
+  };
+  const busyInputs = () =>
+    rawInputs({
+      buckets: { [JUDGED]: { troubleRows: 2, events: 70, sources: 12 } },
+      aimed: [{ org: ORG_A, cells: cells(LAST3, 9) }],
+      serious: [{ reason: 'sign_in_not_me', hour: Date.UTC(2026, 10, 24, 9) }],
+      openStates: [{ rule: 'spike', key: key(JUDGED - 9 * BUCKET), reminders: ['1h'] }],
+      seriousRetry: ['sign_in_not_me|2026-11-24T08:00Z'],
+      retry: [{ rule: 'record_trouble', key: key(JUDGED - 6 * BUCKET), phase: 'started' }],
+    });
+
+  const READERS: Array<[string, (raw: unknown) => { ok: boolean }, Record<string, unknown>]> = [
+    ['the inputs', readSecurityAlertInputs, busyInputs()],
+    [
+      "the inputs' refusal",
+      readSecurityAlertInputs,
+      { window: null, refused: 'no_state', generated_at: pg(NOW) },
+    ],
+    ['the claim', readSecurityAlertClaim, claimNotice],
+    [
+      "the claim's refusal",
+      readSecurityAlertClaim,
+      {
+        ...claimNotice,
+        outcome: 'refused',
+        refused: 'already_open',
+        id: null,
+        disposition: null,
+        attempt: null,
+        open_key: '2026-11-24T10:20Z',
+        notice: null,
+      },
+    ],
+    ['the result', readSecurityAlertResult, { recorded: true, refused: null }],
+    [
+      "the result's refusal",
+      readSecurityAlertResult,
+      { recorded: false, refused: 'email_floor_due' },
+    ],
+    ["the heartbeat's start", readSecurityAlertHeartbeatStart, heartbeatStart],
+    [
+      "the heartbeat start's refusal",
+      readSecurityAlertHeartbeatStart,
+      { step: 'start', refused: 'no_state' },
+    ],
+    [
+      "the heartbeat's finish",
+      readSecurityAlertHeartbeatFinish,
+      { step: 'finish', refused: null, failures_in_a_row: 3, report_now: true },
+    ],
+    [
+      "the heartbeat finish's refusal",
+      readSecurityAlertHeartbeatFinish,
+      { step: 'finish', refused: 'not_the_latest_run' },
+    ],
+    [
+      'the baseline',
+      readSecurityAlertBaseline,
+      {
+        computed: true,
+        refused: null,
+        event_high: 40,
+        source_high: 6,
+        from: pg(NOW - 7 * DAY),
+        to: pg(NOW),
+        asked_from: pg(NOW - 7 * DAY),
+        shortened: false,
+        buckets: 1008,
+        computed_at: pg(NOW),
+      },
+    ],
+    [
+      "the baseline's refusal",
+      readSecurityAlertBaseline,
+      { computed: false, refused: 'computed_recently', computed_at: pg(NOW) },
+    ],
+    ['the list', readSecurityAlertList, rawList()],
+    ["the list's refusal", readSecurityAlertList, { refused: 'no_state', generated_at: pg(NOW) }],
+  ];
+
+  it.each(READERS)(
+    '%s: a key more in every object of the answer reads the same',
+    (_what, read, raw) => {
+      const plain = read(raw);
+      expect(plain.ok).toBe(true);
+      expect(read(withKeyMore(raw))).toEqual(plain);
+    },
+  );
+
+  it.each(READERS)(
+    '%s: each of its keys missing, or of a type it never takes, is still not read',
+    (_what, read, raw) => {
+      for (const k of Object.keys(raw)) {
+        const { [k]: _gone, ...without } = raw;
+        expect(read(without).ok, `${k} missing`).toBe(false);
+        expect(read(withKeyMore(without)).ok, `${k} missing, a key more`).toBe(false);
+        expect(read({ ...raw, [k]: mistyped(raw[k]) }).ok, `${k} mistyped`).toBe(false);
+      }
+    },
+  );
+
+  it('a needed key inside the answer, missing, is still not read', () => {
+    const drop = (o: Record<string, unknown>, k: string) => {
+      const { [k]: _gone, ...rest } = o;
+      return rest;
+    };
+    const inputs = busyInputs();
+    const buckets = inputs.buckets as Array<Record<string, unknown>>;
+    expect(
+      readSecurityAlertInputs({ ...inputs, window: drop(inputs.window as never, 'to') }).ok,
+    ).toBe(false);
+    expect(
+      readSecurityAlertInputs({
+        ...inputs,
+        buckets: [drop(buckets[0]!, 'sources'), ...buckets.slice(1)],
+      }).ok,
+    ).toBe(false);
+    expect(
+      readSecurityAlertClaim({ ...claimNotice, notice: drop(claimNotice.notice, 'attempt') }).ok,
+    ).toBe(false);
+    expect(
+      readSecurityAlertHeartbeatStart({
+        ...heartbeatStart,
+        previous: drop(heartbeatStart.previous, 'ok'),
+      }).ok,
+    ).toBe(false);
+    const l = rawList();
+    expect(
+      readSecurityAlertList({
+        ...l,
+        state: { ...l.state, heartbeat: drop(l.state.heartbeat, 'last_run_partial') },
+      }).ok,
+    ).toBe(false);
+    expect(readSecurityAlertList({ ...l, alerts: [drop(l.alerts[0]!, 'disposition')] }).ok).toBe(
+      false,
+    );
   });
 });

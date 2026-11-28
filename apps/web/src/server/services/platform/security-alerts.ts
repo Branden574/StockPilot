@@ -28,7 +28,8 @@ import {
  * its "Check again" asks, which asks checkPlatformConsoleRead() first.
  *
  * The read has its own time budget and is checked against the contract's
- * shape by core's strict reader. On any failure (the function missing
+ * shape by core's reader (a key a later migration adds is ignored; a key it
+ * reads, missing or of another type, is not read). On any failure (the function missing
  * because the code is ahead of the migration, the database's own cancel, a
  * timeout, a refused state, a shape this build does not know) it is "could
  * not check", reported once as a warning with its code or the place the

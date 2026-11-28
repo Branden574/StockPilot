@@ -7,9 +7,10 @@
  *     (part-5-alerts-db CONTRACT.md, migration 0480): rules, phases,
  *     dispositions, the thresholds with their defaults and ranges, the
  *     buckets and windows, the result codes;
- *   - strict readers of every answer the job and the console read (inputs,
- *     claim, result, heartbeat, baseline, list): an answer of a shape this
- *     build does not know is "could not check", never an empty answer;
+ *   - readers of every answer the job and the console read (inputs, claim,
+ *     result, heartbeat, baseline, list): a key this build does not know is
+ *     ignored (a later additive change); a key it reads that is missing or
+ *     of another type is "could not check", never an empty answer;
  *   - THE RULES, as functions over the inputs' answer: a serious flag (one
  *     per reason and UTC hour, a flagged flood row among them), guessing
  *     aimed at one organization, a spike against the stored high mark (held
@@ -294,11 +295,18 @@ class Shape extends Error {
 function need(ok: boolean, where: string): asserts ok {
   if (!ok) throw new Shape(where);
 }
+const hasKey = (bag: Bag, k: string) => Object.prototype.hasOwnProperty.call(bag, k);
+/**
+ * An object with every key this build reads. A key it does not know is
+ * IGNORED (a later migration may add one: the database goes first in every
+ * release, and an unknown key must not blind the job between that migration
+ * and the web deploy); each key it reads is still required, and each is then
+ * checked for its type by the reader. What the readers answer holds only the
+ * keys they read, so an unknown key never travels further.
+ */
 function bagOf(v: unknown, keys: readonly string[], where: string): Bag {
   need(isBag(v), where);
-  const have = Object.keys(v).sort();
-  const want = [...keys].sort();
-  need(have.length === want.length && have.every((k, i) => k === want[i]), `${where} (keys)`);
+  for (const k of keys) need(hasKey(v, k), `${where}.${k}`);
   return v;
 }
 function countOf(v: unknown, where: string): number {
@@ -905,7 +913,7 @@ export interface AlertHeartbeatFinish {
 }
 
 function heartbeatRefusal(bag: Bag, step: 'start' | 'finish'): AlertHeartbeatRefusal | null {
-  if (Object.keys(bag).length !== 2 || !('refused' in bag) || bag.refused === null) return null;
+  if (!hasKey(bag, 'refused') || bag.refused === null) return null;
   bagOf(bag, ['step', 'refused'], 'heartbeat');
   need(bag.step === null || bag.step === step, 'step');
   return oneOf(bag.refused, ALERT_HEARTBEAT_REFUSALS, 'refused');

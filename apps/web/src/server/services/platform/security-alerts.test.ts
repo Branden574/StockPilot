@@ -16,8 +16,8 @@ import {
  * The console's read of the security alerts (platform_security_alert_list,
  * migration 0480). Security invariant. Pinned: one call, with the newest 50
  * alerts and 50 changes, under its own time budget; the answer is read by
- * core's strict reader, and anything it does not know is "could not check",
- * never an empty list; the function missing, refused (no_state), failing or
+ * core's reader, which ignores a key a later migration adds and finds
+ * anything else it does not know "could not check", never an empty list; the function missing, refused (no_state), failing or
  * timing out is "could not check", reported once with its code or the place
  * the shape differs, never a value from the answer; each change's actor is
  * resolved to a sign-in email in one lookup, and a lookup that fails leaves
@@ -101,6 +101,31 @@ describe('readPlatformSecurityAlerts', () => {
     // One lookup, for the one actor, in user_profiles only.
     expect(h.from).toEqual(['user_profiles']);
     expect(h.inIds).toEqual([FIXTURE_ACTOR]);
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('a key a later migration adds is ignored: the same view, nothing reported, and it never reaches the view', async () => {
+    const plain = await readPlatformSecurityAlerts();
+    const raw = rawSecurityAlertList();
+    const state = raw.state as Record<string, unknown>;
+    h.rpc.mockReturnValue({
+      data: {
+        ...raw,
+        added_later: 'not-shown-anywhere',
+        state: {
+          ...state,
+          heartbeat: { ...(state.heartbeat as object), last_run_window_from: 'not-shown-anywhere' },
+        },
+        alerts: (raw.alerts as Array<Record<string, unknown>>).map((a) => ({
+          ...a,
+          added_later: 'not-shown-anywhere',
+        })),
+      },
+      error: null,
+    });
+    const later = await readPlatformSecurityAlerts();
+    expect(later).toEqual(plain);
+    expect(JSON.stringify(later)).not.toContain('not-shown-anywhere');
     expect(h.report).not.toHaveBeenCalled();
   });
 
@@ -223,7 +248,13 @@ describe('readPlatformSecurityAlerts', () => {
   });
 
   it.each([
-    ['a tenth key', { ...rawSecurityAlertList(), more: 1 }],
+    [
+      'a key it reads missing',
+      (() => {
+        const { alerts_truncated: _gone, ...rest } = rawSecurityAlertList();
+        return rest;
+      })(),
+    ],
     [
       'record_only that disagrees with its switches',
       rawSecurityAlertList({ state: { push_on: true } }),
