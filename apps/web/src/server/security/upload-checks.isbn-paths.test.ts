@@ -51,7 +51,7 @@ vi.mock('@/lib/books/isbn-ai-extract', () => ({
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { recordSecurityEvent } from '@/server/security/events';
-import { UPLOAD_REFUSED_MESSAGE } from '@/server/security/upload-checks';
+import { UPLOAD_EMPTY_MESSAGE, UPLOAD_REFUSED_MESSAGE } from '@/server/security/upload-checks';
 
 import { POST as textPass } from '@/app/api/books/extract-isbns/route';
 import { POST as aiPass } from '@/app/api/books/extract-isbns-ai/route';
@@ -126,6 +126,17 @@ describe('the text pass', () => {
     expect(record).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a CSV', 'csv', 'text/csv'],
+    ['a PDF', 'pdf', 'application/pdf'],
+  ])('an empty %s is not a refused file: 400 with the empty sentence, never parsed, nothing recorded (lab walk 6, W6-F1)', async (_what, ext, type) => {
+    const res = await textPass(upload('extract-isbns', ext, type, new Uint8Array(0)));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'validation_error', message: UPLOAD_EMPTY_MESSAGE });
+    expect(h.extractFromFile).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('a recorder that fails: the refusal stands', async () => {
     record.mockRejectedValue(new Error('recorder down'));
     expect((await textPass(upload('extract-isbns', 'pdf', 'application/pdf', HTML_PAGE))).status).toBe(400);
@@ -154,6 +165,18 @@ describe('the AI pass', () => {
     expect(h.aiFromBuffer).not.toHaveBeenCalled();
     expect(h.aiFromText).not.toHaveBeenCalled();
     expectOneRefusal(record, { reason, organizationId: ORG }, [SECRET]);
+  });
+
+  it.each([
+    ['photo', 'png', 'image/png'],
+    ['PDF', 'pdf', 'application/pdf'],
+  ])('an empty %s: 400 with the empty sentence, nothing sent to the model, nothing recorded (lab walk 6, W6-F1)', async (_what, ext, type) => {
+    const res = await aiPass(upload('extract-isbns-ai', ext, type, new Uint8Array(0)));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'validation_error', message: UPLOAD_EMPTY_MESSAGE });
+    expect(h.aiFromBuffer).not.toHaveBeenCalled();
+    expect(h.aiFromText).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('a recorder that fails: the refusal stands', async () => {

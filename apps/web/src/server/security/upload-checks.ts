@@ -38,7 +38,9 @@ import { recordSecurityEvent, type SecurityEventHeaders } from './events';
  * rules). On a refusal this module records ONE security event and hands back
  * one of three plain sentences for the person (refused by our checks, could
  * not be checked, not a kind of file this place takes), none of which says
- * what the check looks for (lab walk 5, F3):
+ * what the check looks for (lab walk 5, F3). An EMPTY file is not a refused
+ * file: it is answered with a fourth sentence and records nothing (lab walk
+ * 5, F1, for a stored object; lab walk 6, W6-F1, for bytes in hand):
  *   - category malware, outcome blocked;
  *   - the reason is the verdict's family, one of four, each written out as a
  *     literal below: upload_wrong_type, upload_active_content,
@@ -119,13 +121,18 @@ export interface UploadCheckInput extends UploadInspectOptions {
 
 export type UploadCheckResult =
   | { ok: true; kind: UploadKind; mime: string; width: number | null; height: number | null }
-  | { ok: false; family: UploadRefusalFamily; message: string };
+  /**
+   * `family` null: an empty file, which gets no verdict and records nothing
+   * (lab walk 6, W6-F1); its message is UPLOAD_EMPTY_MESSAGE.
+   */
+  | { ok: false; family: UploadRefusalFamily | null; message: string };
 
 /*
- * THE SENTENCES A PERSON IS TOLD (lab walk 5, F3). Three, and none says what
- * the check looks for, so none helps anyone shape a file until it passes:
- * which rule refused a file stays in the security event's reason, for admins
- * and the console. Each says what to do next.
+ * THE SENTENCES A PERSON IS TOLD (lab walk 5, F3). Three for a refusal, and
+ * none says what the check looks for, so none helps anyone shape a file until
+ * it passes: which rule refused a file stays in the security event's reason,
+ * for admins and the console. A fourth for an empty file, which is not a
+ * refusal. Each says what to do next.
  */
 
 /** A file our checks refused (something inside it, or something hidden after it). */
@@ -141,6 +148,13 @@ export const UPLOAD_NOT_CHECKED_MESSAGE =
 
 /** A file that is not a kind this place takes, when a path has no sentence of its own for that. */
 export const UPLOAD_WRONG_TYPE_MESSAGE = 'This kind of file cannot be added here. Choose a different file.';
+
+/**
+ * An empty file, on every path: a stored object (lab walk 5, F1) and bytes in
+ * hand (a multipart body, base64, a data URL: lab walk 6, W6-F1). Not a
+ * refusal: no verdict, and nothing is recorded (an empty file carries nothing).
+ */
+export const UPLOAD_EMPTY_MESSAGE = 'This file is empty. Choose the file again and upload it.';
 
 /** The sentence for a refusal of a family, for this path. */
 function messageFor(family: UploadRefusalFamily, input: UploadCheckInput): string {
@@ -208,8 +222,13 @@ async function recordRefusal(
   }
 }
 
+/** The answer to a verdict: a refusal always has its family. */
+type JudgedResult =
+  | Extract<UploadCheckResult, { ok: true }>
+  | { ok: false; family: UploadRefusalFamily; message: string };
+
 /** The answer to a verdict, with nothing recorded yet. */
-function judged(inspection: UploadInspection, input: UploadCheckInput): UploadCheckResult {
+function judged(inspection: UploadInspection, input: UploadCheckInput): JudgedResult {
   if (inspection.ok) {
     return {
       ok: true,
@@ -237,12 +256,14 @@ async function answer(inspection: UploadInspection, input: UploadCheckInput): Pr
 /**
  * The check of a WHOLE file whose bytes are in hand (a multipart body, a
  * base64 body, a download, a fetched cover): its kind from its bytes, and the
- * check that kind has. One event on a refusal.
+ * check that kind has. One event on a refusal. An empty file is answered at
+ * once with UPLOAD_EMPTY_MESSAGE and records nothing (lab walk 6, W6-F1).
  */
 export async function checkUploadBytes(
   bytes: Uint8Array,
   input: UploadCheckInput,
 ): Promise<UploadCheckResult> {
+  if (bytes.byteLength === 0) return { ok: false, family: null, message: UPLOAD_EMPTY_MESSAGE };
   return answer(inspectUpload(bytes, input), input);
 }
 
@@ -324,9 +345,6 @@ export interface StoredUploadInput extends UploadCheckInput {
 
 /** The sentence for an object over its path's ceiling, when the path has none of its own. */
 export const UPLOAD_TOO_LARGE_MESSAGE = 'This file is too large to upload. Pick a smaller one.';
-
-/** The sentence for an empty file (lab walk 5, F1): refused from its size, at once. */
-export const UPLOAD_EMPTY_MESSAGE = 'This file is empty. Choose the file again and upload it.';
 
 /**
  * A storage read past its time limit (lib/storage-object-prefix.ts). Checked

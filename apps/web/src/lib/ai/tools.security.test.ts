@@ -692,6 +692,13 @@ describe('S30: identifyFromPhoto fails by type, with a fixed sentence', () => {
     expect(out.confidence).toContain('high');
   });
 
+  it('part 6: an empty answer is not a refused file: the same words as before, never sent, nothing recorded (lab walk 6, W6-F1)', async () => {
+    imageDownloads(new Uint8Array(0));
+    expectRefusal(await identify(), 'That address did not return an image.');
+    expect(generateContentMock).not.toHaveBeenCalled();
+    expect(vi.mocked(recordSecurityEvent)).not.toHaveBeenCalled();
+  });
+
   it('part 6: the bytes are checked before the model sees them, and the model is told their real kind', async () => {
     const record = vi.mocked(recordSecurityEvent);
     // A web page served as a JPEG: refused in the tool's words, recorded once, never sent.

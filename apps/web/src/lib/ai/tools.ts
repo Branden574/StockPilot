@@ -1987,7 +1987,8 @@ const identifyFromPhotoTool: ToolExecutor = {
       wrongTypeMessage: PHOTO_NOT_AN_IMAGE,
     });
     if (!checked.ok) {
-      if (checked.family === 'wrong_type') throw new ToolRefusal(PHOTO_NOT_AN_IMAGE);
+      // An empty answer (no family: nothing recorded) is not an image either.
+      if (checked.family === 'wrong_type' || checked.family === null) throw new ToolRefusal(PHOTO_NOT_AN_IMAGE);
       throw new ToolRefusal(PHOTO_REFUSED);
     }
     mimeType = checked.mime;

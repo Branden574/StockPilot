@@ -44,7 +44,7 @@ import {
   type TrackingProfileCache,
 } from './sports-profiles';
 import { buildPoCharges } from '@/lib/po-imports/charges';
-import type { UploadKind, UploadRefusalFamily } from '@/lib/upload-inspect';
+import type { UploadKind } from '@/lib/upload-inspect';
 import {
   isAllowedPoImportUploadMime,
   PO_IMPORT_SCAN_MIME_TYPES,
@@ -56,7 +56,12 @@ import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { isValidStoragePath, poImportPathShape } from '@/lib/storage-path';
 import { withOwnSignal } from '@/lib/storage-steps';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { auditRemoval, checkUploadBytes, removeAndAudit } from '@/server/security/upload-checks';
+import {
+  auditRemoval,
+  checkUploadBytes,
+  removeAndAudit,
+  type UploadRemovalWhy,
+} from '@/server/security/upload-checks';
 import {
   encodedInValueLength,
   IN_FILTER_MAX_ENCODED_CHARS,
@@ -249,7 +254,7 @@ async function removeRefusedImportFile(
   ctx: Pick<ServiceContext, 'organizationId' | 'userId'>,
   importId: string,
   path: string,
-  why: UploadRefusalFamily,
+  why: UploadRemovalWhy,
 ): Promise<void> {
   try {
     const admin = createAdminClient();
@@ -1407,7 +1412,9 @@ export class PoImportsService {
           header.status === 'uploaded' &&
           ((header.source_type as string) === 'csv' || (header.source_type as string) === 'pdf');
         if (firstParse) {
-          await removeRefusedImportFile(this.ctx, id, header.storage_path as string, checked.family);
+          // An empty file has no family: it is removed as empty, as a
+          // stored upload's empty object is (lab walk 6, W6-F1).
+          await removeRefusedImportFile(this.ctx, id, header.storage_path as string, checked.family ?? 'empty');
         }
         throw new RefusedImportFileError(checked.message);
       }

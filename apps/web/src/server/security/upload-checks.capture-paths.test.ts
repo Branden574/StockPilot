@@ -25,7 +25,9 @@ import {
 // A refused photo: the same answer as before, nothing stored, nothing sent to
 // a model, and exactly one malware / blocked event in the organization with
 // no file name. A clean photo: the same bytes reach storage or the model
-// under the type its bytes say. A recorder that fails changes neither.
+// under the type its bytes say. A recorder that fails changes neither. An
+// empty photo is not a refused one: the empty-file sentence, nothing stored
+// or sent, nothing recorded (lab walk 6, W6-F1).
 // Tiny made-up files only (test/upload-fixtures.ts).
 // ---------------------------------------------------------------------------
 
@@ -69,7 +71,11 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { apiReadContext } from '@/server/lib/api-read-context';
 import { recordSecurityEvent } from '@/server/security/events';
-import { UPLOAD_REFUSED_MESSAGE, UPLOAD_WRONG_TYPE_MESSAGE } from '@/server/security/upload-checks';
+import {
+  UPLOAD_EMPTY_MESSAGE,
+  UPLOAD_REFUSED_MESSAGE,
+  UPLOAD_WRONG_TYPE_MESSAGE,
+} from '@/server/security/upload-checks';
 import { CycleCountsService } from '@/server/services/cycle-counts';
 import { SizeCountsService } from '@/server/services/size-counts';
 
@@ -83,6 +89,8 @@ const ORG = '11111111-1111-4111-8111-111111111111';
 const COUNT = '22222222-2222-4222-8222-222222222222';
 /** The file's name: never in what is recorded. */
 const NAME = 'shelf-of-a-secret-customer.jpg';
+/** A file with no bytes at all. */
+const EMPTY = new Uint8Array(0);
 
 const ctx = (enabled: ModuleId[]) => ({
   organizationId: ORG,
@@ -153,6 +161,17 @@ describe('the cycle-count shelf scan', () => {
     expectOneRefusal(record, { reason, organizationId: ORG }, [NAME, 'secret']);
   });
 
+  it('an empty photo is not a refused file: 422 with the empty sentence, nothing stored, nothing recorded (lab walk 6, W6-F1)', async () => {
+    for (const headers of [{}, { authorization: 'Bearer phone-token' }] as Array<Record<string, string>>) {
+      const res = await post(EMPTY, 'image/jpeg', headers);
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: 'invalid_image', message: UPLOAD_EMPTY_MESSAGE });
+    }
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(claude).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('a phone request is recorded as the phone', async () => {
     await post(HTML_PAGE, 'image/jpeg', { authorization: 'Bearer phone-token' });
     expectOneRefusal(record, { reason: 'upload_wrong_type', organizationId: ORG, source: 'phone' });
@@ -203,6 +222,14 @@ describe('the size-count scan', () => {
     expectOneRefusal(record, { reason, organizationId: ORG }, [NAME]);
   });
 
+  it('an empty photo: 422 with the empty sentence, no model call, nothing recorded (lab walk 6, W6-F1)', async () => {
+    const res = await post(EMPTY);
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: 'invalid_image', message: UPLOAD_EMPTY_MESSAGE });
+    expect(claude).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('a recorder that fails: the refusal stands', async () => {
     record.mockRejectedValue(new Error('recorder down'));
     expect((await post(HTML_PAGE)).status).toBe(422);
@@ -245,6 +272,15 @@ describe('the size-count training sample', () => {
     });
     expect(h.upload).not.toHaveBeenCalled();
     expectOneRefusal(record, { reason, organizationId: ORG });
+  });
+
+  it('an empty photo: refused with the empty sentence, nothing stored, nothing recorded (lab walk 6, W6-F1)', async () => {
+    await expect(service().recordTrainingSample(input(EMPTY))).rejects.toMatchObject({
+      code: 'validation_error',
+      message: UPLOAD_EMPTY_MESSAGE,
+    });
+    expect(h.upload).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('a recorder that fails: the refusal stands', async () => {
@@ -297,6 +333,26 @@ describe('identify-from-photo', () => {
     expect(res.status).toBe(422);
     expect(claude).not.toHaveBeenCalled();
     expectOneRefusal(record, { reason: 'upload_hidden_file', organizationId: ORG }, [NAME]);
+  });
+
+  it('an empty photo, as multipart or as base64: 422 with the empty sentence, no model call, nothing recorded (lab walk 6, W6-F1)', async () => {
+    const asForm = await identifyFromPhoto(
+      multipart('https://test.local/api/v1/ai/identify-from-photo', EMPTY, 'image/jpeg'),
+    );
+    // Base64 text that decodes to no bytes at all.
+    const asBase64 = await identifyFromPhoto(
+      new Request('https://test.local/api/v1/ai/identify-from-photo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ imageBase64: '====', mimeType: 'image/jpeg' }),
+      }) as never,
+    );
+    for (const res of [asForm, asBase64]) {
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: 'invalid_image', message: UPLOAD_EMPTY_MESSAGE });
+    }
+    expect(claude).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('a recorder that fails: the refusal stands', async () => {

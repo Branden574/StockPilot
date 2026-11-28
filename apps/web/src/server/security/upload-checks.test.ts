@@ -183,6 +183,29 @@ describe('checkUploadBytes: one event on a refusal, none on a clean file', () =>
     expect(new Set(sentences).size).toBe(3);
   });
 
+  it('an empty file is not a refused file: the empty sentence, no verdict, nothing recorded (lab walk 6, W6-F1)', async () => {
+    const own = { ...base, wrongTypeMessage: 'Pick a real image file.' };
+    for (const accept of [['png'], ['pdf'], ['text'], ['docx'], ['jpeg', 'png', 'webp', 'heic', 'pdf']] as const) {
+      expect(await checkUploadBytes(new Uint8Array(0), { ...own, accept })).toEqual({
+        ok: false,
+        family: null,
+        message: UPLOAD_EMPTY_MESSAGE,
+      });
+    }
+    // From the phone too.
+    const headers = new Headers({ authorization: 'Bearer abc.def' });
+    expect(await checkUploadBytes(new Uint8Array(0), { ...base, accept: ['png'], headers })).toMatchObject({
+      message: UPLOAD_EMPTY_MESSAGE,
+    });
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('the empty-file sentence is the stored paths’ own, beside the three, and says what to do (lab walk 6, W6-F1)', () => {
+    expect(UPLOAD_EMPTY_MESSAGE).toBe('This file is empty. Choose the file again and upload it.');
+    expect(UPLOAD_EMPTY_MESSAGE).toMatch(/\bChoose\b/);
+    expect(new Set([UPLOAD_EMPTY_MESSAGE, UPLOAD_REFUSED_MESSAGE, UPLOAD_NOT_CHECKED_MESSAGE, UPLOAD_WRONG_TYPE_MESSAGE]).size).toBe(4);
+  });
+
   it('no organization is recorded as none; a phone request (bearer) is the phone', async () => {
     await checkUploadBytes(HTML, { ...base, organizationId: null, accept: ['png'] });
     expect(record.mock.calls[0]![0]).toMatchObject({ organizationId: null, source: 'web' });

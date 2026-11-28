@@ -14,7 +14,7 @@ import { reportError } from '@/lib/error-reporter';
 import { classifyAiError } from '@/lib/ai/errors';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { answerModuleState } from '@/server/lib/api-error-response';
-import { checkUploadBytes } from '@/server/security/upload-checks';
+import { checkUploadBytes, UPLOAD_EMPTY_MESSAGE } from '@/server/security/upload-checks';
 import {
   assertModuleEnabled,
   assertPermission,
@@ -98,9 +98,11 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  // An empty file: the one empty-file sentence of every upload path, and
+  // nothing recorded (lab walk 6, W6-F1).
   if (file.size === 0) {
     return NextResponse.json(
-      { error: 'validation_error', message: 'File is empty.' },
+      { error: 'validation_error', message: UPLOAD_EMPTY_MESSAGE },
       { status: 400 },
     );
   }

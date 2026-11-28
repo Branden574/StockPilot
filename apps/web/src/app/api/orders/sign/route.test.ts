@@ -92,6 +92,8 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { dispatchEvent } from '@/server/services/integration-events';
 
+import { UPLOAD_EMPTY_MESSAGE } from '@/server/security/upload-checks';
+
 import { POST } from './route';
 
 const TOKEN = 'a'.repeat(64);
@@ -1105,6 +1107,31 @@ describe('POST /api/orders/sign — the upload check (part 6)', () => {
     expect(body.error.message).toMatch(/^[A-Z][^<>{}]+\.$/);
     expect(rpc).not.toHaveBeenCalled();
     expectOneRefusal(await record(), { reason, organizationId: 'org-1' }, [TOKEN, 'Bob Signer', 'bob@example.com']);
+  });
+
+  it('a data URL whose base64 holds no bytes is not a refused file: 400 with the empty sentence, nothing signed, nothing recorded (lab walk 6, W6-F1)', async () => {
+    const admin = buildAdmin({ status: 'completed', priorFulfilled: 0, totalRequested: 1, totalFulfilled: 1 });
+    const rpc = vi.spyOn(admin, 'rpc');
+    adminHolder.client = admin;
+    const res = await POST(
+      new Request('https://test.local/api/orders/sign', {
+        method: 'POST',
+        body: JSON.stringify({
+          token: TOKEN,
+          signerName: 'Bob Signer',
+          signerEmail: 'bob@example.com',
+          // Long enough for the shape check; decodes to nothing.
+          signatureDataUrl: 'data:image/png;base64,' + '='.repeat(48),
+        }),
+      }) as never,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: { code: 'validation_error', message: UPLOAD_EMPTY_MESSAGE },
+    });
+    expect(rpc).not.toHaveBeenCalled();
+    expect(await record()).not.toHaveBeenCalled();
   });
 
   it('a recorder that fails: still refused, nothing signed', async () => {

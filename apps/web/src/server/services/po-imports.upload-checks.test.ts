@@ -28,9 +28,15 @@ vi.mock('@/lib/po-parser', () => ({ parsePoFile: mockParsePoFile }));
 vi.mock('@/lib/po-scan/extract', () => ({ extractPoFromMedia: mockExtract, SCAN_MODEL_NAME: 'mock' }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mockAdmin }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 
+import { withApiContext } from '@/lib/auth/api-context';
+import { checkRateLimit } from '@/lib/rate-limit';
 import { recordSecurityEvent } from '@/server/security/events';
-import { UPLOAD_REFUSED_MESSAGE } from '@/server/security/upload-checks';
+import { UPLOAD_EMPTY_MESSAGE, UPLOAD_REFUSED_MESSAGE } from '@/server/security/upload-checks';
+
+import { POST as scanRoute } from '@/app/api/po-imports/scan/route';
 
 import { PoImportsService } from './po-imports';
 
@@ -213,6 +219,24 @@ describe('PO import file at parse', () => {
     expect(adminRemove).not.toHaveBeenCalled();
   });
 
+  it.each(['csv', 'pdf'] as const)(
+    'an empty %s file is not a refused file: the empty sentence stored, removed as empty, nothing recorded (lab walk 6, W6-F1)',
+    async (type) => {
+      const stub = parseStub(type, Buffer.alloc(0));
+      await svcFor(stub).parseImport(IMPORT_ID);
+      expect(mockParsePoFile).not.toHaveBeenCalled();
+      expect(failedWith(stub)).toBe(UPLOAD_EMPTY_MESSAGE);
+      expect(adminRemove).toHaveBeenCalledWith([`${PATH}.${type}`]);
+      const lines = mockAudit.mock.calls.filter(
+        ([e]) => (e as { event: string }).event === 'security.upload_refused_removed',
+      );
+      expect(lines.map(([e]) => (e as { extra: unknown }).extra)).toEqual([
+        { surface: 'po_import_file', why: 'empty', objects: 1 },
+      ]);
+      expect(record).not.toHaveBeenCalled();
+    },
+  );
+
   it('a recorder that fails: still refused, still removed', async () => {
     record.mockImplementationOnce(async () => {
       throw new Error('recorder down');
@@ -261,5 +285,64 @@ describe('PO scan frames', () => {
     ).rejects.toMatchObject({ message: UPLOAD_REFUSED_MESSAGE });
     expect(record).toHaveBeenCalledTimes(1);
     expect(record.mock.calls[0]![0]).toMatchObject({ reason: 'upload_active_content' });
+  });
+});
+
+describe('PO scan frames: an empty file (lab walk 6, W6-F1)', () => {
+  const EMPTY = new Uint8Array(0);
+
+  function scanStub() {
+    return makeSupabaseStub({
+      'po_imports.select': { data: [], error: null },
+      'po_imports.insert': { data: { id: IMPORT_ID }, error: null },
+      'po_imports.update': { data: [], error: null },
+    });
+  }
+
+  it('the service: the empty sentence, nothing stored, nothing sent to the model, nothing recorded', async () => {
+    await expect(
+      svcFor(scanStub()).createFromScan({
+        files: [{ bytes: EMPTY, mimeType: 'image/png', fileName: 'secret-name.png' }],
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error', message: UPLOAD_EMPTY_MESSAGE });
+    expect(mockExtract).not.toHaveBeenCalled();
+    expect(mockUpload).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  describe('the route, a multipart body', () => {
+    beforeEach(() => {
+      vi.mocked(withApiContext).mockResolvedValue(
+        makeServiceContext(scanStub().client as never, { organizationId: ORG }) as never,
+      );
+      vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, count: 1, resetAt: Date.now() + 60_000 } as never);
+    });
+
+    function post(files: Array<{ name: string; type: string }>, mode?: string) {
+      const form = new FormData();
+      for (const f of files) form.append('file', new File([EMPTY], f.name, { type: f.type }));
+      if (mode) form.append('mode', mode);
+      return scanRoute(new Request('https://test.local/api/po-imports/scan', { method: 'POST', body: form }));
+    }
+
+    it.each([
+      ['a picture', [{ name: 'secret-name.png', type: 'image/png' }], undefined],
+      ['a PDF', [{ name: 'secret-name.pdf', type: 'application/pdf' }], undefined],
+      [
+        'two files, each its own purchase order',
+        [
+          { name: 'secret-name-1.jpg', type: 'image/jpeg' },
+          { name: 'secret-name-2.pdf', type: 'application/pdf' },
+        ],
+        'separate',
+      ],
+    ])('%s: 400 with the empty sentence, nothing stored or sent, nothing recorded', async (_what, files, mode) => {
+      const res = await post(files, mode);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'validation_error', message: UPLOAD_EMPTY_MESSAGE });
+      expect(mockExtract).not.toHaveBeenCalled();
+      expect(mockUpload).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
+    });
   });
 });
