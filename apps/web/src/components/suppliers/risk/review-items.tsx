@@ -233,7 +233,7 @@ function ItemEditor({
     if (busy) return;
     const p = problem();
     if (p) {
-      setOutcome({ text: p, setUp: false, reload: false });
+      setOutcome({ text: p, setUp: false, conflict: false });
       return;
     }
     setBusy(true);

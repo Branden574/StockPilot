@@ -110,7 +110,7 @@ export const SUPPLIER_RISK_SEAT_UNKNOWN =
   'We could not check whether this session may change vendor reviews. Nothing was saved. Try again in a minute.';
 export const SUPPLIER_RISK_BUSY = 'Someone else is saving this review. Try again.';
 export const SUPPLIER_RISK_DRAFT_MOVED =
-  'This draft was changed in another window, or by another admin, after you opened it. Nothing was finished. Reload the page to see the latest answers, then finish again.';
+  'This draft was changed in another window, or by another admin, after you opened it. Nothing was finished. Your answers are still here: show the other version to compare, then keep yours or use theirs.';
 export const SUPPLIER_RISK_MFA_REQUIRED =
   'Multi-factor authentication required. Enroll in MFA before performing this action.';
 export const SUPPLIER_RISK_AAL2_REQUIRED =
@@ -244,6 +244,31 @@ export interface SupplierRiskReview {
   createdAt: string | null;
   updatedAt: string | null;
   items: SupplierRiskItem[];
+}
+
+/**
+ * The newest versions of a supplier's review, for a finish another admin (or
+ * another window) got to first: the open draft, with the updated_at a finish
+ * must name to replace it, and the current review.
+ */
+export interface SupplierRiskLatest {
+  draft: {
+    reviewId: string;
+    version: number;
+    updatedAt: string | null;
+    dataLevel: VendorRiskDataLevel | null;
+    answers: VendorRiskAnswers;
+  } | null;
+  current: {
+    reviewId: string;
+    version: number;
+    reviewedAt: string | null;
+    reviewerName: string | null;
+    dataLevel: VendorRiskDataLevel | null;
+    answers: VendorRiskAnswers;
+    result: VendorRiskResult | null;
+    overridden: boolean;
+  } | null;
 }
 
 /** A current owner or admin, for the item owner picker. */
@@ -396,6 +421,7 @@ export const supplierRiskFinishSchema = z
 export type SupplierRiskFinishInput = z.infer<typeof supplierRiskFinishSchema>;
 
 export const supplierRiskDiscardSchema = z.object({ supplierId: z.string().uuid() }).strict();
+export const supplierRiskLatestSchema = z.object({ supplierId: z.string().uuid() }).strict();
 
 export const supplierRiskItemUpdateSchema = z
   .object({
@@ -946,6 +972,62 @@ export class SupplierRiskService {
       return { state: 'could_not_check' };
     }
     return { state: 'ok', value: review };
+  }
+
+  /**
+   * The open draft and the current review of one supplier, as they are now
+   * (SupplierRiskLatest): what the review form shows beside the person's own
+   * answers when a finish was refused because the draft moved. A read (a
+   * support seat may make it). Any part that could not be read makes the
+   * whole could_not_check, never "no other version".
+   */
+  async latest(supplierId: string): Promise<SupplierRiskRead<SupplierRiskLatest>> {
+    assertMayUseSupplierRisk(this.ctx);
+    if (!isUuid(supplierId)) return { state: 'ok', value: { draft: null, current: null } };
+    const history = await this.history(supplierId);
+    if (history.state !== 'ok') return history;
+    const draftRow = history.value.find((r) => r.status === 'draft') ?? null;
+    const currentRow = history.value.find((r) => r.isCurrent) ?? null;
+    const [draft, current] = await Promise.all([
+      draftRow ? this.review(draftRow.reviewId) : null,
+      currentRow ? this.review(currentRow.reviewId) : null,
+    ]);
+    if (
+      (draftRow && (draft?.state !== 'ok' || !draft.value)) ||
+      (currentRow && (current?.state !== 'ok' || !current.value))
+    ) {
+      return { state: 'could_not_check' };
+    }
+    const d = draft?.state === 'ok' ? draft.value : null;
+    const c = current?.state === 'ok' ? current.value : null;
+    return {
+      state: 'ok',
+      value: {
+        draft:
+          d && draftRow
+            ? {
+                reviewId: d.id,
+                version: d.version,
+                // The instant a finish is checked against (the history's).
+                updatedAt: draftRow.updatedAt,
+                dataLevel: d.dataLevel,
+                answers: d.answers,
+              }
+            : null,
+        current: c
+          ? {
+              reviewId: c.id,
+              version: c.version,
+              reviewedAt: c.reviewedAt,
+              reviewerName: c.reviewerName,
+              dataLevel: c.dataLevel,
+              answers: c.answers,
+              result: c.result,
+              overridden: c.overrideResult !== null,
+            }
+          : null,
+      },
+    };
   }
 
   /**

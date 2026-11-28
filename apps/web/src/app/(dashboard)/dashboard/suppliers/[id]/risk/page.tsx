@@ -450,6 +450,7 @@ export default async function SupplierRiskReviewPage({
               canWrite={canWrite}
               canDiscard={canDiscard}
               people={owners}
+              timeZone={timeZone}
             />
           )}
         </DetailSection>

@@ -33,6 +33,7 @@ import {
   type VendorRiskAnswerEntry,
   type VendorRiskAnswers,
   type VendorRiskDataLevel,
+  type VendorRiskItemSuggestion,
   type VendorRiskQuestionKey,
   type VendorRiskResult,
 } from '@stockpilot/core';
@@ -52,6 +53,7 @@ import {
 } from '@/lib/supplier-risk/dates';
 import {
   supplierRiskHardStopWords,
+  supplierRiskResultLabel,
   supplierRiskResultTone,
   supplierRiskResultWords,
   supplierRiskTextProblem,
@@ -59,14 +61,17 @@ import {
 import {
   discardSupplierRiskDraftAction,
   finishSupplierRiskReviewAction,
+  loadSupplierRiskLatestAction,
   saveSupplierRiskDraftAction,
 } from '@/server/actions/supplier-risk';
-import type { SupplierRiskPerson } from '@/server/services/supplier-risk';
+import type { SupplierRiskLatest, SupplierRiskPerson } from '@/server/services/supplier-risk';
 
+import { SupplierRiskAnswersList } from './answers-list';
 import { CleanTextField } from './clean-text-field';
 import { SupplierRiskOutcomeNote } from './outcome-note';
 import { ReasonField } from './reason-field';
 import { sendWithStepUp, supplierRiskOutcomeOf, type SupplierRiskOutcome } from './step-up';
+import { SupplierRiskTime } from './when';
 
 export const NATIVE_SELECT =
   'border-line-strong bg-card text-foreground focus-visible:ring-ring block h-8 w-full max-w-sm rounded-md border px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base';
@@ -104,6 +109,8 @@ export interface SupplierRiskReviewFormProps {
   /** May discard the open draft (an owner or admin on their own seat, archived suppliers too). */
   canDiscard: boolean;
   people: SupplierRiskPerson[];
+  /** The organization's zone (resolved), for when another version was saved. */
+  timeZone: string;
 }
 
 function entriesOf(answers: VendorRiskAnswers): Entries {
@@ -114,6 +121,14 @@ function entriesOf(answers: VendorRiskAnswers): Entries {
     out[key] = { answer: entry.answer, note: entry.note ?? '', date: entry.date ?? '' };
   }
   return out;
+}
+
+/** An item's fields as the finish panel holds them: what was typed, else the rules' own words. */
+function itemDraftOf(
+  items: Partial<Record<VendorRiskQuestionKey, ItemDraft>>,
+  s: VendorRiskItemSuggestion,
+): ItemDraft {
+  return items[s.questionKey] ?? { finding: s.finding, action: s.action, ownerUserId: '', dueOn: '' };
 }
 
 /** The answers to send: only questions asked at this level, only what was given. */
@@ -140,14 +155,23 @@ function answersFor(level: VendorRiskDataLevel, entries: Entries): VendorRiskAns
  * database works the result out itself at the finish.
  *
  * Save draft, Discard draft and Finish. Each is sent once: its button is off
- * while it is in flight. A finish sends the draft's updated_at as read, and
- * the server refuses when the draft moved since (the page offers Reload).
+ * while it is in flight. TYPED ANSWERS ARE NEVER LOST:
+ *   - an answer changed while the finish panel is open: the panel follows
+ *     the new answers (an item for each new gap, in the rules' words), and
+ *     the next press of Finish is not sent: it says the result was worked out
+ *     again and asks for one more press, so nothing is finished unseen;
+ *   - a finish sends the draft's updated_at as this form knows it, and the
+ *     server refuses when the draft moved since (another admin, another
+ *     window). Nothing is reloaded: the answers stay on screen, and the
+ *     person can show the other version beside them, then keep theirs (the
+ *     next finish names the other draft, so it replaces it on purpose) or use
+ *     the other one.
  * Notes, findings, actions and reasons are cleaned of hidden characters as
  * they are typed, and the cleaned text is what is shown. A support seat, or
  * an archived supplier, gets the form read-only (no Save or Finish).
  */
 export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
-  const { supplierId, orgToday, utcToday, canWrite, canDiscard, people } = props;
+  const { supplierId, orgToday, utcToday, canWrite, canDiscard, people, timeZone } = props;
   const router = useRouter();
   const stepUp = useStepUp();
   const [level, setLevel] = React.useState<VendorRiskDataLevel | null>(props.start.dataLevel);
@@ -160,6 +184,17 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
   const [overrideReason, setOverrideReason] = React.useState('');
   const [items, setItems] = React.useState<Partial<Record<VendorRiskQuestionKey, ItemDraft>>>({});
   const [confirmDiscard, setConfirmDiscard] = React.useState(false);
+  // The stored draft this form will replace on a finish (its updated_at).
+  const [basisDraftAt, setBasisDraftAt] = React.useState<string | null>(props.draftUpdatedAt);
+  // The answers and the result the finish panel was last looked at with.
+  const [finishBasis, setFinishBasis] = React.useState<{
+    key: string;
+    result: VendorRiskResult;
+  } | null>(null);
+  const [changedNotice, setChangedNotice] = React.useState<string | null>(null);
+  const [other, setOther] = React.useState<SupplierRiskLatest | null>(null);
+  const [otherState, setOtherState] = React.useState<'idle' | 'loading' | 'failed'>('idle');
+  const [note, setNote] = React.useState<string | null>(null);
   const finishRef = React.useRef<HTMLHeadingElement>(null);
   const days = { orgToday, utcToday };
   const latestEvidenceDay = supplierRiskLatestEvidenceDay(utcToday);
@@ -170,6 +205,8 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
   const asked = level ? vendorRiskQuestionsFor(level) : [];
   const override =
     overrideResult && evaluation && overrideResult !== evaluation.result ? overrideResult : null;
+  /** What the finish would send, as one value to compare. */
+  const answersKey = JSON.stringify([level, answers]);
 
   function setEntry(key: VendorRiskQuestionKey, patch: Partial<Entry>) {
     setEntries((prev) => {
@@ -202,7 +239,7 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
       setOutcome({
         text: problem ?? VENDOR_RISK_REFUSAL_WORDS.bad_data_level,
         setUp: false,
-        reload: false,
+        conflict: false,
       });
       return;
     }
@@ -227,7 +264,7 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
       setOutcome({
         text: problem ?? VENDOR_RISK_REFUSAL_WORDS.answers_incomplete,
         setUp: false,
-        reload: false,
+        conflict: false,
       });
       return;
     }
@@ -245,6 +282,8 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
       }
       return next;
     });
+    setFinishBasis({ key: answersKey, result: evaluation.result });
+    setChangedNotice(null);
     setFinishing(true);
     requestAnimationFrame(() => finishRef.current?.focus());
   }
@@ -258,8 +297,8 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
     if (override && !vendorRiskReasonCount(overrideReason).ok)
       return VENDOR_RISK_REFUSAL_WORDS.bad_override_reason;
     for (const s of evaluation?.items ?? []) {
-      const d = items[s.questionKey];
-      if (!d) return VENDOR_RISK_REFUSAL_WORDS.items_do_not_match_answers;
+      // The same item the panel draws: what was typed, else the rules' words.
+      const d = itemDraftOf(items, s);
       if (
         supplierRiskTextProblem(d.finding, VENDOR_RISK_FINDING_MAX) ||
         supplierRiskTextProblem(d.action, VENDOR_RISK_ACTION_MAX)
@@ -277,7 +316,24 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
     if (busy || !level || !evaluation) return;
     const problem = finishProblem();
     if (problem) {
-      setOutcome({ text: problem, setUp: false, reload: false });
+      setOutcome({ text: problem, setUp: false, conflict: false });
+      return;
+    }
+    if (!finishBasis || finishBasis.key !== answersKey) {
+      // The answers changed since the panel was looked at: say what the rules
+      // give now and ask for one more press. Nothing is sent, nothing is lost.
+      const now = supplierRiskResultWords(evaluation.result);
+      const was = finishBasis ? supplierRiskResultWords(finishBasis.result) : now;
+      setChangedNotice(
+        `${
+          was === now
+            ? `The answers changed after you opened this. The rules still give ${now}.`
+            : `The answers changed after you opened this, so the result was worked out again: the rules now give ${now} (it was ${was}).`
+        } The items below follow the new answers: check them, then press Finish the review again.`,
+      );
+      setFinishBasis({ key: answersKey, result: evaluation.result });
+      setOutcome(null);
+      finishRef.current?.focus();
       return;
     }
     setBusy('finish');
@@ -290,7 +346,7 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
       overrideResult: override,
       overrideReason: override ? overrideReason : null,
       items: evaluation.items.map((s) => {
-        const d = items[s.questionKey]!;
+        const d = itemDraftOf(items, s);
         return {
           questionKey: s.questionKey,
           finding: d.finding,
@@ -299,7 +355,7 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
           dueOn: d.dueOn || null,
         };
       }),
-      draftUpdatedAt: props.draftUpdatedAt,
+      draftUpdatedAt: basisDraftAt,
     };
     const res = await sendWithStepUp(() => finishSupplierRiskReviewAction(payload), stepUp.ensure);
     setBusy(null);
@@ -310,6 +366,42 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
     toast.success(`Review finished: ${supplierRiskResultWords(res.data.result)}.`);
     setFinishing(false);
     router.refresh();
+  }
+
+  /** The draft moved: read the other version to show beside these answers (nothing reloads). */
+  async function showOther() {
+    if (otherState === 'loading') return;
+    setOtherState('loading');
+    const res = await loadSupplierRiskLatestAction({ supplierId });
+    if (!res.ok) {
+      setOtherState('failed');
+      return;
+    }
+    setOtherState('idle');
+    setOther(res.data);
+  }
+
+  /** Keep these answers: the next finish names the other draft, so it replaces it. */
+  function keepMine() {
+    if (!other) return;
+    setBasisDraftAt(other.draft?.updatedAt ?? null);
+    setOther(null);
+    setOutcome(null);
+    setNote(
+      'Your answers are kept. Press Finish the review to finish with them: they replace the other version.',
+    );
+  }
+
+  /** Use the other version's answers in the form (the finish then confirms the result they give). */
+  function useTheirs() {
+    const v = other?.draft ?? other?.current ?? null;
+    if (!other || !v) return;
+    setLevel(v.dataLevel);
+    setEntries(entriesOf(v.answers));
+    setBasisDraftAt(other.draft?.updatedAt ?? null);
+    setOther(null);
+    setOutcome(null);
+    setNote('The other version\'s answers are in the form now. Check them before you save or finish.');
   }
 
   async function discard() {
@@ -530,7 +622,30 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
         </section>
       ) : null}
 
-      <SupplierRiskOutcomeNote outcome={outcome} onReload={() => router.refresh()} />
+      <SupplierRiskOutcomeNote
+        outcome={outcome}
+        onShowOther={showOther}
+        showingOther={otherState === 'loading'}
+      />
+      {otherState === 'failed' ? (
+        <p role="status" className="text-ink-2 text-[13px]">
+          The other version could not be read just now. Your answers are still here: try again in a
+          minute.
+        </p>
+      ) : null}
+      {note ? (
+        <p role="status" className="text-ink-2 text-[13px]" data-slot="supplier-risk-form-note">
+          {note}
+        </p>
+      ) : null}
+      {other ? (
+        <OtherVersion
+          other={other}
+          timeZone={timeZone}
+          onKeepMine={keepMine}
+          onUseTheirs={useTheirs}
+        />
+      ) : null}
 
       {canWrite || canDiscard ? (
         <div className="flex flex-wrap gap-2">
@@ -582,6 +697,15 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
           >
             Finish the review
           </h3>
+          {changedNotice ? (
+            <p
+              role="status"
+              className="border-warning/40 bg-warning-wash text-foreground rounded-md border px-3 py-2 text-[13px]"
+              data-slot="supplier-risk-finish-changed"
+            >
+              {changedNotice}
+            </p>
+          ) : null}
           <p className="text-ink-2 text-[13px]">
             The rules give:{' '}
             <strong className="text-foreground font-medium">
@@ -640,12 +764,7 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
             <div className="space-y-3">
               <h4 className="text-foreground text-[13.5px] font-medium">Items: one for each gap</h4>
               {evaluation.items.map((s) => {
-                const d = items[s.questionKey] ?? {
-                  finding: s.finding,
-                  action: s.action,
-                  ownerUserId: '',
-                  dueOn: '',
-                };
+                const d = itemDraftOf(items, s);
                 const setItem = (patch: Partial<ItemDraft>) =>
                   setItems((prev) => ({ ...prev, [s.questionKey]: { ...d, ...patch } }));
                 return (
@@ -744,5 +863,84 @@ export function SupplierRiskReviewForm(props: SupplierRiskReviewFormProps) {
       />
       {stepUp.modal}
     </div>
+  );
+}
+
+/**
+ * The other version, beside the person's own answers, when a finish was
+ * refused because the draft moved: the open draft (when it was saved), or the
+ * review another admin finished, read-only and as text. Keep my answers, or
+ * use these.
+ */
+function OtherVersion({
+  other,
+  timeZone,
+  onKeepMine,
+  onUseTheirs,
+}: {
+  other: SupplierRiskLatest;
+  timeZone: string;
+  onKeepMine: () => void;
+  onUseTheirs: () => void;
+}) {
+  const shown = other.draft ?? other.current;
+  return (
+    <section
+      aria-labelledby="supplier-risk-other-version"
+      className="border-border bg-sunk space-y-3 rounded-lg border p-4"
+      data-slot="supplier-risk-other-version"
+    >
+      <h3 id="supplier-risk-other-version" className="text-foreground text-[14px] font-medium">
+        The other version
+      </h3>
+      <p className="text-ink-2 text-[13px]">
+        {other.draft ? (
+          <>
+            A draft (version {other.draft.version}) saved{' '}
+            <SupplierRiskTime at={other.draft.updatedAt} timeZone={timeZone} clock />.
+          </>
+        ) : other.current ? (
+          <>
+            No draft is open now: version {other.current.version} was finished
+            {other.current.reviewedAt ? (
+              <>
+                {' '}
+                <SupplierRiskTime at={other.current.reviewedAt} timeZone={timeZone} clock />
+              </>
+            ) : null}
+            {other.current.reviewerName ? (
+              <>
+                {' by '}
+                <bdi>{other.current.reviewerName}</bdi>
+              </>
+            ) : null}
+            {other.current.result
+              ? ` (${supplierRiskResultLabel(other.current.result, other.current.overridden)})`
+              : ''}
+            .
+          </>
+        ) : (
+          'No draft is open now, and this supplier has no finished review.'
+        )}{' '}
+        Your answers above are unchanged.
+      </p>
+      {shown ? (
+        <SupplierRiskAnswersList
+          title="Their answers"
+          dataLevel={shown.dataLevel}
+          answers={shown.answers}
+        />
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" onClick={onKeepMine}>
+          Keep my answers
+        </Button>
+        {shown ? (
+          <Button type="button" variant="outline" onClick={onUseTheirs}>
+            Use their answers
+          </Button>
+        ) : null}
+      </div>
+    </section>
   );
 }

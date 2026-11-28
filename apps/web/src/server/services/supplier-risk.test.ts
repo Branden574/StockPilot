@@ -223,6 +223,7 @@ const EVERY_METHOD: Array<[string, (s: SupplierRiskService) => Promise<unknown>]
   ['history', (s) => s.history(SUPPLIER)],
   ['review', (s) => s.review(REVIEW)],
   ['listEvents', (s) => s.listEvents(SUPPLIER, null)],
+  ['latest', (s) => s.latest(SUPPLIER)],
   ['ownersAndAdmins', (s) => s.ownersAndAdmins()],
   ['seat', (s) => s.seat()],
   ['saveDraft', (s) => s.saveDraft({ supplierId: SUPPLIER, dataLevel: 'staff', answers: {} })],
@@ -1011,5 +1012,107 @@ describe('the register past the API row cap: every page is read, never cut silen
           : served(call),
     });
     expect(await svc.register()).toEqual({ state: 'could_not_check' });
+  });
+});
+
+describe('the newest version, for a finish another admin got to first (S2)', () => {
+  const draftReview = {
+    id: DRAFT,
+    supplier_id: SUPPLIER,
+    supplier_name: 'Example Supply Co',
+    version: 2,
+    status: 'draft',
+    is_current: false,
+    data_level: 'staff',
+    answers: { data_listed: { answer: 'no', note: 'Their note.' } },
+    updated_at: '2026-11-27T11:00:00+00:00',
+    items: [],
+  };
+  const currentReview = {
+    id: REVIEW,
+    supplier_id: SUPPLIER,
+    supplier_name: 'Example Supply Co',
+    version: 1,
+    status: 'final',
+    is_current: true,
+    data_level: 'staff',
+    answers: { data_listed: { answer: 'yes' } },
+    result: 'approve',
+    computed_result: 'approve',
+    reviewer_name: 'Blake Example',
+    reviewed_at: '2026-11-20T10:00:00+00:00',
+    items: [],
+  };
+  const reviews = (call: MockCall): QueryResult => {
+    const id = (call.args[0]?.[0] as { p_review_id: string }).p_review_id;
+    return { data: id === DRAFT ? draftReview : currentReview, error: null };
+  };
+
+  it('the open draft (when it was saved, its answers) and the current review, read in this organization', async () => {
+    const { stub, svc } = setup({
+      'rpc:supplier_risk_history': historyWithDraft('2026-11-27T11:00:00+00:00'),
+      'rpc:supplier_risk_review': reviews,
+    });
+    expect(await svc.latest(SUPPLIER)).toEqual({
+      state: 'ok',
+      value: {
+        draft: {
+          reviewId: DRAFT,
+          version: 2,
+          updatedAt: '2026-11-27T11:00:00+00:00',
+          dataLevel: 'staff',
+          answers: { data_listed: { answer: 'no', note: 'Their note.' } },
+        },
+        current: {
+          reviewId: REVIEW,
+          version: 1,
+          reviewedAt: '2026-11-20T10:00:00+00:00',
+          reviewerName: 'Blake Example',
+          dataLevel: 'staff',
+          answers: { data_listed: { answer: 'yes' } },
+          result: 'approve',
+          overridden: false,
+        },
+      },
+    });
+    for (const c of stub.rpcCalls) expect((c.args as { p_organization_id: string }).p_organization_id).toBe(ORG);
+  });
+
+  it('no draft any more (discarded or finished elsewhere): only the current review', async () => {
+    const { svc } = setup({
+      'rpc:supplier_risk_history': {
+        data: [{ review_id: REVIEW, version: 1, status: 'final', is_current: true }],
+        error: null,
+      },
+      'rpc:supplier_risk_review': reviews,
+    });
+    const read = await svc.latest(SUPPLIER);
+    expect(read.state === 'ok' && read.value.draft).toBeNull();
+    expect(read.state === 'ok' && read.value.current?.version).toBe(1);
+  });
+
+  it('a version that could not be read is could_not_check, never "no other version"', async () => {
+    const { svc } = setup({
+      'rpc:supplier_risk_history': historyWithDraft(),
+      'rpc:supplier_risk_review': { data: null, error: { message: 'x', code: '57014' } },
+    });
+    expect(await svc.latest(SUPPLIER)).toEqual({ state: 'could_not_check' });
+  });
+
+  it('a support seat may read it (a read); nothing is written', async () => {
+    const { stub, svc } = setup(
+      {
+        'rpc:supplier_risk_history': historyWithDraft(),
+        'rpc:supplier_risk_review': reviews,
+      },
+      {},
+      memberRows('2026-11-27T12:00:00Z'),
+    );
+    expect((await svc.latest(SUPPLIER)).state).toBe('ok');
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual([
+      'supplier_risk_history',
+      'supplier_risk_review',
+      'supplier_risk_review',
+    ]);
   });
 });

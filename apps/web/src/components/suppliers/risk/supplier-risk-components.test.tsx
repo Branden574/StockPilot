@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
   finish: vi.fn(),
   discard: vi.fn(),
   update: vi.fn(),
+  latest: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: h.refresh }) }));
@@ -58,6 +59,7 @@ vi.mock('@/server/actions/supplier-risk', () => ({
   finishSupplierRiskReviewAction: (...a: unknown[]) => h.finish(...a),
   discardSupplierRiskDraftAction: (...a: unknown[]) => h.discard(...a),
   updateSupplierRiskItemAction: (...a: unknown[]) => h.update(...a),
+  loadSupplierRiskLatestAction: (...a: unknown[]) => h.latest(...a),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -81,7 +83,7 @@ function Controlled({ kind, start = '' }: { kind: 'reason' | 'note'; start?: str
 }
 
 beforeEach(() => {
-  for (const f of [h.refresh, h.save, h.finish, h.discard, h.update]) f.mockReset();
+  for (const f of [h.refresh, h.save, h.finish, h.discard, h.update, h.latest]) f.mockReset();
   h.save.mockResolvedValue({ ok: true, data: { reviewId: 'r', updatedAt: null } });
 });
 
@@ -161,6 +163,7 @@ function formProps(over: Partial<React.ComponentProps<typeof SupplierRiskReviewF
     canWrite: true,
     canDiscard: false,
     people: [{ userId: ME, name: 'Avery Example' }],
+    timeZone: 'America/Los_Angeles',
     ...over,
   };
 }
@@ -690,5 +693,155 @@ describe('a result an admin set is marked where it is shown (S6)', () => {
     expect(container.querySelector('[data-slot="supplier-risk-result"]')?.textContent).toBe(
       'More information needed (set by an admin)',
     );
+  });
+});
+
+describe('the finish panel never loses typed answers (S2)', () => {
+  const DRAFT_AT = '2026-11-27T10:00:00.123456+00:00';
+  const asked = vendorRiskQuestionsFor('staff');
+  const first = asked[0]!;
+  function staffAllYes(): VendorRiskAnswers {
+    const out: VendorRiskAnswers = {};
+    for (const q of asked) out[q.key] = q.date ? { answer: 'yes', date: '2026-10-01' } : { answer: 'yes' };
+    return out;
+  }
+  const startForm = () =>
+    render(
+      <SupplierRiskReviewForm
+        {...formProps({
+          start: { dataLevel: 'staff', answers: staffAllYes(), from: 'draft' },
+          draftUpdatedAt: DRAFT_AT,
+        })}
+      />,
+    );
+  const answerNo = (key: string) =>
+    fireEvent.click(
+      within(document.querySelector(`[data-question="${key}"]`) as HTMLElement).getByRole('radio', {
+        name: 'No',
+      }),
+    );
+  const pressFinish = () => fireEvent.click(screen.getByRole('button', { name: 'Finish the review' }));
+
+  it('an answer changed with the panel open: the result is worked out again and confirmed, never "reload"', async () => {
+    h.finish.mockResolvedValue({ ok: true, data: { result: 'approve_with_conditions' } });
+    startForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Finish the review…' }));
+    answerNo(first.key);
+    pressFinish();
+    // Not sent: the person is asked to look at the new result first.
+    expect(h.finish).not.toHaveBeenCalled();
+    expect(screen.queryByText(/do not match the answers/)).toBeNull();
+    const panel = document.querySelector('[data-slot="supplier-risk-finish"]') as HTMLElement;
+    expect(within(panel).getByRole('status').textContent).toMatch(
+      /The answers changed after you opened this, so the result was worked out again: the rules now give Approve with conditions \(it was Approve\)\./,
+    );
+    // The new gap's item is in the panel with the rules' words.
+    expect(panel.querySelector(`[data-item="${first.key}"]`)).not.toBeNull();
+    pressFinish();
+    await vi.waitFor(() => expect(h.finish).toHaveBeenCalledTimes(1));
+    const sent = h.finish.mock.calls[0]?.[0] as {
+      answers: VendorRiskAnswers;
+      items: Array<{ questionKey: string; finding: string }>;
+      draftUpdatedAt: string;
+    };
+    expect(sent.answers[first.key]?.answer).toBe('no');
+    expect(sent.items.map((i) => i.questionKey)).toEqual([first.key]);
+    expect(sent.items[0]?.finding.length).toBeGreaterThan(0);
+    expect(sent.draftUpdatedAt).toBe(DRAFT_AT);
+  });
+
+  it('a finish refused because another admin saved the draft keeps the answers on screen and offers the other version', async () => {
+    h.finish.mockResolvedValue({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'This draft was changed in another window, or by another admin, after you opened it.',
+        details: { reason: 'draft_moved' },
+      },
+    });
+    const theirs: VendorRiskAnswers = { ...staffAllYes(), [asked[1]!.key]: { answer: 'not_shown', note: 'Their <b>note</b>' } };
+    h.latest.mockResolvedValue({
+      ok: true,
+      data: {
+        draft: {
+          reviewId: 'e1e1e1e1-0000-4000-8000-000000000009',
+          version: 5,
+          updatedAt: '2026-11-27T19:30:00+00:00',
+          dataLevel: 'staff',
+          answers: theirs,
+        },
+        current: null,
+      },
+    });
+    startForm();
+    answerNo(first.key);
+    fireEvent.click(screen.getByRole('button', { name: 'Finish the review…' }));
+    pressFinish();
+    await vi.waitFor(() => expect(h.finish).toHaveBeenCalledTimes(1));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/another admin/);
+    // Nothing reloaded: the typed answer is still on screen.
+    expect(h.refresh).not.toHaveBeenCalled();
+    const mine = within(document.querySelector(`[data-question="${first.key}"]`) as HTMLElement);
+    expect((mine.getByRole('radio', { name: 'No' }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show the other version' }));
+    await vi.waitFor(() => expect(h.latest).toHaveBeenCalledWith({ supplierId: SUPPLIER }));
+    const other = await vi.waitFor(() => {
+      const el = document.querySelector('[data-slot="supplier-risk-other-version"]');
+      if (!el) throw new Error('not yet');
+      return el as HTMLElement;
+    });
+    expect(other.textContent).toContain('November 27, 2026, 11:30 AM PST');
+    expect(other.textContent).toContain('Their <b>note</b>');
+    expect(other.querySelector('b')).toBeNull();
+    // Still mine beside it.
+    expect((mine.getByRole('radio', { name: 'No' }) as HTMLInputElement).checked).toBe(true);
+
+    // Keep mine: the next finish names the other draft, so it replaces it on purpose.
+    h.finish.mockResolvedValue({ ok: true, data: { result: 'approve_with_conditions' } });
+    fireEvent.click(within(other).getByRole('button', { name: 'Keep my answers' }));
+    pressFinish();
+    await vi.waitFor(() => expect(h.finish).toHaveBeenCalledTimes(2));
+    const second = h.finish.mock.calls[1]?.[0] as { draftUpdatedAt: string; answers: VendorRiskAnswers };
+    expect(second.draftUpdatedAt).toBe('2026-11-27T19:30:00+00:00');
+    expect(second.answers[first.key]?.answer).toBe('no');
+  });
+
+  it('use their answers: the form takes them, and a finish then confirms the result they give', async () => {
+    h.finish.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: 'moved', details: { reason: 'draft_moved' } },
+    });
+    const theirs: VendorRiskAnswers = { ...staffAllYes(), [asked[1]!.key]: { answer: 'not_shown' } };
+    h.latest.mockResolvedValue({
+      ok: true,
+      data: {
+        draft: {
+          reviewId: 'e1e1e1e1-0000-4000-8000-000000000009',
+          version: 5,
+          updatedAt: '2026-11-27T19:30:00+00:00',
+          dataLevel: 'staff',
+          answers: theirs,
+        },
+        current: null,
+      },
+    });
+    startForm();
+    fireEvent.click(screen.getByRole('button', { name: 'Finish the review…' }));
+    pressFinish();
+    await vi.waitFor(() => expect(h.finish).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show the other version' }));
+    const other = await vi.waitFor(() => {
+      const el = document.querySelector('[data-slot="supplier-risk-other-version"]');
+      if (!el) throw new Error('not yet');
+      return el as HTMLElement;
+    });
+    fireEvent.click(within(other).getByRole('button', { name: 'Use their answers' }));
+    const theirQuestion = within(document.querySelector(`[data-question="${asked[1]!.key}"]`) as HTMLElement);
+    expect((theirQuestion.getByRole('radio', { name: 'Not shown to us' }) as HTMLInputElement).checked).toBe(true);
+    pressFinish();
+    // Their answers give another result: confirmed first, never sent unseen.
+    expect(h.finish).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('status').some((n) => /The answers changed after you opened this/.test(n.textContent ?? ''))).toBe(true);
   });
 });

@@ -15,8 +15,9 @@ import {
 } from '@/test/supabase-mock';
 
 /**
- * Security invariant: the four vendor review writes
- * (server/actions/supplier-risk.ts).
+ * Security invariant: the four vendor review writes and the one read of the
+ * newest versions (server/actions/supplier-risk.ts); the read is gated the
+ * same way and answers "could not check", never "no other version".
  *   - Each argument is checked with zod before anything is asked: a refused
  *     one answers one fixed sentence, and no context is built and nothing is
  *     read or sent.
@@ -48,6 +49,7 @@ vi.mock('@/server/services/audit', () => ({ audit: vi.fn(async () => undefined) 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 
 import {
+  SUPPLIER_RISK_COULD_NOT_CHECK,
   SUPPLIER_RISK_FORBIDDEN,
   SUPPLIER_RISK_INVALID_REQUEST,
   SUPPLIER_RISK_NOTHING_SAVED,
@@ -56,6 +58,7 @@ import {
 import {
   discardSupplierRiskDraftAction,
   finishSupplierRiskReviewAction,
+  loadSupplierRiskLatestAction,
   saveSupplierRiskDraftAction,
   updateSupplierRiskItemAction,
 } from './supplier-risk';
@@ -290,5 +293,88 @@ describe('a write that went through', () => {
       '/dashboard/suppliers/risk',
       '/dashboard/suppliers',
     ]);
+  });
+});
+
+describe('the read of the newest version (the finish panel, when another admin got there first)', () => {
+  it('zod first: refused shapes answer one fixed sentence, no context built', async () => {
+    const stub = useContext();
+    for (const input of [
+      undefined,
+      'x',
+      [],
+      { supplierId: 'not-a-uuid' },
+      { supplierId: SUPPLIER, extra: 1 },
+      { supplierId: SUPPLIER, organizationId: ORG },
+    ]) {
+      expect(await loadSupplierRiskLatestAction(input)).toEqual({
+        ok: false,
+        error: { code: 'validation_error', message: SUPPLIER_RISK_INVALID_REQUEST },
+      });
+    }
+    expect(h.ctxCalls).toBe(0);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  for (const role of ['manager', 'staff', 'viewer'] as const) {
+    it(`a ${role} is refused, nothing read`, async () => {
+      const stub = useContext({}, { role });
+      expect(await loadSupplierRiskLatestAction({ supplierId: SUPPLIER })).toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: SUPPLIER_RISK_FORBIDDEN },
+      });
+      expect(stub.rpcCalls).toEqual([]);
+    });
+  }
+
+  it('a version that could not be read says so: never "no other version"', async () => {
+    useContext({
+      'rpc:supplier_risk_history': { data: null, error: { message: 'x', code: 'PGRST202' } },
+    });
+    expect(await loadSupplierRiskLatestAction({ supplierId: SUPPLIER })).toEqual({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: SUPPLIER_RISK_COULD_NOT_CHECK,
+        details: { reason: 'could_not_check', retryable: true },
+      },
+    });
+  });
+
+  it('an owner or admin gets the open draft and the current review; nothing is revalidated', async () => {
+    useContext({
+      'rpc:supplier_risk_history': {
+        data: [
+          {
+            review_id: REVIEW,
+            version: 2,
+            status: 'draft',
+            is_current: false,
+            updated_at: '2026-11-27T11:00:00+00:00',
+          },
+        ],
+        error: null,
+      },
+      'rpc:supplier_risk_review': {
+        data: {
+          id: REVIEW,
+          supplier_id: SUPPLIER,
+          version: 2,
+          status: 'draft',
+          is_current: false,
+          data_level: 'none',
+          answers: {},
+          updated_at: '2026-11-27T11:00:00+00:00',
+          items: [],
+        },
+        error: null,
+      },
+    });
+    const res = await loadSupplierRiskLatestAction({ supplierId: SUPPLIER });
+    expect(res).toMatchObject({
+      ok: true,
+      data: { draft: { reviewId: REVIEW, updatedAt: '2026-11-27T11:00:00+00:00' }, current: null },
+    });
+    expect(h.revalidate).not.toHaveBeenCalled();
   });
 });

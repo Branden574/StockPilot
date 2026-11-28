@@ -11,15 +11,18 @@ import type { SupplierRiskOutcome } from './step-up';
 /**
  * A refused or failed write, said in words (role="alert", so a screen reader
  * hears it when it appears): the database's refusal in core's words, a link
- * to set up the authenticator when that is owed, and Reload when the draft
- * moved since the page read it.
+ * to set up the authenticator when that is owed, and, when the draft moved
+ * since the page read it, a way to show the other version beside the answers
+ * (never a reload, which would lose them).
  */
 export function SupplierRiskOutcomeNote({
   outcome,
-  onReload,
+  onShowOther,
+  showingOther = false,
 }: {
   outcome: SupplierRiskOutcome | null;
-  onReload?: () => void;
+  onShowOther?: () => void;
+  showingOther?: boolean;
 }) {
   if (!outcome) return null;
   return (
@@ -33,9 +36,9 @@ export function SupplierRiskOutcomeNote({
           <Link href={AUTHENTICATOR_SET_UP_URL}>Set up a second step</Link>
         </Button>
       ) : null}
-      {outcome.reload && onReload ? (
-        <Button size="sm" variant="outline" onClick={onReload}>
-          Reload
+      {outcome.conflict && onShowOther ? (
+        <Button size="sm" variant="outline" onClick={onShowOther} disabled={showingOther}>
+          {showingOther ? 'Reading the other version…' : 'Show the other version'}
         </Button>
       ) : null}
     </div>

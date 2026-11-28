@@ -23,8 +23,11 @@ export interface SupplierRiskOutcome {
   text: string;
   /** The authenticator must be set up first: the page links to set-up. */
   setUp: boolean;
-  /** The draft moved since the page read it: the page offers a reload. */
-  reload: boolean;
+  /**
+   * The draft moved since the page read it (another admin, another window):
+   * the form keeps the answers and offers the other version beside them.
+   */
+  conflict: boolean;
 }
 
 export function supplierRiskOutcomeOf(error: {
@@ -35,6 +38,6 @@ export function supplierRiskOutcomeOf(error: {
   return {
     text: error.message,
     setUp: reason === 'mfa_required',
-    reload: reason === 'draft_moved',
+    conflict: reason === 'draft_moved',
   };
 }

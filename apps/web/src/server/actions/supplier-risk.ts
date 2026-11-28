@@ -4,21 +4,25 @@ import { revalidatePath } from 'next/cache';
 
 import { actionErrorResult } from '@/server/lib/action-error-result';
 import {
+  SUPPLIER_RISK_COULD_NOT_CHECK,
   SUPPLIER_RISK_INVALID_REQUEST,
   SupplierRiskService,
   supplierRiskDiscardSchema,
   supplierRiskDraftSchema,
   supplierRiskFinishSchema,
   supplierRiskItemUpdateSchema,
+  supplierRiskLatestSchema,
   type SupplierRiskFinishResult,
   type SupplierRiskItem,
+  type SupplierRiskLatest,
 } from '@/server/services/supplier-risk';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 /**
  * Vendor risk reviews (part 7 of the security tools): the four writes an owner
- * or admin makes on /dashboard/suppliers/[id]/risk. Each argument is checked
+ * or admin makes on /dashboard/suppliers/[id]/risk, and one read (the newest
+ * versions, for a finish another admin got to first). Each argument is checked
  * with zod before anything is asked (a refused one answers validation_error
  * and nothing runs); then SupplierRiskService holds the rule, in the order the
  * module, the authenticator step, the role, the support seat, core's checks,
@@ -102,5 +106,31 @@ export async function updateSupplierRiskItemAction(
     return ok({ item });
   } catch (e) {
     return actionErrorResult(e, 'actions.supplier_risk.item_update');
+  }
+}
+
+/**
+ * The open draft and the current review as they are now, for the review form
+ * to show beside the person's own answers when a finish was refused because
+ * the draft moved (another admin, or another window). A read: nothing is
+ * written or revalidated. Could not check is said, never "no other version".
+ */
+export async function loadSupplierRiskLatestAction(
+  input: unknown,
+): Promise<ActionResult<SupplierRiskLatest>> {
+  const parsed = supplierRiskLatestSchema.safeParse(input);
+  if (!parsed.success) return invalid();
+  try {
+    const svc = await SupplierRiskService.forCurrentUser();
+    const read = await svc.latest(parsed.data.supplierId);
+    if (read.state !== 'ok') {
+      return err('conflict', SUPPLIER_RISK_COULD_NOT_CHECK, {
+        reason: 'could_not_check',
+        retryable: true,
+      });
+    }
+    return ok(read.value);
+  } catch (e) {
+    return actionErrorResult(e, 'actions.supplier_risk.latest');
   }
 }
