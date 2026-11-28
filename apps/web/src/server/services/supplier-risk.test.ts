@@ -34,8 +34,8 @@ import {
  *     a write to a missing function says nothing was saved.
  *   - Every refusal of 0481 maps to core's words by the hint alone; the
  *     error's own text is never read.
- *   - The audit log gets events with ids, counts and lengths: never an
- *     answer, a note, a finding, an action or a reason.
+ *   - Nothing is written to the shared audit log (a manager reads it): the
+ *     record is the review tables, read by owners and admins only.
  */
 
 const h = vi.hoisted(() => ({
@@ -681,55 +681,34 @@ describe('finish: the draft must be the one the page read', () => {
   });
 });
 
-describe('the audit log: ids, counts and lengths, never the words', () => {
-  const allText = () => JSON.stringify(h.audit.mock.calls);
-
-  it('a draft saved: the review, the version, the level and how many answered; no note', async () => {
+describe('the shared audit log: nothing is written to it', () => {
+  // audit_logs goes to every holder of activity_logs:read (a manager by
+  // default), and these reviews are for owners and admins only: no write
+  // logs a row (supplier-risk.audit-log.test.ts runs the real writer).
+  it('a draft saved, a review finished with a result set, an item changed, a risk accepted, a draft discarded: no audit call', async () => {
     const { svc } = setup({
       'rpc:supplier_risk_draft_save': {
         data: { review_id: DRAFT, version: 2, updated_at: DRAFT_AT },
         error: null,
       },
+      'rpc:supplier_risk_history': historyWithDraft(),
+      'rpc:supplier_risk_finalise': finaliseAnswer({
+        override_result: 'approve',
+        result: 'approve',
+      }),
+      'rpc:supplier_risk_review': reviewWithItem(),
+      'rpc:supplier_risk_item_update': itemAnswer(),
+      'rpc:supplier_risk_draft_discard': { data: true, error: null },
     });
     await svc.saveDraft({
       supplierId: SUPPLIER,
       dataLevel: 'staff',
       answers: { data_listed: { answer: 'yes', note: 'Private note about Example Supply Co' } },
     });
-    expect(h.audit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: 'supplier.risk_draft_saved',
-        entityId: SUPPLIER,
-        extra: { review_id: DRAFT, version: 2, data_level: 'staff', answered: 1 },
-      }),
-      expect.anything(),
+    const finished = await svc.finish(
+      finishInput({ overrideResult: 'approve', overrideReason: REASON }),
     );
-    expect(allText()).not.toContain('Private note');
-  });
-
-  it('an override: finished and overridden, the reason by its length only', async () => {
-    const { stub, svc } = setup({
-      'rpc:supplier_risk_history': historyWithDraft(),
-      'rpc:supplier_risk_finalise': finaliseAnswer({
-        override_result: 'approve',
-        result: 'approve',
-      }),
-    });
-    await svc.finish(finishInput({ overrideResult: 'approve', overrideReason: REASON }));
-    const events = h.audit.mock.calls.map((c) => (c[0] as { event: string }).event);
-    expect(events).toEqual(['supplier.risk_review_finished', 'supplier.risk_review_overridden']);
-    expect(h.audit.mock.calls[1]?.[0]).toMatchObject({
-      extra: { reason_length: Array.from(REASON).length, override_result: 'approve' },
-    });
-    expect(allText()).not.toContain('auditor');
-    expect((stub.rpcCalls[1]?.args as Record<string, unknown>).p_override_reason).toBe(REASON);
-  });
-
-  it('a risk accepted: the item changed (before and after) and accepted, the reason by its length only', async () => {
-    const { svc } = setup({
-      'rpc:supplier_risk_review': reviewWithItem(),
-      'rpc:supplier_risk_item_update': itemAnswer(),
-    });
+    expect(finished).toMatchObject({ result: 'approve', overridden: true });
     await svc.updateItem({
       reviewId: REVIEW,
       itemId: ITEM,
@@ -739,30 +718,8 @@ describe('the audit log: ids, counts and lengths, never the words', () => {
       action: null,
       reason: REASON,
     });
-    expect(h.audit.mock.calls.map((c) => (c[0] as { event: string }).event)).toEqual([
-      'supplier.risk_item_changed',
-      'supplier.risk_accepted',
-    ]);
-    expect(h.audit.mock.calls[0]?.[0]).toMatchObject({
-      before: { status: 'open', owner_user_id: ME, due_on: '2026-12-31' },
-      after: { status: 'accepted', owner_user_id: OTHER_ADMIN, due_on: '2027-01-31' },
-    });
-    expect(h.audit.mock.calls[1]?.[0]).toMatchObject({
-      extra: { reason_length: Array.from(REASON).length, severity: 'high' },
-    });
-    expect(allText()).not.toContain('auditor');
-  });
-
-  it('a draft discarded is logged only when there was one', async () => {
-    const none = setup({ 'rpc:supplier_risk_draft_discard': { data: false, error: null } });
-    expect(await none.svc.discardDraft(SUPPLIER)).toBe(false);
+    expect(await svc.discardDraft(SUPPLIER)).toBe(true);
     expect(h.audit).not.toHaveBeenCalled();
-    const one = setup({ 'rpc:supplier_risk_draft_discard': { data: true, error: null } });
-    expect(await one.svc.discardDraft(SUPPLIER)).toBe(true);
-    expect(h.audit).toHaveBeenCalledWith(
-      expect.objectContaining({ event: 'supplier.risk_draft_discarded' }),
-      expect.anything(),
-    );
   });
 });
 

@@ -2797,8 +2797,10 @@ WEB_TESTS=(
   # with the context's own organization. A support (act-as) seat reads and
   # never writes, and a seat that could not be read writes nothing. A missing
   # function or a failed read is "could not check", never "not reviewed" or
-  # an empty register. Refusals map to core's words by the hint alone. The
-  # audit log keeps ids, counts and a reason's length, never the words. Every
+  # an empty register. Refusals map to core's words by the hint alone.
+  # Nothing about a review is written to the shared audit log (every holder
+  # of activity_logs:read, a manager by default, reads all of it): a manager's
+  # read of the log after every admin write shows no review. Every
   # action checks its argument with zod before anything is asked. The pages
   # give Page not found to anyone else and to another organization's
   # supplier, no write control to a seat that may not write, names in <bdi>
@@ -2809,6 +2811,7 @@ WEB_TESTS=(
   # claims before it sends, confirms after, retries the confirmation and
   # never the send, and sends each reminder once across overlapping runs.
   src/server/services/supplier-risk.test.ts
+  src/server/services/supplier-risk.audit-log.test.ts
   src/server/actions/supplier-risk.test.ts
   'src/app/(dashboard)/dashboard/suppliers/risk/page.test.tsx'
   'src/app/(dashboard)/dashboard/suppliers/[id]/risk/page.test.tsx'

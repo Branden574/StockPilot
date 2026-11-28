@@ -43,7 +43,6 @@ import {
 
 import { reportError } from '@/lib/error-reporter';
 
-import { audit } from './audit';
 import {
   assertModuleEnabled,
   mfaGateError,
@@ -83,12 +82,17 @@ import {
  * and a membership that could not be read refuses too (nothing is sent). The
  * database refuses such a seat again (42501 supplier_risk_act_as_read_only).
  *
- * THE AUDIT LOG gets an entry for a draft saved, a review finished, a result
- * overridden, a draft discarded, an item changed and a risk accepted. Never
- * an answer, a note, a finding, an action or a reason: audit_logs is read by
- * anyone holding activity_logs:read, which can be given to a member who is
- * not an admin (CONTRACT.md 6.4). A reason is recorded by its length only.
- * Who changed an item and why a risk was accepted are on the item itself.
+ * NOTHING GOES TO THE SHARED AUDIT LOG. audit_logs has one row policy and no
+ * rule by event: every row of the organization is read by every holder of
+ * activity_logs:read (migration 0279), a manager by default and any role by
+ * grant, while the reviews are for owners and admins only. Even ids and a
+ * version would tell a manager that a review exists and when it changed. So
+ * the record is the review tables themselves, read through 0481's admin-only
+ * functions: each version keeps who reviewed it and when, an override keeps
+ * the result the rules gave and the reason, each item keeps who last changed
+ * it and when, and a risk accepted keeps who accepted it and why. (The
+ * database keeps only an item's LAST change: QUESTIONS.md, a follow-up.)
+ * supplier-risk.audit-log.test.ts fails when a write logs a row again.
  */
 
 /* ─────────────────────────────── words ─────────────────────────────── */
@@ -868,22 +872,7 @@ export class SupplierRiskService {
         'supplier_risk_draft_save answered without a review',
       );
     }
-    const version = intOf(row.version);
-    void audit(
-      {
-        event: 'supplier.risk_draft_saved',
-        entityType: 'supplier',
-        entityId: input.supplierId,
-        extra: {
-          review_id: reviewId,
-          version,
-          data_level: input.dataLevel,
-          answered: Object.keys(answers).length,
-        },
-      },
-      this.ctx,
-    );
-    return { reviewId, version, updatedAt: text(row.updated_at) };
+    return { reviewId, version: intOf(row.version), updatedAt: text(row.updated_at) };
   }
 
   /**
@@ -954,43 +943,6 @@ export class SupplierRiskService {
     const overrideResult = oneOf(VENDOR_RISK_RESULTS, row.override_result);
     const overridden = overrideResult !== null;
     const items = intOf(row.items) ?? input.items.length;
-    void audit(
-      {
-        event: 'supplier.risk_review_finished',
-        entityType: 'supplier',
-        entityId: input.supplierId,
-        extra: {
-          review_id: reviewId,
-          version,
-          superseded_review_id: text(row.superseded_review_id),
-          data_level: input.dataLevel,
-          computed_result: computedResult,
-          result,
-          overridden,
-          items,
-        },
-      },
-      this.ctx,
-    );
-    if (overridden) {
-      void audit(
-        {
-          event: 'supplier.risk_review_overridden',
-          entityType: 'supplier',
-          entityId: input.supplierId,
-          extra: {
-            review_id: reviewId,
-            version,
-            computed_result: computedResult,
-            override_result: overrideResult,
-            // The reason is on the review, read by owners and admins only; the
-            // log keeps its length, never its words.
-            reason_length: Array.from(input.overrideReason ?? '').length,
-          },
-        },
-        this.ctx,
-      );
-    }
     return {
       reviewId,
       version,
@@ -1014,20 +966,14 @@ export class SupplierRiskService {
         p_supplier_id: supplierId,
       }),
     );
-    const discarded = data === true;
-    if (discarded) {
-      void audit(
-        { event: 'supplier.risk_draft_discarded', entityType: 'supplier', entityId: supplierId },
-        this.ctx,
-      );
-    }
-    return discarded;
+    return data === true;
   }
 
   /**
    * Change one item of the current review: its status, owner, due date,
    * action, and (for Risk accepted) why. The item is read first, in this
-   * organization, for the audit entry's before.
+   * organization: one that is not on a current review of it, or a first
+   * acceptance with no reason, is refused before anything is sent.
    */
   async updateItem(input: SupplierRiskItemUpdateInput): Promise<SupplierRiskItem> {
     assertMayUseSupplierRisk(this.ctx);
@@ -1074,41 +1020,6 @@ export class SupplierRiskService {
       throw new ServiceError(
         'internal_error',
         'supplier_risk_item_update answered without the item',
-      );
-    }
-    void audit(
-      {
-        event: 'supplier.risk_item_changed',
-        entityType: 'supplier',
-        entityId: current.value.supplierId,
-        before: { status: before.status, owner_user_id: before.ownerUserId, due_on: before.dueOn },
-        after: { status: after.status, owner_user_id: after.ownerUserId, due_on: after.dueOn },
-        extra: {
-          review_id: input.reviewId,
-          item_id: input.itemId,
-          question_key: before.questionKey,
-          action_changed: input.action !== null && input.action !== before.action,
-        },
-      },
-      this.ctx,
-    );
-    if (input.status === 'accepted' && input.reason !== null) {
-      void audit(
-        {
-          event: 'supplier.risk_accepted',
-          entityType: 'supplier',
-          entityId: current.value.supplierId,
-          extra: {
-            review_id: input.reviewId,
-            item_id: input.itemId,
-            question_key: before.questionKey,
-            severity: before.severity,
-            // Who accepted it and why are on the item; the log keeps the
-            // reason's length, never its words.
-            reason_length: Array.from(input.reason).length,
-          },
-        },
-        this.ctx,
       );
     }
     return after;
