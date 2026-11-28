@@ -166,8 +166,8 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whats-new-upload-checks (2026-11-28; was: '2026-11-23T06:30:00Z'): the upload
     // checks release below is dated 2026-11-28T06:57:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-vendor-risk (2026-11-28; was: '2026-11-28T06:57:00Z'): the vendor
-    // risk reviews release below is dated 2026-11-28T12:30:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-28T12:30:00Z',
+    // risk reviews release below is dated 2026-11-28T11:30:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-28T11:30:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -269,7 +269,7 @@ export const RELEASES: Release[] = [
     title: 'Vendor risk reviews for owners and admins',
     summary:
       'Owners and admins can now review each supplier as a vendor: what they hold of your data, what they have shown you, a result with its reasons, follow-up items with an owner and a due date, and a reminder when the next review is due. The Suppliers page has a Risk column, and a Vendor risk register lists every supplier in one place.',
-    publishedAt: '2026-11-28T12:30:00Z',
+    publishedAt: '2026-11-28T11:30:00Z',
     entries: [
       {
         id: 'vendor-risk-reviews',

@@ -79,8 +79,8 @@ const vendorRead = {
   release_id: VENDOR_ID,
   revision: 1,
   dismissed_at: null,
-  opened_at: '2026-11-28T12:31:00Z',
-  read_at: '2026-11-28T12:31:00Z',
+  opened_at: '2026-11-28T11:36:00Z',
+  read_at: '2026-11-28T11:36:00Z',
 };
 const uploadRead = {
   release_id: UPLOAD_ID,
@@ -94,7 +94,7 @@ const PHONE_SET_UP_ID = 'phone-authenticator-set-up-2026-11';
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_AT = '2026-11-21T18:19:00Z'): the Liquid Glass draft placeholder is now the minute of the Blocked activity current password and set-up code release, published later, above the Blocked activity release.
 // Re-pinned by docs/whats-new-sign-in-alerts-and-reader (2026-11-22; was: BLOCKED_CURRENT_AT = '2026-11-22T05:42:00Z'): the Liquid Glass draft placeholder is now the minute of the sign-in alerts release, published later, above the Blocked activity current password and set-up code release.
 // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: SIGNIN_AT = '2026-11-22T06:08:00Z'): the Liquid Glass draft placeholder is now the minute of the phone large text release, published later, above this one.
-const VENDOR_AT = '2026-11-28T12:30:00Z';
+const VENDOR_AT = '2026-11-28T11:30:00Z';
 const phoneSetUpRead = {
   release_id: PHONE_SET_UP_ID,
   revision: 1,

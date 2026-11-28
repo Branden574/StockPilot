@@ -127,8 +127,8 @@ const vendorRead = {
   release_id: VENDOR_ID,
   revision: 1,
   dismissed_at: null,
-  opened_at: '2026-11-28T12:31:00Z',
-  read_at: '2026-11-28T12:31:00Z',
+  opened_at: '2026-11-28T11:36:00Z',
+  read_at: '2026-11-28T11:36:00Z',
 };
 const uploadRead = {
   release_id: UPLOAD_ID,
