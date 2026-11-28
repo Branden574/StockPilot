@@ -1192,6 +1192,38 @@ PGTAP_TESTS=(
   # shared audit log, where nothing about vendor risk is written). The
   # two-session checks are scripts/db-concurrency/0481_supplier_risk_reminder_race.sh.
   supabase/tests/0481_supplier_risk_reviews.test.sql
+  # Policy sign-off (0482): four tables and thirteen functions. RLS on with no
+  # policy; anon and authenticated hold nothing on the tables and service_role
+  # SELECT only; authenticated EXECUTE on the twelve member and admin
+  # functions, service_role on the reminder claim only, nobody on the helpers
+  # and trigger functions, PUBLIC nothing; every authenticated function gates
+  # in its body (INV-25) and the claim refuses authenticated even if granted.
+  # A draft is read and written by the organization's owners and admins
+  # only; the first publish is a version; a correction asks nobody again and a
+  # new version asks every current member. A published version never changes
+  # and is never deleted, by any API role or the tables' owner. An
+  # acknowledgement is for the caller's own account only, a current member by
+  # the 0422 rule (never an act-as seat, a disabled account, an invitation or
+  # another organization), of the current version of a published policy, with
+  # the hash of the words shown, the second step held where an authenticator
+  # is set up, once per version; no API role, function or the owner changes,
+  # deletes or truncates one; an account deletion keeps it with the kept name
+  # (never an email) and an empty person, and only the organization's
+  # deletion removes it. The lists of who has not acknowledged follow the current-member
+  # rule with invitations apart; Remind now is once a day and stamps first;
+  # the claim follows 3, 7, then weekly, at most 6, never within 3 days of the
+  # last reminder, oldest first. Every admin function asks for the
+  # authenticator rule (0472's helper: mfa_required, aal2_required); a member's
+  # own reads and acknowledgement do not; a support (act-as) seat reads what
+  # an admin reads and is refused every write. A correction is never silent: each
+  # version keeps who published it and when, the admin's lists and the record
+  # say which version each person acknowledged and that the current text
+  # corrects it, the member reads both texts, one notice per correction is
+  # claimed once, and a correction keeps the title and kind. A deleted account
+  # with no name keeps a neutral label and when its membership began; a body
+  # holds at most 600 lines. The two-session checks are
+  # scripts/db-concurrency/0482_org_policies_race.sh.
+  supabase/tests/0482_org_policies.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
@@ -3264,6 +3296,20 @@ CORE_TESTS=(
   # database's own time, never this machine's clock, every serious flag
   # first; and the console's words, none of which says anything was sent.
   src/security/security-alerts.test.ts
+  # Policy sign-off's text (web and phone): the normal form the database
+  # stores, the refused invisible and direction-changing characters, and a
+  # parser that knows headings, bullets and paragraphs only, so the words are
+  # shown as text and never as markup or a link; the hash of the exact words;
+  # the same rules as migration 0482, read out of it; every text function
+  # runs in time linear in the text (a hostile body cannot hold a thread):
+  # nothing normalises a run of more than 30 combining marks (refused before
+  # normalising; the reader shows it as one character), and the marks counted
+  # hold every code point this engine's normaliser can reorder.
+  src/policies/policy-text.test.ts
+  src/policies/policy-text.parity.test.ts
+  src/policies/policy-text.time.test.ts
+  src/policies/policy-text.marks.test.ts
+  src/policies/policy-hash.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -143,3 +143,4 @@ export * from './security/security-alerts';
 export * from './vendor-risk/questions';
 export * from './vendor-risk/rules';
 export * from './vendor-risk/words';
+export * from './policies';

@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 420 foreign keys, 9 junctions, 36 ambiguous pairs.
+-- 427 foreign keys, 9 junctions, 36 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -245,6 +245,13 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('org_connections', 'org_connections_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('org_daily_movement_stats', 'org_daily_movement_stats_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('org_daily_stats', 'org_daily_stats_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('org_policies', 'org_policies_organization_id_fkey', 'organizations', 'organization_id', 'id'),
+  ('org_policy_acknowledgements', 'org_policy_acknowledgements_user_id_fkey', 'user_profiles', 'user_id', 'id'),
+  ('org_policy_acknowledgements', 'org_policy_acknowledgements_version_fkey', 'org_policy_versions', 'version_id,policy_id,organization_id', 'id,policy_id,organization_id'),
+  ('org_policy_reminders', 'org_policy_reminders_user_id_fkey', 'user_profiles', 'user_id', 'id'),
+  ('org_policy_reminders', 'org_policy_reminders_version_fkey', 'org_policy_versions', 'round_version_id,policy_id,organization_id', 'id,policy_id,organization_id'),
+  ('org_policy_versions', 'org_policy_versions_policy_fkey', 'org_policies', 'policy_id,organization_id', 'id,organization_id'),
+  ('org_policy_versions', 'org_policy_versions_published_by_fkey', 'user_profiles', 'published_by', 'id'),
   ('organization_invites', 'organization_invites_charter_id_fkey', 'charters', 'charter_id', 'id'),
   ('organization_invites', 'organization_invites_invited_by_fkey', 'user_profiles', 'invited_by', 'id'),
   ('organization_invites', 'organization_invites_organization_id_fkey', 'organizations', 'organization_id', 'id'),
