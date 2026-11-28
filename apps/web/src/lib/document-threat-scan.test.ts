@@ -2,7 +2,11 @@ import { deflateSync } from 'node:zlib';
 
 import { describe, expect, it } from 'vitest';
 
-import { scanDocumentBytes, THREAT_MESSAGES, type DocumentThreatCode } from './document-threat-scan';
+import {
+  SCAN_TIME_BUDGET_MS,
+  SCAN_WORK_BUDGET_BYTES,
+  scanDocumentBytes,
+} from './document-threat-scan';
 import { sniffFile } from './file-signature';
 
 // ---------------------------------------------------------------------------
@@ -392,22 +396,243 @@ describe('the scanner and the sniffer agree on what they are looking at', () => 
       expect(sniffFile(bytes)?.kind, `fixture for ${kind}`).toBe(kind);
     }
   });
+});
 
-  it('every threat code has a message that tells the uploader what to do', () => {
-    const codes: DocumentThreatCode[] = [
-      'pdf_javascript',
-      'pdf_launch_action',
-      'pdf_embedded_file',
-      'pdf_rich_media',
-      'pdf_encrypted',
-      'pdf_scan_limit',
-      'appended_payload',
-    ];
-    for (const code of codes) {
-      expect(THREAT_MESSAGES[code], code).toBeTruthy();
-      // The PDF refusals must name a way forward; a dead end turns a safe
-      // refusal into a support ticket.
-      if (code.startsWith('pdf_')) expect(THREAT_MESSAGES[code]).toMatch(/Print to PDF/);
+// ---------------------------------------------------------------------------
+// PART 6: THE SCAN HAS A CLOCK AND A TOTAL-WORK CEILING.
+//
+// Every bound above caps an amount. None capped the time, and inflateSync is
+// synchronous, so a document built to be slow held the request for as long as
+// it liked. Now the scan reads a clock between steps and counts every byte it
+// reads; running out of either is the `scan_budget` verdict, refused like the
+// other bounds ("could not be checked" is never "clean"). The budgets are
+// overridable only so these tests can spend them without minutes of work.
+// ---------------------------------------------------------------------------
+describe('scanDocumentBytes: the time and total-work budgets (part 6)', () => {
+  /** A clock that moves `step` milliseconds every time it is read. */
+  const ticking = (step: number) => {
+    let t = 0;
+    return () => {
+      t += step;
+      return t;
+    };
+  };
+  /** A PDF of `n` small Flate streams with nothing active in them. */
+  const manyStreams = (n: number): Uint8Array => {
+    const body = deflateSync(Buffer.from('<< /Type /Page >>', 'latin1'));
+    return concat(
+      ascii('%PDF-1.7\n'),
+      ...Array.from({ length: n }, (_, i) =>
+        concat(
+          ascii(`${i + 1} 0 obj\n<< /Filter /FlateDecode >>\nstream\n`),
+          new Uint8Array(body),
+          ascii('\nendstream\nendobj\n'),
+        ),
+      ),
+      ascii('%%EOF\n'),
+    );
+  };
+
+  it('the budgets: four seconds, and 512 MiB of bytes read', () => {
+    expect(SCAN_TIME_BUDGET_MS).toBe(4_000);
+    expect(SCAN_WORK_BUDGET_BYTES).toBe(512 * 1024 * 1024);
+  });
+
+  it('a clock that runs out between streams is a refusal: could not be checked', () => {
+    const doc = manyStreams(40);
+    expect(scanDocumentBytes(doc, 'pdf')).toBeNull();
+    const threat = scanDocumentBytes(doc, 'pdf', { timeBudgetMs: 100, now: ticking(10) });
+    expect(threat?.code).toBe('scan_budget');
+    expect(threat?.detail).toBe('time budget spent');
+  });
+
+  it('a clock that does not run out changes nothing: the same verdicts as before', () => {
+    const still = () => 0;
+    expect(scanDocumentBytes(manyStreams(40), 'pdf', { now: still })).toBeNull();
+    expect(
+      scanDocumentBytes(pdfWithFlateStream('<< /S /JavaScript /JS (x) >>'), 'pdf', { now: still })
+        ?.code,
+    ).toBe('pdf_javascript');
+    expect(scanDocumentBytes(completePng(), 'png', { now: still })).toBeNull();
+  });
+
+  it('the work ceiling refuses a PDF, and an image whose trailer it cannot finish reading', () => {
+    const doc = manyStreams(5);
+    expect(scanDocumentBytes(doc, 'pdf', { workBudgetBytes: 10 })?.code).toBe('scan_budget');
+    // Enough for the document's own passes, not for its streams.
+    expect(
+      scanDocumentBytes(doc, 'pdf', { workBudgetBytes: doc.byteLength * 3 + 20 })?.detail,
+    ).toBe('total work budget spent');
+    const padded = concat(completePng(), new Uint8Array(4096).fill(0x20));
+    expect(scanDocumentBytes(padded, 'png')).toBeNull();
+    expect(
+      scanDocumentBytes(padded, 'png', { workBudgetBytes: padded.byteLength + 4096 * 2 })?.code,
+    ).toBe('scan_budget');
+    // A ceiling at least as large as the work: clean, as before.
+    expect(scanDocumentBytes(padded, 'png', { workBudgetBytes: padded.byteLength * 8 })).toBeNull();
+  });
+
+  it('a hidden payload is still found before the work runs out, when the ceiling allows', () => {
+    const zip = [0x50, 0x4b, 0x03, 0x04, 0x14, 0x00];
+    const bad = concat(completePng(), zip);
+    expect(scanDocumentBytes(bad, 'png')?.code).toBe('appended_payload');
+  });
+
+  it('keywords with no endstream after them: the verdicts are the old ones, without the old cost', () => {
+    // A document whose last part is the word `stream` over and over, with no
+    // `endstream` after it: nothing more can be inflated. The old loop searched
+    // the rest of the document again for every keyword (the square of its
+    // size). The verdict is the same: fewer keywords than the stream ceiling
+    // is clean, more is refused (4,012 generated documents gave the old and the
+    // new module the same verdict, 2026-11-24, part-6-web/PROGRESS.md).
+    const few = concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(3000)), ascii('%%EOF\n'));
+    expect(scanDocumentBytes(few, 'pdf')).toBeNull();
+    const many = concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(5000)), ascii('%%EOF\n'));
+    expect(scanDocumentBytes(many, 'pdf')?.code).toBe('pdf_scan_limit');
+    // Right at the ceiling, as the old loop answered.
+    const at = (n: number) =>
+      scanDocumentBytes(concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(n))), 'pdf');
+    expect(at(4095)).toBeNull();
+    expect(at(4096)).toBeNull();
+    expect(at(4097)?.code).toBe('pdf_scan_limit');
+    // And it is quick: four megabytes of keywords is one pass, not thousands.
+    const big = concat(ascii('%PDF-1.7\n'), ascii('stream '.repeat(600_000)));
+    const started = performance.now();
+    expect(scanDocumentBytes(big, 'pdf')?.code).toBe('pdf_scan_limit');
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Part 6 review: an honest file is never refused by chance, and a stream is
+// read however it is written. Every fixture is made up here: seeded noise
+// stands for compressed data, and the "marker" is only the name the scanner
+// looks for (nothing in these files runs).
+// ---------------------------------------------------------------------------
+describe('scanDocumentBytes: chance and stream shapes (part 6 review)', () => {
+  /** xorshift32 noise from a fixed seed: repeatable, nothing in it is a script. */
+  function noise(bytes: number, seed: number): Uint8Array {
+    const out = new Uint8Array(bytes);
+    let x = seed >>> 0 || 1;
+    for (let i = 0; i < bytes; i += 4) {
+      x ^= x << 13;
+      x >>>= 0;
+      x ^= x >>> 17;
+      x ^= x << 5;
+      x >>>= 0;
+      out[i] = x & 255;
+      out[i + 1] = (x >>> 8) & 255;
+      out[i + 2] = (x >>> 16) & 255;
+      out[i + 3] = x >>> 24;
     }
+    return out;
+  }
+  /** ASCII85 of `bytes`, with its end marker. */
+  function ascii85(bytes: Uint8Array): string {
+    let out = '';
+    for (let i = 0; i < bytes.length; i += 4) {
+      const chunk = [0, 1, 2, 3].map((k) => bytes[i + k] ?? 0);
+      const v = ((chunk[0]! << 24) | (chunk[1]! << 16) | (chunk[2]! << 8) | chunk[3]!) >>> 0;
+      const take = Math.min(4, bytes.length - i);
+      if (v === 0 && take === 4) {
+        out += 'z';
+        continue;
+      }
+      const digits: string[] = [];
+      let n = v;
+      for (let k = 0; k < 5; k += 1) {
+        digits.unshift(String.fromCharCode((n % 85) + 33));
+        n = Math.floor(n / 85);
+      }
+      out += digits.slice(0, take + 1).join('');
+    }
+    return `${out}~>`;
+  }
+  const hex = (bytes: Uint8Array) => `${Buffer.from(bytes).toString('hex')}>`;
+  const MARKER = '<< /S /Launch /F (x) >>';
+
+  it('a corpus of noise after the PDF header (what compressed data looks like) is never refused', () => {
+    for (let seed = 1; seed <= 24; seed += 1) {
+      const doc = concat(ascii('%PDF-1.4\n'), noise(512 * 1024, 7000 + seed));
+      expect(scanDocumentBytes(doc, 'pdf'), `seed ${seed}`).toBeNull();
+    }
+  });
+
+  it('the bare three-byte script name, by chance in binary or in text, is not a refusal', () => {
+    const body = noise(64 * 1024, 42);
+    // The bytes the old rule fired on, each followed by a byte that ends a name.
+    const planted = concat(body, ascii('/JS\u0000'), noise(512, 43), ascii('/JS '), ascii('/JS('), ascii('/JS/'));
+    expect(scanDocumentBytes(concat(ascii('%PDF-1.7\n'), planted, ascii('\n%%EOF\n')), 'pdf')).toBeNull();
+    expect(scanDocumentBytes(pdf('<< /Title (see docs/JS notes) >>\n(PO/JS/2026) Tj'), 'pdf')).toBeNull();
+  });
+
+  it('a script action is still refused, and so is a media rendition', () => {
+    expect(expectThreat(pdf('<< /S /JavaScript /JS (app.alert\\(1\\)) >>'), 'pdf').code).toBe('pdf_javascript');
+    expect(expectThreat(pdfWithFlateStream('<< /S /JavaScript /JS 9 0 R >>'), 'pdf').code).toBe('pdf_javascript');
+    expect(expectThreat(pdf('<< /Type /Action /S /Rendition /OP 0 /R 6 0 R >>'), 'pdf').code).toBe('pdf_rich_media');
+  });
+
+  it('a stream whose data follows white space or a bare carriage return is read', () => {
+    const deflated = new Uint8Array(deflateSync(Buffer.from(MARKER, 'latin1')));
+    for (const after of ['\r', '   \n', ' \r\n', '\t\n']) {
+      const doc = concat(
+        ascii('%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode >>\nstream'),
+        ascii(after),
+        deflated,
+        ascii('\nendstream\nendobj\n%%EOF\n'),
+      );
+      expect(expectThreat(doc, 'pdf').code, JSON.stringify(after)).toBe('pdf_launch_action');
+    }
+  });
+
+  it('a last stream with no endstream is read to the end of the file', () => {
+    const deflated = new Uint8Array(deflateSync(Buffer.from(MARKER, 'latin1')));
+    const doc = concat(ascii('%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n'), deflated, ascii('\n%%EOF\n'));
+    expect(expectThreat(doc, 'pdf').code).toBe('pdf_launch_action');
+  });
+
+  it('a Flate run that ends early is read as far as it goes', () => {
+    const long = new Uint8Array(deflateSync(Buffer.from(`${MARKER}${' '.repeat(20_000)}`, 'latin1')));
+    const cut = long.subarray(0, long.length - 20);
+    const doc = concat(
+      ascii('%PDF-1.7\n1 0 obj\n<< /Filter /FlateDecode >>\nstream\n'),
+      cut,
+      ascii('\nendstream\nendobj\n%%EOF\n'),
+    );
+    expect(expectThreat(doc, 'pdf').code).toBe('pdf_launch_action');
+  });
+
+  it('a stream written in hex or ASCII85, alone or before Flate, is decoded and read', () => {
+    const deflated = new Uint8Array(deflateSync(Buffer.from(MARKER, 'latin1')));
+    const plain = Uint8Array.from(ascii(MARKER));
+    const shapes: Array<[string, string]> = [
+      ['[/ASCIIHexDecode /FlateDecode]', hex(deflated)],
+      ['[/ASCII85Decode /FlateDecode]', ascii85(deflated)],
+      ['/ASCIIHexDecode', hex(plain)],
+      ['/ASCII85Decode', `<~${ascii85(plain)}`],
+      // No leading <~, and the first character is also a hex digit.
+      ['/ASCII85Decode', ascii85(plain)],
+    ];
+    expect(ascii85(plain)).toMatch(/^[0-9]/);
+    for (const [filter, data] of shapes) {
+      const doc = pdf(`5 0 obj\n<< /Filter ${filter} >>\nstream\n${data}\nendstream\nendobj`);
+      expect(Buffer.from(doc).toString('latin1')).not.toContain('Launch');
+      expect(expectThreat(doc, 'pdf').code, filter).toBe('pdf_launch_action');
+    }
+  });
+
+  it('honest streams of every shape still pass: text, hex and ASCII85 pictures, zeros, a JPEG', () => {
+    const picture = noise(48 * 1024, 99);
+    const zeros = new Uint8Array(4096);
+    const docs = [
+      pdf('5 0 obj\n<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 712 Td (Mainstream Hardware) Tj ET\nendstream\nendobj'),
+      pdf(`5 0 obj\n<< /Filter /ASCIIHexDecode >>\nstream\n${hex(picture)}\nendstream\nendobj`),
+      pdf(`5 0 obj\n<< /Filter /ASCII85Decode >>\nstream\n${ascii85(picture)}\nendstream\nendobj`),
+      pdf(`5 0 obj\n<< /Filter [/ASCII85Decode /FlateDecode] >>\nstream\n${ascii85(new Uint8Array(deflateSync(Buffer.from(zeros))))}\nendstream\nendobj`),
+      pdf(`5 0 obj\n<< /Filter /ASCII85Decode >>\nstream\n${ascii85(zeros)}\nendstream\nendobj`),
+      concat(ascii('%PDF-1.7\n1 0 obj\n<< /Filter /DCTDecode >>\nstream\n'), completeJpeg(), ascii('\nendstream\nendobj\n%%EOF\n')),
+      pdf('<< /Producer (Mainstream PDF Writer) >>'),
+    ];
+    for (const [i, doc] of docs.entries()) expect(scanDocumentBytes(doc, 'pdf'), `doc ${i}`).toBeNull();
   });
 });

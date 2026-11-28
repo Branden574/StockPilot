@@ -410,8 +410,9 @@ remove_rows
 LEFT="$(q "select (select count(*) from public.organizations where id = '$ORG')
                 + (select count(*) from auth.users where id = '$U1')
                 + (select count(*) from public.supplier_risk_reviews where organization_id = '$ORG')
+                + (select count(*) from public.supplier_risk_events where organization_id = '$ORG')
                 + (select count(*) from public.suppliers where organization_id = '$ORG')")"
-if [ "$LEFT" = "0" ]; then ok "the made-up organization, account, suppliers and reviews are removed"; else bad "$LEFT made-up rows are left"; fi
+if [ "$LEFT" = "0" ]; then ok "the made-up organization, account, suppliers, reviews and history rows are removed"; else bad "$LEFT made-up rows are left"; fi
 
 if [ "$FAILS" -eq 0 ]; then
   echo "all checks passed"

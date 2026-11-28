@@ -249,11 +249,6 @@ const OTHER_READS: Record<string, Open> = {
     reason:
       "Sets the browser's own appearance cookie from a same-origin page: no session is read and no organization data is served.",
   },
-  'app/api/books/extract-isbns/route.ts POST': {
-    kind: 'no-org-data',
-    reason:
-      "Reads ISBNs out of the caller's own uploaded file in memory; no organization's data is read or returned.",
-  },
   'app/api/client-error/route.ts POST': {
     kind: 'no-org-data',
     reason:
@@ -263,11 +258,6 @@ const OTHER_READS: Record<string, Open> = {
     kind: 'own-account',
     reason:
       "Emails the code that confirms deleting the caller's own account. Every member may delete their account, whatever the policy.",
-  },
-  'app/api/v1/ai/identify-from-photo/route.ts POST': {
-    kind: 'no-org-data',
-    reason:
-      "Names a book or a product from the caller's own photo with the AI provider; it reads no organization's data and returns only what the model saw.",
   },
   'app/api/v1/public/returns/options/route.ts POST': {
     kind: 'no-session',

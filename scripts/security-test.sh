@@ -1163,9 +1163,9 @@ PGTAP_TESTS=(
   # two-session checks are scripts/db-concurrency/0480_platform_security_alerts_race.sh.
   supabase/tests/0480_platform_security_alerts.test.sql
   # Vendor risk reviews (0481): no API role reads or writes
-  # supplier_risk_reviews or supplier_risk_items directly (RLS on, no
-  # policy, no privilege for anon, authenticated or service_role; every
-  # direct read and write refused); the eight admin functions are
+  # supplier_risk_reviews, supplier_risk_items or supplier_risk_events
+  # directly (RLS on, no policy, no privilege for anon, authenticated or
+  # service_role; every direct read and write refused); the nine admin functions are
   # authenticated only and open with has_org_role(organization, 'admin') and
   # 0472's authenticator check, so a manager, a staff member, a viewer, an
   # admin of another organization, a disabled admin, an invitation, an expired
@@ -1181,7 +1181,15 @@ PGTAP_TESTS=(
   # the insurance needs its date, never later than tomorrow in UTC;
   # one current review and one draft per supplier; a final review and an
   # item's finding are kept as written on every path; an account deleted
-  # keeps the name and loses the link; the reminder claim stamps once. The
+  # keeps the name and loses the link; the reminder claim stamps once. Every
+  # finish, override, discarded draft and item change (a risk accepted, an
+  # acceptance withdrawn) keeps one row of supplier_risk_events in its own
+  # transaction, after its checks (a refused call none), with fixed keys per
+  # kind and never an answer or a question key; no API role reads, writes,
+  # changes, deletes or truncates it, a trigger refuses every change and
+  # delete but an account deletion's SET NULL and the organization's own
+  # deletion, and only owners and admins read it (not managers, who read the
+  # shared audit log, where nothing about vendor risk is written). The
   # two-session checks are scripts/db-concurrency/0481_supplier_risk_reminder_race.sh.
   supabase/tests/0481_supplier_risk_reviews.test.sql
   # The request context reads the caller's own rows by index (0471): the same
@@ -1283,6 +1291,38 @@ WEB_TESTS=(
   # the finalize limiter fails closed, and a recorded photo's files are never
   # rewritten or deleted by a later finalize.
   src/server/services/maintenance-attachments.metadata.test.ts
+  # Every upload path's one check (security tools part 6, stage 6a): the
+  # verdict from the bytes (kind, active content, a hidden file, could not be
+  # checked within the scanner's time and work budgets); one malware / blocked
+  # event per refusal with the organization and no file name, path or byte; a
+  # recorder failure changes no answer; a clean file unchanged; a refused
+  # stored copy removed (kept when another record names it or that look
+  # fails), with an audit line for each removal; each stored file read within
+  # its bucket's size ceiling (pinned to the migrations), a video from its
+  # first window only. The registry guard lists every way a file comes in
+  # (a mint, a form, a raw, base64 or remote read, bytes handed to a model,
+  # a recorded object path, a stored-object read, a storage copy or write, a
+  # signed-URL write) with the check that covers it, or a later stage by
+  # reference, and pins a producer for each reason. Blocked activity names
+  # the kind "Refused file".
+  src/lib/upload-inspect.test.ts
+  src/server/security/upload-checks.test.ts
+  src/lib/upload-size-limits.test.ts
+  src/server/services/upload-still-named.test.ts
+  src/server/security/upload-checks.registry.guard.test.ts
+  src/server/security/upload-checks.capture-paths.test.ts
+  src/server/security/upload-checks.support-paths.test.ts
+  src/server/security/upload-checks.isbn-paths.test.ts
+  src/server/services/item-images.upload-checks.test.ts
+  src/server/services/po-imports.upload-checks.test.ts
+  src/server/services/procedure-videos.upload-checks.test.ts
+  # The finalize check with the real storage reader through Next's fetch over
+  # a socket, and every storage step's time limit and each check's one
+  # deadline (review round 3).
+  src/server/security/upload-checks.seam.test.ts
+  src/lib/storage-steps.test.ts
+  src/app/api/orders/sign/route.test.ts
+  src/server/services/security-events.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts
@@ -2822,6 +2862,41 @@ WEB_TESTS=(
   src/lib/supplier-risk/list-risk.test.ts
   src/lib/supplier-risk/supplier-risk-helpers.test.ts
   src/app/api/cron/supplier-risk-reminders/route.test.ts
+
+  # The security alerts (part 5, stage 4a: RECORD ONLY). Nothing is sent: the
+  # setter and the recipients' lookup are called from nowhere, each of 0480's
+  # functions only from its one module, and each module of the alerts imports
+  # exactly its listed modules and the listed names from each, calls only its
+  # listed functions and tables, writes nothing and names no fetch or sender,
+  # its imports followed one level deep, where network, process and
+  # code-loading names are held to the uses judged (alerts-record-only, an
+  # allow-list and a tripwire, not a proof: review stays the control). The
+  # alert job fails closed on its cron secret, makes its calls in the
+  # contract's order (every serious flag before any other claim), opens a new
+  # state after a refused start only under a bucket where the condition
+  # holds, takes every refusal as an answer, closes a
+  # handed-out channel, the email floor's second result and the held notice as
+  # skipped, always finishes the heartbeat it started, ends inside its
+  # deadline, never throws, and reports three missed or failed runs once.
+  # Every report of the two jobs goes through one helper: a fixed tag, counts
+  # and codes only, each tag at most once in 6 hours on an instance, the
+  # failing report when the database says so (alerts-reports). The
+  # daily job only computes the baseline and says it sent nothing. On the
+  # console the read is imported by the alerts section and the Check again
+  # action alone, the action asks checkPlatformConsoleRead() first and
+  # answers one frozen refusal, a failed read is "could not check" (never an
+  # empty list), and the page says it is record only first and never says
+  # anything was sent. Each file carries the "Security invariant" marker.
+  src/server/security/alerts-record-only.guard.test.ts
+  src/server/security/alerts-reports.test.ts
+  src/app/api/cron/security-alerts/route.test.ts
+  src/app/api/cron/security-summary/route.test.ts
+  src/server/services/platform/security-alerts.test.ts
+  src/server/services/platform/security-alerts.callers.test.ts
+  src/server/actions/platform/security-alerts.test.ts
+  src/components/platform/platform-security-alerts-section.test.tsx
+  src/components/platform/security-alerts/security-alerts-client.test.tsx
+  'src/app/(platform)/platform/security/alerts/page.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3218,6 +3293,13 @@ CORE_TESTS=(
   # the reason counter is the database's rule, never looser (a reason the
   # page passes is one the database takes).
   src/vendor-risk/page-helpers.test.ts
+  # The security alerts' rules (part 5, stage 4a): the contract's lists, a
+  # strict reader of every answer, the keys, the state model (a start, its
+  # reminders at 1, 6 and 24 hours, an end only after three quiet whole
+  # buckets and never from a partial read), built from the events and the
+  # database's own time, never this machine's clock, every serious flag
+  # first; and the console's words, none of which says anything was sent.
+  src/security/security-alerts.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

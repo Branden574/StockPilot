@@ -228,6 +228,21 @@ describe('the attack map', () => {
     ).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Attack map' })).toBeNull();
   });
+
+  it('the alerts are the same button beside it, never prefetched, and not on this page', async () => {
+    await renderPage();
+    const map = screen.getByRole('link', { name: 'Open attack map' });
+    const alerts = screen.getByRole('link', { name: 'Open alerts' });
+    expect(alerts).toHaveAttribute('href', '/platform/security/alerts');
+    expect(alerts).toHaveAttribute('data-prefetch', 'false');
+    expect(alerts).toHaveAttribute('data-glass', 'button');
+    expect(alerts).toHaveAttribute('data-glass-variant', 'outline');
+    expect(alerts.className).toContain('focus-visible:ring-2');
+    // Beside the map's, after it, in the same row of the header.
+    expect(map.compareDocumentPosition(alerts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(alerts.parentElement).toBe(map.parentElement);
+    expect(screen.queryByRole('region', { name: 'Security alerts' })).toBeNull();
+  });
 });
 
 describe('the table', () => {
@@ -365,6 +380,22 @@ describe('the table', () => {
       ['When', '20 Nov 2026, 10:15 AM UTC'],
       ['Organization', 'No organization'],
     ]);
+  });
+
+  it('a refused file is "Malware" on the console, never "Refused file" (part 6), and opens the card of its reason', async () => {
+    h.list.mockResolvedValueOnce([
+      row({ id: 'e6', category: 'malware', reason: 'upload_hidden_file', organizationId: ORG, organizationName: 'Example School District', count: 1 }),
+    ]);
+    await renderPage();
+    const table = screen.getByRole('region', { name: 'Security events' });
+    expect(within(table).getByText(/^Malware · Blocked$/)).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/Refused file/);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'How to respond: A file with another file hidden inside it was refused' }),
+    );
+    const panel = await screen.findByRole('dialog');
+    expect(panel).toHaveAttribute('data-card', 'upload-refused');
+    expect(panel.textContent).not.toMatch(/Refused file/);
   });
 
   it('a sign-in alert is named "Sign-in alert": no text on the page or in its card says Phishing or Malware (lab walk 3, F1)', async () => {

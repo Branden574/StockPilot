@@ -1,7 +1,7 @@
 -- supabase/tests/0481_supplier_risk_reviews.test.sql
--- Proves migration 0481: public.supplier_risk_reviews and
--- public.supplier_risk_items, the admins' eight functions, the daily job's three
--- and the private helpers.
+-- Proves migration 0481: public.supplier_risk_reviews,
+-- public.supplier_risk_items and public.supplier_risk_events (the history),
+-- the admins' nine functions, the daily job's three and the private helpers.
 --
 -- WHAT IS WORTH PINNING
 --   1. Shape: the designed columns, the foreign keys (organizations cascade,
@@ -10,10 +10,10 @@
 --      an organization" (the organization first in each), the two triggers,
 --      RLS on and no policy, nothing DEFERRABLE.
 --   2. Privileges, for anon, authenticated and service_role on every object:
---      no table privilege for any of them and none to PUBLIC; the eight admin
+--      no table privilege for any of them and none to PUBLIC; the nine admin
 --      functions EXECUTE to authenticated only, the three job functions to
---      service_role only, the eighteen helpers to nobody; SECURITY DEFINER
---      exactly for the eleven; search_path pinned on all; reads STABLE; the
+--      service_role only, the twenty helpers to nobody; SECURITY DEFINER
+--      exactly for the twelve; search_path pinned on all; reads STABLE; the
 --      security invariants' INV-25 finds every authenticated function gated.
 --   3. The question list (the core list's twin) and the rules: the case table
 --      between the VENDOR RISK CASES markers, run here against the database's
@@ -71,6 +71,17 @@
 --      succeeds for rows holding texts at the edges of the rules; R2-S2 a Yes
 --      on the security report or the insurance needs its date, never one
 --      later than tomorrow in UTC (the dated cases table, run by core too).
+--  14. The history of the privileged writes (supplier_risk_events): its shape
+--      and privileges (no API role reads, inserts, updates, deletes or
+--      truncates it); each finish, override, discard and item change keeps
+--      exactly one row with the right detail (a draft save none), a refused
+--      write none; a Risk accepted overwritten later stays in it with its
+--      reason; only owners and admins (and a support seat) read it, one
+--      supplier of one organization, newest first, a page at a time; the
+--      trigger keeps every row on every path but an account deletion's SET
+--      NULL (the name stays) and the organization's own deletion (its rows
+--      go); the detail check kind by kind; across the file, every row matches
+--      the change it records and no detail holds an answer or a question key.
 --
 -- Every vendor, person and organization below is made up. Namespace
 -- a0481000. Wrapped in begin/rollback: nothing leaks. Run via `supabase test
@@ -78,7 +89,7 @@
 
 begin;
 
-select plan(170);
+select plan(201);
 
 set local timezone = 'UTC';
 
@@ -444,6 +455,7 @@ insert into vr_fns values
   ('public.supplier_risk_history(uuid, uuid)', 'admin_read'),
   ('public.supplier_risk_review(uuid, uuid)', 'admin_read'),
   ('public.supplier_risk_items_for_organization(uuid, boolean)', 'admin_read'),
+  ('public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid)', 'admin_read'),
   ('public.supplier_risk_draft_save(uuid, uuid, text, jsonb)', 'admin_write'),
   ('public.supplier_risk_finalise(uuid, uuid, text, jsonb, date, text, text, jsonb)', 'admin_write'),
   ('public.supplier_risk_draft_discard(uuid, uuid)', 'admin_write'),
@@ -468,14 +480,16 @@ insert into vr_fns values
   ('public._supplier_risk_item_json(public.supplier_risk_items)', 'private'),
   ('public._supplier_risk_person_name(uuid)', 'private'),
   ('public._supplier_risk_is_current_admin(uuid, uuid)', 'private'),
-  ('public._supplier_risk_caller_is_act_as(uuid)', 'private');
+  ('public._supplier_risk_caller_is_act_as(uuid)', 'private'),
+  ('public._supplier_risk_event_detail_ok(text, jsonb)', 'private'),
+  ('public._supplier_risk_events_guard()', 'private');
 
 select is(
   (select array_agg(p.oid::regprocedure::text order by p.oid::regprocedure::text) from pg_proc p
     where p.pronamespace = 'public'::regnamespace
       and (p.proname like 'supplier\_risk\_%' or p.proname like '\_supplier\_risk\_%')),
   (select array_agg(f.fn::text order by f.fn::text) from vr_fns f),
-  '0481/19: the file makes exactly these twenty-nine functions');
+  '0481/19: the file makes exactly these thirty-two functions');
 select is(
   (select string_agg(f.fn::text || '=' || pg_temp.grants_of(f.fn), ' ; ' order by f.fn::text)
      from vr_fns f where pg_temp.grants_of(f.fn) <> case f.kind when 'admin_read' then 'authenticated:EXECUTE'
@@ -484,7 +498,7 @@ select is(
                                                                 when 'job_write' then 'service_role:EXECUTE'
                                                                 else '' end),
   null,
-  '0481/20: the eight admin functions have exactly one grant, EXECUTE to authenticated; the three job functions exactly EXECUTE to service_role; the eighteen helpers none (nothing to PUBLIC)');
+  '0481/20: the nine admin functions have exactly one grant, EXECUTE to authenticated; the three job functions exactly EXECUTE to service_role; the twenty helpers none (nothing to PUBLIC)');
 select is(
   (select array_agg(f.kind || ':' || has_function_privilege(r.role, f.fn, 'execute')::text order by f.kind, r.n)
      from (select distinct on (kind) kind, fn from vr_fns order by kind, fn::text) f,
@@ -506,13 +520,13 @@ select is(
                                          when 'job_write' then r.role = 'service_role'
                                          else false end))),
   0,
-  '0481/22: every one of the twenty-nine, for each of anon, authenticated and service_role, has exactly the EXECUTE its kind says');
+  '0481/22: every one of the thirty-two, for each of anon, authenticated and service_role, has exactly the EXECUTE its kind says');
 select is(
   (select string_agg(p.proname, ',' order by p.proname) from pg_proc p join vr_fns f on f.fn = p.oid where p.prosecdef),
-  'supplier_risk_draft_discard,supplier_risk_draft_save,supplier_risk_due_reminder_sent,supplier_risk_finalise,supplier_risk_history,'
-  'supplier_risk_item_update,supplier_risk_items_for_organization,supplier_risk_register,supplier_risk_reminder_claim,'
+  'supplier_risk_draft_discard,supplier_risk_draft_save,supplier_risk_due_reminder_sent,supplier_risk_events,supplier_risk_finalise,'
+  'supplier_risk_history,supplier_risk_item_update,supplier_risk_items_for_organization,supplier_risk_register,supplier_risk_reminder_claim,'
   'supplier_risk_reminders_due,supplier_risk_review',
-  '0481/23: exactly the eleven functions an API role may call are SECURITY DEFINER; every helper runs as its caller');
+  '0481/23: exactly the twelve functions an API role may call are SECURITY DEFINER; every helper runs as its caller');
 select is(
   (select count(*)::int from pg_proc p join vr_fns f on f.fn = p.oid
     where not exists (select 1 from unnest(coalesce(p.proconfig, '{}')) c where c = 'search_path=""')),
@@ -521,7 +535,7 @@ select is(
 select is(
   (select string_agg(p.proname || ':' || p.provolatile::text, ',' order by p.proname) from pg_proc p join vr_fns f on f.fn = p.oid
     where f.kind not like 'private'),
-  'supplier_risk_draft_discard:v,supplier_risk_draft_save:v,supplier_risk_due_reminder_sent:v,supplier_risk_finalise:v,supplier_risk_history:s,'
+  'supplier_risk_draft_discard:v,supplier_risk_draft_save:v,supplier_risk_due_reminder_sent:v,supplier_risk_events:s,supplier_risk_finalise:v,supplier_risk_history:s,'
   'supplier_risk_item_update:v,supplier_risk_items_for_organization:s,supplier_risk_register:s,'
   'supplier_risk_reminder_claim:v,supplier_risk_reminders_due:s,supplier_risk_review:s',
   '0481/25: the reads are STABLE and the writes VOLATILE (the authenticator guards read a STABLE function as a read)');
@@ -554,10 +568,10 @@ select is(
 select is(
   (select count(*)::int from vr_fns f
     where coalesce(obj_description(f.fn::oid, 'pg_proc'), '') !~ '0481')
-  + (select count(*)::int from unnest(array['public.supplier_risk_reviews', 'public.supplier_risk_items']) t(n)
+  + (select count(*)::int from unnest(array['public.supplier_risk_reviews', 'public.supplier_risk_items', 'public.supplier_risk_events']) t(n)
       where coalesce(obj_description(t.n::regclass, 'pg_class'), '') !~ '0481'),
   0,
-  '0481/29: every function and both tables have a comment that names 0481');
+  '0481/29: every function and the three tables have a comment that names 0481');
 
 -- ── 3. The question list and the rules ──────────────────────────────────────
 select is(
@@ -903,7 +917,8 @@ select is(
   '0481/48: the status, level and rules version checks stand on their own too (the answers check runs first by name)');
 
 -- ── 5. Who may ──────────────────────────────────────────────────────────────
--- One call of each of the eight admin functions, for organization A.
+-- One call of each of the first eight admin functions, for organization A
+-- (the history's read: section 14).
 create temporary table vr_calls (n integer primary key, sql text) on commit drop;
 insert into vr_calls values
   (1, format($$select count(*)::text from public.supplier_risk_register(%L)$$, :'orgA')),
@@ -2005,7 +2020,7 @@ select is(
                 < coalesce(nullif(strpos(p.prosrc, 'pg_advisory_xact_lock'), 0), 0))::text, ',' order by p.proname)
      from pg_proc p join vr_fns f on f.fn = p.oid
     where f.kind in ('admin_read', 'admin_write')),
-  'supplier_risk_draft_discard:true,supplier_risk_draft_save:true,supplier_risk_finalise:true,supplier_risk_history:false,'
+  'supplier_risk_draft_discard:true,supplier_risk_draft_save:true,supplier_risk_events:false,supplier_risk_finalise:true,supplier_risk_history:false,'
   'supplier_risk_item_update:true,supplier_risk_items_for_organization:false,supplier_risk_register:false,supplier_risk_review:false',
   '0481/142: S6: each of the four writes refuses a support seat right after the authenticator check, before it takes the supplier''s lock; no read does');
 
@@ -2549,6 +2564,546 @@ select is(
                   (5, 'draft', '{"insurance": "yes@"}', null)) t(n, st, over, at)),
   array['23514:supplier_risk_reviews_answers', '23514:supplier_risk_reviews_answers', 'ok', 'ok', 'ok'],
   '0481/170: R2-S2: the reviews table holds it on its own: a final with a Yes on the insurance and no date, or a date later than the day after reviewed_at in UTC, is refused (not the organization''s review day: a review finished late on 30 June in Los Angeles is 1 July in UTC); a draft may wait for the date');
+
+-- ── 14. The history of the privileged writes (supplier_risk_events) ─────────
+-- The shared audit log is read by managers, so the web half writes nothing
+-- about vendor risk there. Each privileged write keeps its own row of this
+-- history in its own transaction, after its checks (a refused call writes
+-- none; a draft save writes none); the trigger keeps every row as written
+-- but for an account deletion's SET NULL and the organization's own deletion;
+-- only owners and admins read it (a support seat too), one supplier of one
+-- organization at a time, newest first, a page at a time.
+\set histAdmin 'a0481000-0000-0000-0000-0000000000da'
+\set ownerE 'a0481000-0000-0000-0000-0000000000db'
+\set orgE 'a0481000-0000-0000-0000-0000000000a9'
+\set supE1 'a0481000-0000-0000-0000-000000000601'
+\set supE2 'a0481000-0000-0000-0000-000000000602'
+\set supE3 'a0481000-0000-0000-0000-000000000603'
+\set supE4 'a0481000-0000-0000-0000-000000000604'
+\set supE5 'a0481000-0000-0000-0000-000000000605'
+\set rOvr 'The vendor moves its servers in March; we wait for the new report.'
+\set r1 'Cover renews in spring; the broker confirmed it in writing.'
+\set r2 'Renewal moved to summer; accepted again until the new date.'
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:'histAdmin', 'vr-history-admin@test.local', '{"full_name": "Made-up History Admin"}'::jsonb),
+  (:'ownerE',    'vr-owner-e@test.local',       '{"full_name": "Made-up Owner E"}'::jsonb);
+insert into public.organizations (id, name, slug, mfa_policy, timezone) values
+  (:'orgE', 'Vendor Risk Org E', 'a0481000-org-e', 'optional', 'UTC');
+insert into public.organization_members (organization_id, user_id, role, accepted_at, impersonation_expires_at) values
+  (:'orgA', :'histAdmin', 'admin', now(), null),
+  (:'orgE', :'ownerE',    'owner', now(), null);
+insert into public.suppliers (id, organization_id, name, deleted_at) values
+  (:'supE1', :'orgA', 'History Paper Co',    null),
+  (:'supE2', :'orgA', 'History Override Co', null),
+  (:'supE3', :'orgA', 'History Pages Co',    null),
+  (:'supE4', :'orgA', 'History Refused Co',  null),
+  (:'supE5', :'orgE', 'History Org E Co',    null);
+
+-- The rows of the history written since the last look, as one json array (by
+-- kind, then supplier), each marked seen. A write and this look are two
+-- statements (a statement reads its own snapshot).
+create temporary table vr_seen (id uuid primary key) on commit drop;
+insert into vr_seen select e.id from public.supplier_risk_events e;
+create function pg_temp.ev_new() returns jsonb language sql as $f$
+  with n as (select e.* from public.supplier_risk_events e where not exists (select 1 from vr_seen s where s.id = e.id)),
+       seen as (insert into vr_seen select n.id from n returning id)
+  select coalesce(jsonb_agg(jsonb_build_object('event', n.event, 'organization_id', n.organization_id, 'supplier_id', n.supplier_id,
+                                               'review_id', n.review_id, 'item_id', n.item_id, 'actor_user_id', n.actor_user_id,
+                                               'actor_name', n.actor_name, 'now', n.happened_at = now(), 'detail', n.detail)
+                            order by n.event, n.supplier_id), '[]'::jsonb)
+    from n;
+$f$;
+-- An item change's detail.
+create function pg_temp.item_detail(p_sb text, p_sa text, p_ob uuid, p_obn text, p_oa uuid, p_oan text, p_db date, p_da date)
+returns jsonb language sql as $f$
+  select jsonb_build_object('status_before', p_sb, 'status_after', p_sa, 'owner_before_id', p_ob, 'owner_before_name', p_obn,
+                            'owner_after_id', p_oa, 'owner_after_name', p_oan, 'due_on_before', p_db, 'due_on_after', p_da);
+$f$;
+create function pg_temp.delete_org(p uuid) returns text language plpgsql as $f$
+begin
+  delete from public.organizations where id = p;
+  return case when found then 'deleted' else 'none' end;
+exception when others then
+  return 'ERR ' || sqlstate || ' ' || sqlerrm;
+end $f$;
+
+-- Shape.
+select is(
+  (select array_agg(a.attname::text order by a.attnum) from pg_attribute a
+    where a.attrelid = 'public.supplier_risk_events'::regclass and a.attnum > 0 and not a.attisdropped),
+  array['id', 'organization_id', 'supplier_id', 'review_id', 'item_id', 'event', 'actor_user_id', 'actor_name', 'happened_at', 'detail'],
+  '0481/171: the history has exactly the designed columns');
+select is(
+  array[(select string_agg(c.conname || '>' || c.confrelid::regclass::text || ':' || c.confdeltype::text || ':' || c.condeferrable::text, ','
+                           order by c.conname)
+           from pg_constraint c where c.contype = 'f' and c.conrelid = 'public.supplier_risk_events'::regclass),
+        (select count(*)::text from pg_constraint c
+          where c.conrelid = 'public.supplier_risk_events'::regclass and (c.condeferrable or c.condeferred)),
+        (select string_agg(pg_get_indexdef(x.indexrelid), ' ; ' order by i.relname)
+           from pg_index x join pg_class i on i.oid = x.indexrelid where x.indrelid = 'public.supplier_risk_events'::regclass)],
+  array['supplier_risk_events_actor_user_id_fkey>user_profiles:n:false,supplier_risk_events_organization_id_fkey>organizations:c:false',
+        '0',
+        'CREATE INDEX supplier_risk_events_actor_idx ON public.supplier_risk_events USING btree (actor_user_id) WHERE (actor_user_id IS NOT NULL) ; '
+        'CREATE INDEX supplier_risk_events_org_supplier_idx ON public.supplier_risk_events USING btree (organization_id, supplier_id, happened_at DESC, id DESC) ; '
+        'CREATE UNIQUE INDEX supplier_risk_events_pkey ON public.supplier_risk_events USING btree (id)'],
+  '0481/172: the history''s keys are exactly the organization (cascade) and the actor (SET NULL), none to suppliers, reviews or items, nothing DEFERRABLE; read by organization and supplier, newest first; an account deletion finds its rows by index');
+select is(
+  array[(select string_agg(t.tgname || ':' || t.tgfoid::regproc::text || ':' || t.tgtype::text || ':' || t.tgenabled::text, ',')
+           from pg_trigger t where t.tgrelid = 'public.supplier_risk_events'::regclass and not t.tgisinternal),
+        (select array[c.relrowsecurity, c.relforcerowsecurity]::text from pg_class c where c.oid = 'public.supplier_risk_events'::regclass),
+        (select count(*)::text from pg_policy p where p.polrelid = 'public.supplier_risk_events'::regclass)
+          || ':' || (select count(*)::text from pg_publication_rel p where p.prrelid = 'public.supplier_risk_events'::regclass),
+        (select string_agg(c.conname, ',' order by c.conname) from pg_constraint c
+          where c.conrelid = 'public.supplier_risk_events'::regclass and c.contype = 'c')],
+  array['supplier_risk_events_kept:_supplier_risk_events_guard:27:O', '{t,f}', '0:0',
+        'supplier_risk_events_actor_name,supplier_risk_events_detail,supplier_risk_events_event,supplier_risk_events_item'],
+  '0481/173: one trigger of its own, BEFORE UPDATE OR DELETE for each row, enabled; RLS on, no policy, in no publication; the four checks');
+
+-- Privileges, for each API role, and by trying.
+select table_privs_are('public', 'supplier_risk_events', 'anon', array[]::text[], '0481/174: anon has no privilege on the history');
+select table_privs_are('public', 'supplier_risk_events', 'authenticated', array[]::text[], '0481/175: authenticated has no privilege on the history');
+select table_privs_are('public', 'supplier_risk_events', 'service_role', array[]::text[], '0481/176: service_role has no privilege on the history');
+select is(
+  array[pg_temp.table_grants('public.supplier_risk_events'),
+        (select count(*)::text from pg_attribute a where a.attrelid = 'public.supplier_risk_events'::regclass and a.attnum > 0 and a.attacl is not null)],
+  array['', '0'],
+  '0481/177: the history has no grant beside its owner''s (none to PUBLIC), and no column has a grant of its own');
+select is(
+  (select array_agg(split_part(pg_temp.run_as(r.role, :'ownerA', q.sql), ' for table', 1) order by r.n, q.n)
+     from unnest(array['anon', 'authenticated', 'service_role']) with ordinality r(role, n),
+          unnest(array['select count(*)::text from public.supplier_risk_events',
+                       'with x as (insert into public.supplier_risk_events default values returning 1) select count(*)::text from x',
+                       'with x as (update public.supplier_risk_events set detail = detail returning 1) select count(*)::text from x',
+                       'with x as (delete from public.supplier_risk_events returning 1) select count(*)::text from x',
+                       'truncate public.supplier_risk_events']) with ordinality q(sql, n)),
+  array_fill('ERR 42501 permission denied'::text, array[15]),
+  '0481/178: anon, authenticated and service_role may not read, insert, update, delete or truncate the history directly');
+select is(
+  (select array_agg(r.role || ':' || has_function_privilege(r.role, f.fn, 'execute')::text order by f.n, r.n)
+     from unnest(array['public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid)'::regprocedure,
+                       'public._supplier_risk_events_guard()'::regprocedure,
+                       'public._supplier_risk_event_detail_ok(text, jsonb)'::regprocedure]) with ordinality f(fn, n),
+          unnest(array['anon', 'authenticated', 'service_role']) with ordinality r(role, n))
+  || array[pg_temp.grants_of('public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid)'),
+           pg_temp.grants_of('public._supplier_risk_events_guard()'),
+           pg_temp.grants_of('public._supplier_risk_event_detail_ok(text, jsonb)')],
+  array['anon:false', 'authenticated:true', 'service_role:false', 'anon:false', 'authenticated:false', 'service_role:false',
+        'anon:false', 'authenticated:false', 'service_role:false', 'authenticated:EXECUTE', '', ''],
+  '0481/179: the history''s read is EXECUTE to authenticated only; its trigger function and its detail check to nobody (nothing to PUBLIC)');
+
+-- Each write keeps exactly one row. A finish:
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, null, null, %L::jsonb)::text$$,
+  :'orgA', :'supE1', pg_temp.answers('staff', '{"insurance": "no", "hosting_known": "no"}'),
+  pg_temp.items('staff', '{"insurance": "no", "hosting_known": "no"}', :'adminA', pg_temp.today(:'orgA') + 10))) as fin_e1 \gset
+select pg_temp.ev_new() as ev_e1 \gset
+select is(
+  array[jsonb_array_length(:'ev_e1'::jsonb)::text, :'ev_e1'::jsonb -> 0 ->> 'event', :'ev_e1'::jsonb -> 0 ->> 'organization_id',
+        :'ev_e1'::jsonb -> 0 ->> 'supplier_id', (:'ev_e1'::jsonb -> 0 ->> 'review_id' = pg_temp.j(:'fin_e1') ->> 'review_id')::text,
+        coalesce(:'ev_e1'::jsonb -> 0 ->> 'item_id', 'none'), :'ev_e1'::jsonb -> 0 ->> 'actor_user_id', :'ev_e1'::jsonb -> 0 ->> 'actor_name',
+        :'ev_e1'::jsonb -> 0 ->> 'now', (:'ev_e1'::jsonb -> 0 -> 'detail')::text],
+  array['1', 'review_finished', :'orgA', :'supE1', 'true', 'none', :'adminA', 'Made-up Admin A', 'true',
+        jsonb_build_object('version', 1, 'result', 'approve_with_conditions', 'rules_version', 1)::text],
+  '0481/180: a finish keeps one row: review_finished, its review, the caller (account and name), now, and {version, result, rules_version}');
+-- A finish with an override:
+select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, 'more_information', %L)::text$$,
+  :'orgA', :'supE2', pg_temp.answers('staff'), :'rOvr')) as fin_e2 \gset
+select pg_temp.ev_new() as ev_e2 \gset
+-- The same supplier finished again, with no override: version 2.
+select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supE2', pg_temp.answers('staff'))) as fin_e2_v2 \gset
+select pg_temp.ev_new() as ev_e2_v2 \gset
+select is(
+  array[jsonb_array_length(:'ev_e2'::jsonb)::text, :'ev_e2'::jsonb -> 0 ->> 'event',
+        (:'ev_e2'::jsonb -> 0 ->> 'review_id' = pg_temp.j(:'fin_e2') ->> 'review_id')::text,
+        :'ev_e2'::jsonb -> 0 ->> 'actor_user_id', :'ev_e2'::jsonb -> 0 ->> 'actor_name', (:'ev_e2'::jsonb -> 0 -> 'detail')::text,
+        jsonb_array_length(:'ev_e2_v2'::jsonb)::text, :'ev_e2_v2'::jsonb -> 0 ->> 'event',
+        (:'ev_e2_v2'::jsonb -> 0 ->> 'review_id' = pg_temp.j(:'fin_e2_v2') ->> 'review_id')::text,
+        (:'ev_e2_v2'::jsonb -> 0 -> 'detail')::text],
+  array['1', 'result_overridden', 'true', :'ownerA', 'Made-up Owner A',
+        jsonb_build_object('version', 1, 'rules_version', 1, 'computed_result', 'approve', 'chosen_result', 'more_information',
+                           'reason', :'rOvr')::text,
+        '1', 'review_finished', 'true', jsonb_build_object('version', 2, 'result', 'approve', 'rules_version', 1)::text],
+  '0481/181: a finish with an override keeps one row instead: result_overridden, with what the rules gave, what was chosen and the reason as written; the next finish of that supplier, with no override, keeps review_finished with version 2');
+-- A draft save keeps none; its discard keeps one; a discard of nothing none.
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supE1')) as draft_e1 \gset
+select pg_temp.ev_new() as ev_draft_e1 \gset
+select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supE1')) as disc_e1 \gset
+select pg_temp.ev_new() as ev_disc_e1 \gset
+select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supE1')) as disc_e1_again \gset
+select pg_temp.ev_new() as ev_disc_e1_again \gset
+select is(
+  array[pg_temp.j(:'draft_e1') ->> 'version', :'ev_draft_e1', :'disc_e1', jsonb_array_length(:'ev_disc_e1'::jsonb)::text,
+        :'ev_disc_e1'::jsonb -> 0 ->> 'event', (:'ev_disc_e1'::jsonb -> 0 ->> 'review_id' = pg_temp.j(:'draft_e1') ->> 'review_id')::text,
+        :'ev_disc_e1'::jsonb -> 0 ->> 'supplier_id', :'ev_disc_e1'::jsonb -> 0 ->> 'actor_name', (:'ev_disc_e1'::jsonb -> 0 -> 'detail')::text,
+        coalesce(:'ev_disc_e1'::jsonb -> 0 ->> 'item_id', 'none'), :'disc_e1_again', :'ev_disc_e1_again'],
+  array['2', '[]', 'true', '1', 'draft_discarded', 'true', :'supE1', 'Made-up Owner A', '{}', 'none', 'false', '[]'],
+  '0481/182: a draft save keeps no row; discarding the draft keeps one, draft_discarded, naming the draft''s id (its row is gone) and who discarded it; a discard that finds no draft keeps none');
+
+-- Item changes, on the finished review's insurance item.
+select i.id as item_e1 from public.supplier_risk_items i
+ where i.review_id = (pg_temp.j(:'fin_e1') ->> 'review_id')::uuid and i.question_key = 'insurance' \gset
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'in_progress', %L, %L::date, %L)::text$$,
+  :'orgA', :'item_e1', :'ownerA', pg_temp.today(:'orgA') + 20, 'Ask the broker for the certificate.')) as upd_e1a \gset
+select pg_temp.ev_new() as ev_e1a \gset
+select is(
+  array[jsonb_array_length(:'ev_e1a'::jsonb)::text, :'ev_e1a'::jsonb -> 0 ->> 'event', :'ev_e1a'::jsonb -> 0 ->> 'item_id',
+        :'ev_e1a'::jsonb -> 0 ->> 'review_id', :'ev_e1a'::jsonb -> 0 ->> 'supplier_id', :'ev_e1a'::jsonb -> 0 ->> 'actor_user_id',
+        :'ev_e1a'::jsonb -> 0 ->> 'actor_name', (:'ev_e1a'::jsonb -> 0 -> 'detail')::text],
+  array['1', 'item_changed', :'item_e1', pg_temp.j(:'fin_e1') ->> 'review_id', :'supE1', :'adminA', 'Made-up Admin A',
+        pg_temp.item_detail('open', 'in_progress', :'adminA', 'Made-up Admin A', :'ownerA', 'Made-up Owner A',
+                            pg_temp.today(:'orgA') + 10, pg_temp.today(:'orgA') + 20)::text],
+  '0481/183: an item change keeps one row, item_changed: the item, its review and supplier, who, and the status, owner (id and name) and due date before and after; never the action''s words');
+select pg_temp.as_user(:'histAdmin', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', %L, %L::date, null, %L)::text$$,
+  :'orgA', :'item_e1', :'ownerA', pg_temp.today(:'orgA') + 20, :'r1')) as acc_e1b \gset
+select pg_temp.ev_new() as ev_e1b \gset
+select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', %L, %L::date, null, %L)::text$$,
+  :'orgA', :'item_e1', :'ownerA', pg_temp.today(:'orgA') + 20, :'r2')) as acc_e1c \gset
+select pg_temp.ev_new() as ev_e1c \gset
+select is(
+  array[pg_temp.j(:'acc_e1b') ->> 'status', jsonb_array_length(:'ev_e1b'::jsonb)::text, :'ev_e1b'::jsonb -> 0 ->> 'event',
+        :'ev_e1b'::jsonb -> 0 ->> 'actor_name', (:'ev_e1b'::jsonb -> 0 -> 'detail')::text,
+        pg_temp.j(:'acc_e1c') ->> 'accepted_reason', jsonb_array_length(:'ev_e1c'::jsonb)::text, :'ev_e1c'::jsonb -> 0 ->> 'event',
+        :'ev_e1c'::jsonb -> 0 ->> 'actor_name', (:'ev_e1c'::jsonb -> 0 -> 'detail')::text],
+  array['accepted', '1', 'risk_accepted', 'Made-up History Admin',
+        (pg_temp.item_detail('in_progress', 'accepted', :'ownerA', 'Made-up Owner A', :'ownerA', 'Made-up Owner A',
+                             pg_temp.today(:'orgA') + 20, pg_temp.today(:'orgA') + 20) || jsonb_build_object('reason', :'r1'))::text,
+        :'r2', '1', 'risk_accepted', 'Made-up Owner A',
+        (pg_temp.item_detail('accepted', 'accepted', :'ownerA', 'Made-up Owner A', :'ownerA', 'Made-up Owner A',
+                             pg_temp.today(:'orgA') + 20, pg_temp.today(:'orgA') + 20) || jsonb_build_object('reason', :'r2'))::text],
+  '0481/184: accepting a risk keeps one row, risk_accepted, with the status before and the reason as written; accepting it again with a new reason keeps another');
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', %L, %L::date, null)::text$$,
+  :'orgA', :'item_e1', :'ownerA', pg_temp.today(:'orgA') + 30)) as upd_e1d \gset
+select pg_temp.ev_new() as ev_e1d \gset
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'done', null, %L::date, null)::text$$,
+  :'orgA', :'item_e1', pg_temp.today(:'orgA') + 30)) as upd_e1e \gset
+select pg_temp.ev_new() as ev_e1e \gset
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'done', null, %L::date, %L)::text$$,
+  :'orgA', :'item_e1', pg_temp.today(:'orgA') + 30, 'Certificate received and filed.')) as upd_e1f \gset
+select pg_temp.ev_new() as ev_e1f \gset
+select is(
+  array[jsonb_array_length(:'ev_e1d'::jsonb)::text || ':' || (:'ev_e1d'::jsonb -> 0 ->> 'event'), (:'ev_e1d'::jsonb -> 0 -> 'detail')::text,
+        jsonb_array_length(:'ev_e1e'::jsonb)::text || ':' || (:'ev_e1e'::jsonb -> 0 ->> 'event'), (:'ev_e1e'::jsonb -> 0 -> 'detail')::text,
+        jsonb_array_length(:'ev_e1f'::jsonb)::text || ':' || (:'ev_e1f'::jsonb -> 0 ->> 'event'), (:'ev_e1f'::jsonb -> 0 -> 'detail')::text],
+  array['1:item_changed',
+        pg_temp.item_detail('accepted', 'accepted', :'ownerA', 'Made-up Owner A', :'ownerA', 'Made-up Owner A',
+                            pg_temp.today(:'orgA') + 20, pg_temp.today(:'orgA') + 30)::text,
+        '1:risk_acceptance_withdrawn',
+        pg_temp.item_detail('accepted', 'done', :'ownerA', 'Made-up Owner A', null, null,
+                            pg_temp.today(:'orgA') + 30, pg_temp.today(:'orgA') + 30)::text,
+        '1:item_changed',
+        pg_temp.item_detail('done', 'done', null, null, null, null, pg_temp.today(:'orgA') + 30, pg_temp.today(:'orgA') + 30)::text],
+  '0481/185: a change while accepted is item_changed (no reason); leaving accepted is risk_acceptance_withdrawn; a change of the action alone is item_changed with the same before and after');
+select is(
+  array[pg_temp.as_user(:'adminA', format($$select string_agg(x.event || ':' || x.actor_name || ':' || (x.detail ->> 'reason') || ':'
+                                                              || (x.detail ->> 'status_before') || ':' || x.question_key, ' | ' order by x.actor_name)
+                                              from public.supplier_risk_events(%L, %L) x where x.event = 'risk_accepted'$$, :'orgA', :'supE1')),
+        (select i.status || ':' || coalesce(i.accepted_reason, 'none') || ':' || coalesce(i.accepted_by_name, 'none')
+           from public.supplier_risk_items i where i.id = :'item_e1'),
+        pg_temp.as_user(:'adminA', format($$select string_agg(x.event, ',' order by x.event collate "C") from public.supplier_risk_events(%L, %L) x$$,
+          :'orgA', :'supE1'))],
+  array['risk_accepted:Made-up History Admin:' || :'r1' || ':in_progress:insurance | risk_accepted:Made-up Owner A:' || :'r2' || ':accepted:insurance',
+        'done:none:none',
+        'draft_discarded,item_changed,item_changed,item_changed,review_finished,risk_acceptance_withdrawn,risk_accepted,risk_accepted'],
+  '0481/186: a Risk accepted that a later change overwrote is still in the history, with who accepted it and why, though the item itself no longer says it; the history lists every write of the supplier');
+
+-- A refused write keeps no row.
+select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supE4')) as draft_e4 \gset
+select pg_temp.ev_new() as ev_draft_e4 \gset
+select (select array_agg(x.got order by x.n) from (values
+    (1, pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, 'do_not_use', 'Too short')::text$$,
+          :'orgA', :'supE4', pg_temp.answers('staff')))),
+    (2, pg_temp.as_user(:'adminA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgA', :'supE4', pg_temp.answers('staff', '{"insurance": "no"}')))),
+    (3, pg_temp.as_user(:'managerA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgA', :'supE4', pg_temp.answers('staff')))),
+    (4, pg_temp.as_user(:'actas', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+          :'orgA', :'supE4', pg_temp.answers('staff')))),
+    (5, pg_temp.as_user(:'actas', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supE4'))),
+    (6, pg_temp.as_user(:'staffA', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supE4'))),
+    (7, pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'open', null, null, null, %L)::text$$,
+          :'orgA', :'item_e1', 'A reason given with a status that is not accepted.'))),
+    (8, pg_temp.as_user(:'adminA', format($$select public.supplier_risk_item_update(%L, %L, 'closed', null, null, null)::text$$, :'orgA', :'item_e1'))),
+    (9, pg_temp.as_user(:'actas', format($$select public.supplier_risk_item_update(%L, %L, 'accepted', null, null, null, %L)::text$$,
+          :'orgA', :'item_e1', 'Support accepts this risk for the school.'))),
+    (10, pg_temp.as_user(:'adminB', format($$select public.supplier_risk_item_update(%L, %L, 'open', null, null, null)::text$$, :'orgB', :'item_e1'))),
+    (11, pg_temp.as_user(:'viewerA', format($$select public.supplier_risk_item_update(%L, %L, 'open', null, null, null)::text$$, :'orgA', :'item_e1')))
+  ) x(n, got))::text as e4_refused \gset
+select is(
+  array[:'ev_draft_e4', :'e4_refused', pg_temp.ev_new()::text,
+        (select count(*)::text from public.supplier_risk_reviews r where r.supplier_id = :'supE4' and r.status = 'draft'),
+        (select count(*)::text from public.supplier_risk_events e
+          where e.actor_user_id in (:'actas', :'actasOld', :'managerA', :'staffA', :'viewerA')
+             or e.actor_name in ('Made-up Act As', 'Made-up Manager A', 'Made-up Staff A', 'Made-up Viewer A'))],
+  array['[]',
+        array['ERR 22023 bad_override_reason hint=bad_override_reason', 'ERR 22023 items_do_not_match_answers hint=items_do_not_match_answers',
+              'ERR 42501 supplier_risk_not_allowed hint=supplier_risk_not_allowed',
+              'ERR 42501 supplier_risk_act_as_read_only hint=supplier_risk_act_as_read_only',
+              'ERR 42501 supplier_risk_act_as_read_only hint=supplier_risk_act_as_read_only',
+              'ERR 42501 supplier_risk_not_allowed hint=supplier_risk_not_allowed',
+              'ERR 22023 bad_item_reason hint=bad_item_reason', 'ERR 22023 bad_item_status hint=bad_item_status',
+              'ERR 42501 supplier_risk_act_as_read_only hint=supplier_risk_act_as_read_only',
+              'ERR 22023 item_not_found hint=item_not_found', 'ERR 42501 supplier_risk_not_allowed hint=supplier_risk_not_allowed']::text,
+        '[]', '1', '0'],
+  '0481/187: a refused finish, override, discard or item change keeps no row (by an admin with a wrong argument, a manager, a staff member, a viewer, a support seat, another organization''s admin), and no row anywhere names a support seat, a manager, a staff member or a viewer');
+
+-- Who may read it.
+select is(
+  (select array_agg(pg_temp.as_user(u.id, format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgA', :'supE1')) order by u.n)
+     from unnest(array[:'managerA', :'staffA', :'viewerA', :'adminB', :'disabledAdmin', :'invitedAdmin', :'actasOld', :'outsider']::uuid[])
+          with ordinality u(id, n))
+  || array[pg_temp.run_as('authenticated', null, format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgA', :'supE1')),
+           split_part(pg_temp.run_as('anon', null, format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgA', :'supE1')),
+                      ' for function', 1)],
+  array_fill('ERR 42501 supplier_risk_not_allowed hint=supplier_risk_not_allowed'::text, array[9]) || array['ERR 42501 permission denied'],
+  '0481/188: a manager, a staff member, a viewer, an admin of another organization, a disabled admin, an invitation not accepted, an expired act-as seat, an outsider and a session with no account read nothing of the history (42501); anon may not call it');
+select is(
+  array[pg_temp.as_user(:'ownerA', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgA', :'supE1')),
+        pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgA', :'supE1')),
+        pg_temp.as_user(:'actas', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgA', :'supE1')),
+        pg_temp.as_user(:'adminB', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgB', :'supE1')),
+        pg_temp.as_user(:'adminC', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgC', :'supC1')),
+        pg_temp.as_user(:'adminC2', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgC', :'supC1'), 'aal1'),
+        pg_temp.as_user(:'adminC2', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgC', :'supC1'), 'aal2')],
+  array['8', '8', '8', '0', 'ERR 42501 mfa_required hint=mfa_required', 'ERR 42501 aal2_required hint=aal2_required', '0'],
+  '0481/189: an owner, an admin and a live support seat read the same eight rows; another organization''s admin, asking through their own organization, reads none of them; the second step is asked for where it is owed');
+select is(
+  array[pg_temp.as_user(:'adminA', format($$select string_agg(x.event || ':' || (x.review_id = %L)::text, ',') from public.supplier_risk_events(%L, %L) x$$,
+          pg_temp.j(:'m_a1') ->> 'review_id', :'orgA', :'supM1')),
+        pg_temp.as_user(:'adminB', format($$select string_agg(x.event || ':' || (x.review_id = %L)::text, ',') from public.supplier_risk_events(%L, %L) x$$,
+          pg_temp.j(:'m_b1') ->> 'review_id', :'orgB', :'supM1')),
+        pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_events(%L, %L) x$$, :'orgA', :'supM2')),
+        pg_temp.as_user(:'adminB', format($$select string_agg(x.event || ':' || (x.review_id = %L)::text, ',' order by x.event collate "C")
+                                              from public.supplier_risk_events(%L, %L) x$$,
+          pg_temp.j(:'m_b2') ->> 'review_id', :'orgB', :'supM2'))],
+  array['review_finished:true', 'review_finished:true', '0', 'draft_discarded:true,review_finished:false'],
+  '0481/190: one supplier id in two organizations (M1): each organization reads its own rows of it only (B''s discarded draft and its later finish of the id A drafted, none of A''s)');
+select is(
+  array[pg_get_function_arguments('public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid)'::regprocedure),
+        pg_get_function_result('public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid)'::regprocedure),
+        pg_temp.as_user(:'adminA', format($$select string_agg(x.event || ':' || coalesce(x.question_key, '-') || ':' || (x.item_id is not null)::text
+                                                              || ':' || x.actor_account_deleted::text, ',' order by x.event collate "C", x.actor_name)
+                                              from public.supplier_risk_events(%L, %L) x$$, :'orgA', :'supE1'))],
+  array['p_organization_id uuid, p_supplier_id uuid, p_limit integer DEFAULT 50, p_before_at timestamp with time zone DEFAULT NULL::timestamp with time zone, p_before_id uuid DEFAULT NULL::uuid',
+        'TABLE(event_id uuid, review_id uuid, item_id uuid, question_key text, event text, actor_user_id uuid, actor_name text, actor_account_deleted boolean, happened_at timestamp with time zone, detail jsonb)',
+        'draft_discarded:-:false:false,item_changed:insurance:true:false,item_changed:insurance:true:false,item_changed:insurance:true:false,'
+        'review_finished:-:false:false,risk_acceptance_withdrawn:insurance:true:false,risk_accepted:insurance:true:false,risk_accepted:insurance:true:false'],
+  '0481/191: the read''s arguments and columns; an item change names its item and question, the others neither');
+
+-- Newest first, a page at a time: rows written by the table's owner at
+-- chosen times (two at the same time), and 200 older ones.
+insert into public.supplier_risk_events (id, organization_id, supplier_id, review_id, event, actor_name, happened_at) values
+  ('a0481000-0000-0000-0000-000000000701', :'orgA', :'supE3', 'a0481000-0000-0000-0000-000000000711', 'draft_discarded', 'Made-up Fixture', now() - interval '4 hours'),
+  ('a0481000-0000-0000-0000-000000000702', :'orgA', :'supE3', 'a0481000-0000-0000-0000-000000000712', 'draft_discarded', 'Made-up Fixture', now() - interval '3 hours'),
+  ('a0481000-0000-0000-0000-000000000703', :'orgA', :'supE3', 'a0481000-0000-0000-0000-000000000713', 'draft_discarded', 'Made-up Fixture', now() - interval '2 hours'),
+  ('a0481000-0000-0000-0000-000000000704', :'orgA', :'supE3', 'a0481000-0000-0000-0000-000000000714', 'draft_discarded', 'Made-up Fixture', now() - interval '2 hours'),
+  ('a0481000-0000-0000-0000-000000000705', :'orgA', :'supE3', 'a0481000-0000-0000-0000-000000000715', 'draft_discarded', 'Made-up Fixture', now() - interval '1 hour'),
+  ('a0481000-0000-0000-0000-000000000706', :'orgB', :'supE3', 'a0481000-0000-0000-0000-000000000716', 'draft_discarded', 'Made-up Fixture', now()),
+  ('a0481000-0000-0000-0000-000000000707', :'orgA', :'supE4', 'a0481000-0000-0000-0000-000000000717', 'draft_discarded', 'Made-up Fixture', now());
+insert into public.supplier_risk_events (organization_id, supplier_id, review_id, event, actor_name, happened_at)
+select :'orgA', :'supE3', gen_random_uuid(), 'draft_discarded', 'Made-up Fixture', now() - interval '1 day' - make_interval(mins => n)
+  from generate_series(1, 200) n;
+select jsonb_array_length(pg_temp.ev_new()) as ev_fixture_rows \gset
+create function pg_temp.page(p_limit integer, p_at timestamptz, p_id uuid) returns text language sql as $f$
+  select pg_temp.as_user('a0481000-0000-0000-0000-0000000000c2',
+           format($$select string_agg(right(x.event_id::text, 3), ',' order by x.ordinality)
+                      from public.supplier_risk_events(%L, %L, %s, %L, %L) with ordinality x$$,
+                  'a0481000-0000-0000-0000-0000000000a1', 'a0481000-0000-0000-0000-000000000603',
+                  coalesce(p_limit::text, 'null'), p_at, p_id));
+$f$;
+select is(
+  array[pg_temp.page(2, null, null),
+        pg_temp.page(2, now() - interval '2 hours', 'a0481000-0000-0000-0000-000000000704'),
+        pg_temp.page(3, now() - interval '2 hours', 'a0481000-0000-0000-0000-000000000704'),
+        pg_temp.page(1, now() - interval '3 hours', 'a0481000-0000-0000-0000-000000000702'),
+        pg_temp.page(1, now() - interval '2 hours', null),
+        pg_temp.page(2, now() - interval '1 hour', 'a0481000-0000-0000-0000-000000000705')],
+  array['705,704', '703,702', '703,702,701', '701', '702', '704,703'],
+  '0481/192: newest first, then by id; the next page is what comes after the last row read (a row at the same time with a lower id included, the row itself not); a time alone reads what happened before it; another organization''s row and another supplier''s are never read');
+select is(
+  array[pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_events(%L, %L)$$, :'orgA', :'supE3')),
+        pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_events(%L, %L, null)$$, :'orgA', :'supE3')),
+        pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_events(%L, %L, 0)$$, :'orgA', :'supE3')),
+        pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_events(%L, %L, -5)$$, :'orgA', :'supE3')),
+        pg_temp.as_user(:'adminA', format($$select count(*)::text from public.supplier_risk_events(%L, %L, 1000)$$, :'orgA', :'supE3')),
+        (select count(*)::text from public.supplier_risk_events e where e.organization_id = :'orgA' and e.supplier_id = :'supE3')],
+  array['50', '50', '1', '1', '200', '205'],
+  '0481/193: a page is 50 rows by default and 1 to 200 whatever is asked');
+
+-- Append only, on every path, even for the table's owner.
+select e.id as ev_fin_e1 from public.supplier_risk_events e where e.supplier_id = :'supE1' and e.event = 'review_finished' \gset
+select e.id as ev_leaver from public.supplier_risk_events e
+ where e.supplier_id = 'a0481000-0000-0000-0000-0000000000fb' and e.event = 'review_finished' \gset
+select is(
+  array[pg_temp.try(format($$update public.supplier_risk_events set detail = '{"version": 1, "result": "approve", "rules_version": 1}' where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_name = 'Someone Else' where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set happened_at = happened_at - interval '1 day' where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set event = 'draft_discarded', detail = '{}' where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = %L where id = %L$$, :'ownerA', :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set review_id = gen_random_uuid() where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set supplier_id = %L where id = %L$$, :'supE2', :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set organization_id = %L where id = %L$$, :'orgB', :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null, actor_name = 'Someone Else' where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null, detail = '{"version": 1, "result": "approve", "rules_version": 1}'
+                               where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null, happened_at = happened_at - interval '1 day' where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null where id = %L$$, :'ev_leaver')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$delete from public.supplier_risk_events where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$delete from public.supplier_risk_events where organization_id = %L$$, :'orgA'))],
+  array_fill('55000:supplier_risk_event_is_kept'::text, array[12]) || array['ok']
+  || array_fill('55000:supplier_risk_event_is_kept'::text, array[2]),
+  '0481/194: no row of the history changes or goes, even for the table''s owner: not its detail, who, when, kind, review, supplier or organization; the one update allowed empties a live actor link and nothing else (what an account deletion does); no delete while the organization exists');
+select is(
+  (select array_agg(pg_temp.try(format($$insert into public.supplier_risk_events (organization_id, supplier_id, review_id, item_id, event, actor_name, detail)
+                                         values (%L, %L, gen_random_uuid(), %L, %L, %L, %L)$$,
+                                       :'orgA', :'supE4', t.item, t.ev, t.who, t.detail)) order by t.n)
+     from (values
+       (1, null::uuid, 'review_deleted', 'Made-up Fixture', '{}'::jsonb),
+       (2, null, 'item_changed', 'Made-up Fixture', pg_temp.item_detail('open', 'done', null, null, null, null, null, null)),
+       (3, gen_random_uuid(), 'review_finished', 'Made-up Fixture', '{"version": 1, "result": "approve", "rules_version": 1}'),
+       (4, null, 'draft_discarded', 'Made-up' || chr(8203) || ' Fixture', '{}'),
+       (5, null, 'draft_discarded', repeat(chr(160), 3), '{}'),
+       (6, null, 'review_finished', 'Made-up Fixture', '{"version": 1, "result": "approve", "rules_version": 1, "answers": {"insurance": {"answer": "no"}}}'),
+       (7, gen_random_uuid(), 'item_changed', 'Made-up Fixture',
+           pg_temp.item_detail('open', 'done', null, null, null, null, null, null) || '{"question_key": "insurance"}'),
+       (8, null, 'draft_discarded', 'Made-up Fixture', '{"version": 3}'),
+       (9, null, 'review_finished', 'Made-up Fixture', '{"version": 1, "result": "approve", "rules_version": 1}'),
+       (10, gen_random_uuid(), 'risk_accepted', 'Made-up Fixture',
+            pg_temp.item_detail('open', 'accepted', null, null, null, null, null, null) || jsonb_build_object('reason', :'r1'))) t(n, item, ev, who, detail)),
+  array['23514:supplier_risk_events_detail', '23514:supplier_risk_events_item', '23514:supplier_risk_events_item',
+        '23514:supplier_risk_events_actor_name', '23514:supplier_risk_events_actor_name', '23514:supplier_risk_events_detail',
+        '23514:supplier_risk_events_detail', '23514:supplier_risk_events_detail', 'ok', 'ok'],
+  '0481/195: the table holds every row on its own: a kind of the list, an item exactly for an item change, a plain actor name, and a detail of the kind''s keys only (never an answer or a question key)');
+select is(
+  (select array_agg(public._supplier_risk_event_detail_ok(t.ev, t.d) order by t.n)
+     from (values
+       (1, 'review_finished', '{"version": 1, "result": "approve", "rules_version": 1}'::jsonb),
+       (2, 'review_finished', '{"version": 0, "result": "approve", "rules_version": 1}'),
+       (3, 'review_finished', '{"version": 100001, "result": "approve", "rules_version": 1}'),
+       (4, 'review_finished', '{"version": "1", "result": "approve", "rules_version": 1}'),
+       (5, 'review_finished', '{"version": 1, "result": "reject", "rules_version": 1}'),
+       (6, 'review_finished', '{"version": 1, "result": "approve", "rules_version": 2}'),
+       (7, 'review_finished', '{"version": 1, "result": "approve", "rules_version": 1, "answers": {}}'),
+       (8, 'result_overridden', jsonb_build_object('version', 2, 'rules_version', 1, 'computed_result', 'approve',
+                                                   'chosen_result', 'do_not_use', 'reason', :'rOvr')),
+       (9, 'result_overridden', jsonb_build_object('version', 2, 'rules_version', 1, 'computed_result', 'approve',
+                                                   'chosen_result', 'approve', 'reason', :'rOvr')),
+       (10, 'result_overridden', jsonb_build_object('version', 2, 'rules_version', 1, 'computed_result', 'approve',
+                                                    'chosen_result', 'do_not_use', 'reason', 'Too short')),
+       (11, 'result_overridden', jsonb_build_object('version', 2, 'rules_version', 1, 'computed_result', 'approve',
+                                                    'chosen_result', 'do_not_use', 'reason', 'a' || repeat(chr(8288), 19))),
+       (12, 'item_changed', pg_temp.item_detail('open', 'in_progress', :'adminA', 'Made-up Admin A', null, null, current_date, null)),
+       (13, 'item_changed', pg_temp.item_detail('open', 'closed', null, null, null, null, null, null)),
+       (14, 'item_changed', pg_temp.item_detail('open', 'in_progress', :'adminA', 'Made-up Admin A', null, null, null, null)
+                            || '{"owner_before_id": "someone"}'),
+       (15, 'item_changed', pg_temp.item_detail('open', 'done', :'adminA', null, null, null, null, null)),
+       (16, 'item_changed', pg_temp.item_detail('open', 'done', null, 'Made-up Leaver', null, null, null, null)),
+       (17, 'item_changed', pg_temp.item_detail('open', 'done', null, 'Made-up' || chr(8203) || ' Leaver', null, null, null, null)),
+       (18, 'item_changed', pg_temp.item_detail('open', 'done', null, null, null, null, null, null) || '{"due_on_after": "soon"}'),
+       (19, 'item_changed', pg_temp.item_detail('open', 'accepted', null, null, null, null, null, null)),
+       (20, 'item_changed', pg_temp.item_detail('accepted', 'done', null, null, null, null, null, null)),
+       (21, 'item_changed', pg_temp.item_detail('accepted', 'accepted', null, null, null, null, null, null)),
+       (22, 'risk_accepted', pg_temp.item_detail('open', 'accepted', null, null, null, null, null, null) || jsonb_build_object('reason', :'r1')),
+       (23, 'risk_accepted', pg_temp.item_detail('open', 'done', null, null, null, null, null, null) || jsonb_build_object('reason', :'r1')),
+       (24, 'risk_accepted', pg_temp.item_detail('open', 'accepted', null, null, null, null, null, null) || '{"reason": "Too short"}'),
+       (25, 'risk_accepted', pg_temp.item_detail('open', 'accepted', null, null, null, null, null, null)),
+       (26, 'risk_acceptance_withdrawn', pg_temp.item_detail('accepted', 'open', null, null, null, null, null, null)),
+       (27, 'risk_acceptance_withdrawn', pg_temp.item_detail('open', 'done', null, null, null, null, null, null)),
+       (28, 'item_changed', pg_temp.item_detail('open', 'done', null, null, null, null, null, null) || jsonb_build_object('reason', :'r1')),
+       (29, 'item_changed', pg_temp.item_detail('open', 'done', null, null, null, null, null, null) || '{"question_key": "insurance"}'),
+       (30, 'item_changed', pg_temp.item_detail('open', 'done', null, repeat('x', 201), null, null, null, null)),
+       (31, 'item_changed', pg_temp.item_detail('open', 'done', null, null, null, null, null, null) || '{"status_before": 1}'),
+       (32, 'draft_discarded', '{}'),
+       (33, 'draft_discarded', '{"version": 3}'),
+       (34, 'draft_deleted', '{}'),
+       (35, 'draft_discarded', null),
+       (36, 'draft_discarded', '[]'),
+       (37, 'item_changed', pg_temp.item_detail('open', 'done', null, null, null, null, null, null) - 'due_on_after'),
+       (38, 'item_changed', pg_temp.item_detail('open', 'done', :'adminA', 'Made-up Admin A', :'ownerA', 'Made-up Owner A',
+                                                current_date, current_date + 1)),
+       (39, 'item_changed', pg_temp.item_detail('open', 'done', null, null, null, null, null, null) || '{"owner_after_id": 5}'),
+       (40, 'review_finished', '{"version": 1, "result": 1, "rules_version": 1}')) t(n, ev, d)),
+  array[true, false, false, false, false, false, false, true, false, false, false, true, false, false, false, true, false, false, false,
+        false, true, true, false, false, false, true, false, false, false, false, false, true, false, false, false, false, false, true,
+        false, false],
+  '0481/196: the detail check, kind by kind: a version and rules version, one of the four results, two different results with a reason by the reason rule; each status one of four, an owner id a uuid with its name, a name alone, plain names of at most 200, a due date a day; risk_accepted ends accepted with its reason, a withdrawal leaves accepted, item_changed neither; no other key, none missing');
+
+-- An account deleted: the rows stay, the link empties, the name stays.
+select pg_temp.as_user(:'histAdmin', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supE4', pg_temp.answers('staff'))) as fin_e4 \gset
+select pg_temp.ev_new() as ev_fin_e4 \gset
+select pg_temp.delete_account(:'histAdmin') as del_hist \gset
+select is(
+  array[(pg_temp.j(:'fin_e4') ->> 'version') || ':' || jsonb_array_length(:'ev_fin_e4'::jsonb), :'del_hist',
+        (select string_agg(e.event || ':' || coalesce(e.actor_user_id::text, 'none') || ':' || e.actor_name, ',' order by e.event)
+           from public.supplier_risk_events e where e.actor_name = 'Made-up History Admin'),
+        (select e.detail ->> 'reason' from public.supplier_risk_events e where e.actor_name = 'Made-up History Admin' and e.event = 'risk_accepted'),
+        pg_temp.as_user(:'adminA', format($$select string_agg(x.event || ':' || coalesce(x.actor_user_id::text, 'none') || ':' || x.actor_account_deleted, ',')
+                                              from public.supplier_risk_events(%L, %L) x where x.actor_name = 'Made-up History Admin'$$, :'orgA', :'supE1')),
+        (select string_agg(e.event || ':' || coalesce(e.actor_user_id::text, 'none') || ':' || e.actor_name, ',')
+           from public.supplier_risk_events e where e.supplier_id = 'a0481000-0000-0000-0000-0000000000fb' and e.event = 'review_finished'),
+        (select string_agg(distinct coalesce(e.actor_user_id::text, 'none') || ':' || e.actor_name, ',')
+           from public.supplier_risk_events e where e.supplier_id in (:'supV1', :'supV3')),
+        (select string_agg(e.event || ':' || coalesce(e.actor_user_id::text, 'none') || ':' || e.actor_name, ',')
+           from public.supplier_risk_events e where e.supplier_id = :'supU1' and e.event = 'risk_accepted' and e.actor_name = 'Made-up Acceptor')],
+  array['1:1', 'deleted', 'review_finished:none:Made-up History Admin,risk_accepted:none:Made-up History Admin', :'r1',
+        'risk_accepted:none:true', 'review_finished:none:Made-up Leaver', 'none:Made-up Hidden Owner', 'risk_accepted:none:Made-up Acceptor'],
+  '0481/197: an account deletion succeeds; its rows of the history stay as written, the link empty and the name kept (the name as plain text when the profile''s held hidden characters), and the read says the account was deleted');
+-- An organization deleted: its history goes with it.
+select pg_temp.as_user(:'ownerE', format($$select public.supplier_risk_finalise(%L, %L, 'none', '{}')::text$$, :'orgE', :'supE5')) as fin_e5 \gset
+select pg_temp.as_user(:'ownerE', format($$select public.supplier_risk_draft_save(%L, %L, 'none', '{}')::text$$, :'orgE', :'supE5')) as draft_e5 \gset
+select pg_temp.as_user(:'ownerE', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgE', :'supE5')) as disc_e5 \gset
+select (select string_agg(e.event, ',' order by e.event) from public.supplier_risk_events e where e.organization_id = :'orgE') as ev_org_e \gset
+select pg_temp.delete_org(:'orgE') as del_org_e \gset
+select is(
+  array[:'ev_org_e', :'del_org_e',
+        (select count(*)::text from public.supplier_risk_events e where e.organization_id = :'orgE'),
+        (select count(*)::text from public.supplier_risk_reviews r where r.organization_id = :'orgE'),
+        (select count(*)::text from public.supplier_risk_events e where e.organization_id = :'orgA' and e.supplier_id = :'supE1')],
+  array['draft_discarded,review_finished', 'deleted', '0', '0', '8'],
+  '0481/198: an organization''s deletion succeeds and takes its history with it, as it takes its reviews; another organization''s rows stay');
+
+-- The actor's name as plain text: a profile whose full name is only hidden
+-- characters (section 13's) is named by its email.
+select pg_temp.as_user(:'onlyHid', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supV2')) as disc_v2 \gset
+select pg_temp.ev_new() as ev_disc_v2 \gset
+select is(
+  array[:'disc_v2', jsonb_array_length(:'ev_disc_v2'::jsonb)::text, :'ev_disc_v2'::jsonb -> 0 ->> 'event', :'ev_disc_v2'::jsonb -> 0 ->> 'actor_name',
+        :'ev_disc_v2'::jsonb -> 0 ->> 'actor_user_id'],
+  array['true', '1', 'draft_discarded', 'vr-only-hidden@test.local', :'onlyHid'],
+  '0481/199: the name kept beside the actor is plain text, as every name these tables keep: a profile whose full name is only hidden characters is named by its email');
+
+-- Across every row this file's writes kept.
+select is(
+  (select count(*)::int from public.supplier_risk_events e
+     left join public.supplier_risk_reviews r on r.id = e.review_id and r.organization_id = e.organization_id
+    where e.event in ('review_finished', 'result_overridden')
+      and not coalesce(r.status = 'final' and r.supplier_id = e.supplier_id and r.version = (e.detail ->> 'version')::integer
+                       and r.rules_version = (e.detail ->> 'rules_version')::integer and e.happened_at = r.reviewed_at
+                       and e.actor_name = r.reviewer_name and e.actor_user_id is not distinct from r.reviewer_id
+                       and case e.event when 'review_finished'
+                                  then r.override_result is null and r.computed_result = e.detail ->> 'result'
+                                else r.override_result = e.detail ->> 'chosen_result' and r.computed_result = e.detail ->> 'computed_result'
+                                     and r.override_reason = e.detail ->> 'reason' end, false))
+  + (select count(*)::int from (select e.review_id from public.supplier_risk_events e
+                                 where e.event in ('review_finished', 'result_overridden') group by e.review_id having count(*) > 1) x)
+  + (select count(*)::int from public.supplier_risk_events e
+       left join public.supplier_risk_items i on i.id = e.item_id and i.organization_id = e.organization_id
+       left join public.supplier_risk_reviews r on r.id = i.review_id and r.organization_id = i.organization_id
+      where e.event in ('item_changed', 'risk_accepted', 'risk_acceptance_withdrawn')
+        and not coalesce(i.review_id = e.review_id and r.supplier_id = e.supplier_id, false))
+  + (select count(*)::int from public.supplier_risk_events e
+      where e.event = 'draft_discarded' and exists (select 1 from public.supplier_risk_reviews r where r.id = e.review_id)),
+  0,
+  '0481/200: across this file, every finish row matches its review (organization, supplier, version, rules version, the result or the override and its reason, the reviewer, the time it was finished) and no review has two; every item row names its item''s review and supplier; every discarded draft is gone');
+select is(
+  array[(select count(*)::int from public.supplier_risk_events e
+          where e.detail ?| array['answer', 'answers', 'note', 'notes', 'finding', 'findings', 'action', 'question_key', 'severity', 'items']
+             or exists (select 1 from public._supplier_risk_questions() q where strpos(e.detail::text, q.key) > 0)),
+        (select count(distinct e.event)::int from public.supplier_risk_events e where e.actor_name <> 'Made-up Fixture'),
+        (select (count(*) > 40)::int from public.supplier_risk_events e where e.actor_name <> 'Made-up Fixture')],
+  array[0, 6, 1],
+  '0481/201: across this file, no row''s detail holds an answer, a note, a finding, an action or a question key; the functions wrote every kind');
 
 select * from finish();
 rollback;

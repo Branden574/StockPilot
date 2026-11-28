@@ -14,15 +14,16 @@
 -- this file's test is run against both (vendor-risk.parity.test.ts). The
 -- advisory lock key below (4810001) carries this file's number.
 --
--- WHAT IT ADDS (tier A: two new tables with their keys, checks and indexes,
--- two triggers on the new tables, twenty-nine functions (eleven the API roles
--- may run: eight for signed-in admins, three for the daily job; eighteen
--- private) and their grants. No stored row; no existing table, column,
+-- WHAT IT ADDS (tier A: three new tables with their keys, checks and
+-- indexes, three triggers on the new tables, thirty-two functions (twelve the
+-- API roles may run: nine for signed-in admins, three for the daily job;
+-- twenty private) and their grants. No stored row; no existing table, column,
 -- function, policy, trigger or grant changes. The existing objects touched
 -- are public.organizations and public.user_profiles, which gain the internal
 -- triggers of the new foreign keys: deleting an organization deletes its
--- reviews and items; deleting a profile, which deleting an account does,
--- empties the link to that person and keeps the name written beside it.)
+-- reviews, items and history; deleting a profile, which deleting an account
+-- does, empties the link to that person and keeps the name written beside
+-- it.)
 --   1. public.supplier_risk_reviews. One row per version of a supplier's
 --      review. A version is a draft (being written; at most one per supplier)
 --      or final (finished; never changed again, but for the marks below). The
@@ -66,7 +67,25 @@
 --      accepted who accepted it and why (always both). Exactly one per gap,
 --      written with the final review. A trigger keeps the finding, the answer
 --      and the severity as written.
---   3. The admins' functions (EXECUTE to authenticated; each opens with
+--   3. public.supplier_risk_events. The history of the privileged writes,
+--      append only: one row for each discarded draft, finished review (or
+--      finished review whose result the admin overrode) and item change
+--      (a risk accepted, an acceptance withdrawn, any other change), written
+--      by the function that makes the change, in the same transaction,
+--      after the function's own checks: never a change
+--      without its row, never a row without its change. A draft save writes
+--      none (a draft is work in progress; what becomes of it is the event).
+--      Each row holds the organization, the supplier, the review (a draft's
+--      id stays after the draft is gone: no foreign key), the item for an
+--      item change, the kind, who (a link that empties when the account is
+--      deleted, and a name snapshot that stays, as plain text) and when, and
+--      a detail of fixed keys per kind (EVENTS below). The shared audit log is
+--      read by managers too, so nothing about vendor risk is written there:
+--      this is the admins' own record. A trigger refuses every change and
+--      every delete of a row but the two the foreign keys make: an account
+--      deleted empties actor_user_id, and the organization's own deletion
+--      takes its rows with it.
+--   4. The admins' functions (EXECUTE to authenticated; each opens with
 --      has_org_role(organization, 'admin') in its own body and then
 --      security_events_reader_check, 0472's authenticator rule):
 --        supplier_risk_register(org): every active supplier of the
@@ -76,6 +95,8 @@
 --        supplier_risk_review(org, review): one version whole, with its items;
 --        supplier_risk_items_for_organization(org, open_only): the items of
 --          the current reviews;
+--        supplier_risk_events(org, supplier, limit, before_at, before_id):
+--          the history of one supplier, newest first, a page at a time;
 --        supplier_risk_draft_save(org, supplier, level, answers): writes the
 --          supplier's one draft;
 --        supplier_risk_finalise(org, supplier, level, answers, next review,
@@ -83,7 +104,7 @@
 --        supplier_risk_draft_discard(org, supplier): deletes the draft;
 --        supplier_risk_item_update(org, item, status, owner, due, action,
 --          reason).
---   4. The future daily job's functions (EXECUTE to service_role only):
+--   5. The future daily job's functions (EXECUTE to service_role only):
 --        supplier_risk_reminders_due(limit): current reviews of active
 --          suppliers due in 30 days or less, or due today or before, whose
 --          reminder was not claimed (or whose due reminder was claimed more
@@ -95,10 +116,33 @@
 --          reminder went. A due reminder claimed and not confirmed within 24
 --          hours is offered once more; one claimed twice and still not
 --          confirmed 24 hours later shows as not sent on the register.
---   5. Private helpers (no API role may call them): the question list, the
+--   6. Private helpers (no API role may call them): the question list, the
 --      answers check, the rules, the hidden characters and the spaces, the
 --      text rule, the reason rule, a name as plain text, the default next
---      review date, the organization's zone, the two trigger functions.
+--      review date, the organization's zone, the history's detail check, the
+--      three trigger functions.
+--
+-- EVENTS. The kinds and what each detail holds (nothing else: never an
+-- answer, a note, a finding, an action or a question key; the CHECK of the
+-- table holds every row to its kind's keys, types and sizes):
+--   draft_discarded            {} (the review id is the draft's);
+--   review_finished            {version, result, rules_version};
+--   result_overridden          (a finish with an override, instead of
+--                              review_finished) {version, rules_version,
+--                              computed_result, chosen_result, reason};
+--   item_changed, risk_acceptance_withdrawn, risk_accepted
+--                              {status_before, status_after,
+--                              owner_before_id, owner_before_name,
+--                              owner_after_id, owner_after_name,
+--                              due_on_before, due_on_after}, and for
+--                              risk_accepted the reason as written.
+-- An item change is risk_accepted when it gives a reason (the item is
+-- accepted with it, or accepted again with a new one: the earlier
+-- acceptance stays in the history with its reason), risk_acceptance_withdrawn
+-- when an accepted item leaves accepted, else item_changed (a change of the
+-- action alone shows as item_changed with the same before and after: the
+-- action's words are not kept here). The reason (at most 2000 characters)
+-- and the names (200) bound a detail at about 10 KB.
 --
 -- TEXT. No text these tables store (a note, a reason, a finding, an action,
 -- a name kept beside a link) holds a hidden character: a control character
@@ -120,9 +164,9 @@
 -- dated more than 12 months before the review counts as Not shown to us.
 --
 -- WHO CAN READ AND WRITE
---   - RLS is on with NO policy on both tables, and anon, authenticated and
---     service_role have no privilege on either: no API role reads or writes a
---     row directly. In particular the suppliers table's own policies are not
+--   - RLS is on with NO policy on the three tables, and anon, authenticated
+--     and service_role have no privilege on any of them: no API role reads,
+--     writes, changes, deletes or truncates a row directly. In particular the suppliers table's own policies are not
 --     reused: every member reads suppliers (0003) and managers write them,
 --     while a review is for owners and admins only. (No policy is created, so
 --     this file takes none of the locks a CREATE POLICY takes: 0418's note.)
@@ -142,7 +186,8 @@
 --     another organization is "not found", as one that does not exist.
 --   - A support (act-as) seat may read, and never writes: the four writes
 --     refuse it with 42501 supplier_risk_act_as_read_only (no draft, no
---     finish, no override, no item change, so no risk accepted by it).
+--     finish, no override, no item change, so no risk accepted by it, and no
+--     row of the history names it). It reads the history as the other reads.
 --   - The two job functions: the grant is the gate (service_role only), and
 --     a second lock in each body reads the role setting (0413's form) and
 --     refuses with 42501 when it is authenticated or anon.
@@ -162,23 +207,32 @@
 -- supplier's organization is checked in every write: a supplier of another
 -- organization is supplier_not_found.
 --
--- ACCOUNTS DELETED. reviewer_id, owner_user_id, changed_by and accepted_by
--- are keys to user_profiles with ON DELETE SET NULL: the row stays, the link
--- empties, and the name written beside it (reviewer_name, owner_name,
--- changed_by_name, accepted_by_name) stays, also through later changes of
--- the item. The SET NULL is an update, so the tables' CHECKs run again on
--- every row it touches: their functions are never changed in place (see
--- the text rule), so a row stored once passes them again and the deletion
--- is never refused by it.
+-- ACCOUNTS DELETED. reviewer_id, owner_user_id, changed_by, accepted_by and
+-- the history's actor_user_id are keys to user_profiles with ON DELETE SET
+-- NULL: the row stays, the link empties, and the name written beside it
+-- (reviewer_name, owner_name, changed_by_name, accepted_by_name, actor_name)
+-- stays, also through later changes of the item. The SET NULL is an update,
+-- so the tables' CHECKs run again on every row it touches: their functions
+-- are never changed in place (see the text rule), so a row stored once
+-- passes them again and the deletion is never refused by it; the history's
+-- trigger lets exactly that update through.
+--
+-- ORGANIZATIONS DELETED. organization_id is a key to organizations with ON
+-- DELETE CASCADE on the reviews and the history (the items go with their
+-- reviews): an organization's deletion takes its reviews, items and history
+-- with it, as it takes the rest of its data. The history's trigger lets a
+-- delete through only when the organization's row is already gone.
 --
 -- ERRORS: 42501 (not allowed; mfa_required, aal2_required); 22023 with the
 -- code as message and hint for every refused argument (listed in each
 -- function's comment); 55000 (supplier_risk_final_is_kept, a final review or
--- an item's written fields changed by any path); 55P03 (a lock wait past the
--- function's own lock_timeout). No function raises 40001 or 40P01.
+-- an item's written fields changed by any path; supplier_risk_event_is_kept,
+-- a row of the history changed or deleted by any path but the two above);
+-- 55P03 (a lock wait past the function's own lock_timeout). No function
+-- raises 40001 or 40P01.
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- LOCKS: the five foreign keys to existing tables take SHARE ROW EXCLUSIVE on
+-- LOCKS: the seven foreign keys to existing tables take SHARE ROW EXCLUSIVE on
 -- public.organizations and public.user_profiles (and ACCESS SHARE), held to
 -- commit. Those are the only existing tables this file locks: it creates no
 -- policy and drops nothing, so supautils takes nothing on the auth, storage
@@ -199,7 +253,13 @@ set lock_timeout = '900ms';
 -- supplier_risk_preflight, nothing applied) when a name this file creates is
 -- taken (the file already ran, or was half applied by hand), when another
 -- function names the advisory lock key, or when something the functions read
--- is not there as they read it.
+-- is not there as they read it. The names: the three tables
+-- (supplier_risk_reviews, supplier_risk_items, supplier_risk_events), their
+-- indexes and row types (every relation and type named supplier_risk_*),
+-- and the thirty-two functions (every function named supplier_risk_* or
+-- _supplier_risk_*: the history's read, its trigger function and its detail
+-- check among them). The three triggers sit on the new tables only, so no
+-- existing trigger can hold their names.
 do $preflight$
 declare
   v_bad text := '';
@@ -1098,6 +1158,201 @@ create trigger supplier_risk_items_kept
   before update on public.supplier_risk_items
   for each row execute function public._supplier_risk_items_guard();
 
+-- ── The history ──────────────────────────────────────────────────────────────
+-- What a row's detail holds, by its kind (EVENTS in the header): exactly the
+-- kind's keys, each of its type and size; false for anything else (null
+-- included). Used by the history's CHECK. NEVER CHANGE IT IN PLACE once a row
+-- is stored: the CHECK runs again at every update, an account deletion's SET
+-- NULL among them (see the text rule).
+create function public._supplier_risk_event_detail_ok(p_event text, p_detail jsonb)
+returns boolean
+language plpgsql
+immutable
+set search_path = ''
+as $$
+declare
+  v_keys     text[];
+  v_want     text[];
+  v_item     constant text[] := array['status_before', 'status_after', 'owner_before_id', 'owner_before_name',
+                                      'owner_after_id', 'owner_after_name', 'due_on_before', 'due_on_after'];
+  v_results  constant text[] := array['approve', 'approve_with_conditions', 'more_information', 'do_not_use'];
+  v_statuses constant text[] := array['open', 'in_progress', 'done', 'accepted'];
+  v_side     text;
+begin
+  if p_detail is null or pg_catalog.jsonb_typeof(p_detail) is distinct from 'object' then
+    return false;
+  end if;
+  v_keys := array(select k from pg_catalog.jsonb_object_keys(p_detail) k);
+  v_want := case p_event
+              when 'draft_discarded' then '{}'::text[]
+              when 'review_finished' then array['version', 'result', 'rules_version']
+              when 'result_overridden' then array['version', 'rules_version', 'computed_result', 'chosen_result', 'reason']
+              when 'item_changed' then v_item
+              when 'risk_acceptance_withdrawn' then v_item
+              when 'risk_accepted' then v_item || 'reason'::text
+            end;
+  -- Exactly the kind's keys (a jsonb object holds each key once).
+  if v_want is null or not (v_keys @> v_want and v_want @> v_keys) then
+    return false;
+  end if;
+
+  if p_event in ('review_finished', 'result_overridden') then
+    if pg_catalog.jsonb_typeof(p_detail -> 'version') is distinct from 'number'
+       or (p_detail ->> 'version') !~ '^[1-9][0-9]{0,5}$'
+       or (p_detail ->> 'version')::integer > 100000
+       or p_detail -> 'rules_version' <> '1'::jsonb then
+      return false;
+    end if;
+  end if;
+  if p_event = 'review_finished' then
+    return pg_catalog.jsonb_typeof(p_detail -> 'result') = 'string'
+       and (p_detail ->> 'result') = any (v_results);
+  end if;
+  if p_event = 'result_overridden' then
+    return pg_catalog.jsonb_typeof(p_detail -> 'computed_result') = 'string'
+       and (p_detail ->> 'computed_result') = any (v_results)
+       and pg_catalog.jsonb_typeof(p_detail -> 'chosen_result') = 'string'
+       and (p_detail ->> 'chosen_result') = any (v_results)
+       and (p_detail ->> 'chosen_result') <> (p_detail ->> 'computed_result')
+       and pg_catalog.jsonb_typeof(p_detail -> 'reason') = 'string'
+       and public._supplier_risk_reason_ok(p_detail ->> 'reason');
+  end if;
+  if p_event = 'draft_discarded' then
+    return true;
+  end if;
+
+  -- An item change: each status one of the four; each owner a uuid and its
+  -- name (by the text rule), a name alone (an owner whose account was
+  -- deleted), or neither; each due date a day or none.
+  if pg_catalog.jsonb_typeof(p_detail -> 'status_before') is distinct from 'string'
+     or not ((p_detail ->> 'status_before') = any (v_statuses))
+     or pg_catalog.jsonb_typeof(p_detail -> 'status_after') is distinct from 'string'
+     or not ((p_detail ->> 'status_after') = any (v_statuses)) then
+    return false;
+  end if;
+  foreach v_side in array array['before', 'after'] loop
+    if pg_catalog.jsonb_typeof(p_detail -> ('owner_' || v_side || '_id')) not in ('null', 'string')
+       or pg_catalog.jsonb_typeof(p_detail -> ('owner_' || v_side || '_name')) not in ('null', 'string')
+       or pg_catalog.jsonb_typeof(p_detail -> ('due_on_' || v_side)) not in ('null', 'string')
+       or (p_detail ->> ('owner_' || v_side || '_id'))
+            !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+       or (p_detail ->> ('owner_' || v_side || '_id') is not null
+           and p_detail ->> ('owner_' || v_side || '_name') is null)
+       or (p_detail ->> ('owner_' || v_side || '_name') is not null
+           and not public._supplier_risk_text_ok(p_detail ->> ('owner_' || v_side || '_name'), 1, 200))
+       or (p_detail ->> ('due_on_' || v_side)) !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' then
+      return false;
+    end if;
+  end loop;
+
+  -- The kind follows the statuses: a risk accepted ends accepted, with its
+  -- reason; a withdrawal leaves accepted; any other change neither enters
+  -- nor leaves it.
+  return case p_event
+           when 'risk_accepted'
+             then (p_detail ->> 'status_after') = 'accepted'
+                  and pg_catalog.jsonb_typeof(p_detail -> 'reason') = 'string'
+                  and public._supplier_risk_reason_ok(p_detail ->> 'reason')
+           when 'risk_acceptance_withdrawn'
+             then (p_detail ->> 'status_before') = 'accepted' and (p_detail ->> 'status_after') <> 'accepted'
+           else ((p_detail ->> 'status_before') = 'accepted') = ((p_detail ->> 'status_after') = 'accepted')
+         end;
+end;
+$$;
+
+revoke all on function public._supplier_risk_event_detail_ok(text, jsonb) from public, anon, authenticated, service_role;
+
+comment on function public._supplier_risk_event_detail_ok(text, jsonb) is
+  'Private (0481). Is this the detail of a history row of this kind: exactly the kind''s keys, each of its type and size. draft_discarded: none. review_finished: version (1 to 100000), result (one of the four), rules_version (1). result_overridden: version, rules_version, computed_result and chosen_result (two different results), reason (the reason rule). item_changed, risk_acceptance_withdrawn and risk_accepted: status_before and status_after (open, in_progress, done, accepted), owner_before_id and owner_after_id (a uuid or null), owner_before_name and owner_after_name (the text rule, at most 200; present when the id is), due_on_before and due_on_after (YYYY-MM-DD or null); risk_accepted ends accepted and has its reason (the reason rule); risk_acceptance_withdrawn leaves accepted; item_changed neither enters nor leaves it. Never an answer, a note, a finding, an action or a question key. Used by the history''s CHECK. Never change it in place once a row is stored. No API role may call it.';
+
+create table public.supplier_risk_events (
+  id               uuid        primary key default gen_random_uuid(),
+  organization_id  uuid        not null references public.organizations(id) on delete cascade,
+  -- No foreign key: the history outlives a supplier, and a discarded
+  -- draft's review row (see the header).
+  supplier_id      uuid        not null,
+  review_id        uuid        not null,
+  item_id          uuid,
+  event            text        not null,
+  -- Who: the link empties when the account is deleted, the name stays.
+  actor_user_id    uuid        references public.user_profiles(id) on delete set null,
+  actor_name       text        not null,
+  happened_at      timestamptz not null default now(),
+  detail           jsonb       not null default '{}'::jsonb,
+  constraint supplier_risk_events_event
+    check (event in ('draft_discarded', 'review_finished', 'result_overridden', 'item_changed', 'risk_accepted',
+                     'risk_acceptance_withdrawn')),
+  -- An item change names its item; nothing else does.
+  constraint supplier_risk_events_item
+    check ((item_id is not null) = (event in ('item_changed', 'risk_accepted', 'risk_acceptance_withdrawn'))),
+  constraint supplier_risk_events_actor_name
+    check (public._supplier_risk_text_ok(actor_name, 1, 200)),
+  constraint supplier_risk_events_detail
+    check (public._supplier_risk_event_detail_ok(event, detail))
+);
+
+-- The read: one supplier of one organization, newest first (and the
+-- cascade from organizations).
+create index supplier_risk_events_org_supplier_idx
+  on public.supplier_risk_events (organization_id, supplier_id, happened_at desc, id desc);
+-- An account deleted empties its links without a scan.
+create index supplier_risk_events_actor_idx
+  on public.supplier_risk_events (actor_user_id)
+  where actor_user_id is not null;
+
+comment on table public.supplier_risk_events is
+  'The history of the vendor risk writes (0481), append only: one row for each discarded draft, finished review (result_overridden when the admin overrode its result) and item change (risk_accepted, risk_acceptance_withdrawn, item_changed), written by the function that made the change in the same transaction, after its checks. Who (actor_user_id, emptied when the account is deleted; actor_name kept), when, and a detail of fixed keys per kind (_supplier_risk_event_detail_ok): never an answer, a note, a finding, an action or a question key. A trigger refuses every update but the SET NULL of an account deletion and every delete but the organization''s own deletion. RLS on, no policy, no privilege to any API role: read only through supplier_risk_events(), for an organization''s owners and admins. The shared audit log holds nothing about vendor risk.';
+comment on column public.supplier_risk_events.review_id is
+  'The review the event is about: the final finished, the draft discarded (its row is gone; no foreign key), or the item''s review.';
+comment on column public.supplier_risk_events.actor_name is
+  'Who made the change, as their name (or email) was then, as plain text: kept when the account is deleted and actor_user_id empties.';
+comment on column public.supplier_risk_events.detail is
+  'Fixed keys per kind (_supplier_risk_event_detail_ok): review_finished {version, result, rules_version}; result_overridden {version, rules_version, computed_result, chosen_result, reason}; draft_discarded {}; item_changed, risk_acceptance_withdrawn and risk_accepted {status_before, status_after, owner_before_id, owner_before_name, owner_after_id, owner_after_name, due_on_before, due_on_after}, risk_accepted also {reason}.';
+
+-- RLS on and no policy, no privilege for any API role (as the two tables
+-- above, under either set of default privileges).
+alter table public.supplier_risk_events enable row level security;
+revoke all on table public.supplier_risk_events from public, anon, authenticated, service_role;
+
+-- Append only, on any path (the owner, a future function): an update may
+-- only empty actor_user_id, changing nothing else (an account deleted: its
+-- foreign key's SET NULL); a delete goes through only when the
+-- organization's row is already gone (the organization deleted: its
+-- foreign key's cascade). Anything else raises 55000
+-- supplier_risk_event_is_kept.
+create function public._supplier_risk_events_guard()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if tg_op = 'UPDATE' then
+    if old.actor_user_id is not null and new.actor_user_id is null
+       and (new.id, new.organization_id, new.supplier_id, new.review_id, new.item_id, new.event, new.actor_name,
+            new.happened_at, new.detail)
+           is not distinct from
+           (old.id, old.organization_id, old.supplier_id, old.review_id, old.item_id, old.event, old.actor_name,
+            old.happened_at, old.detail) then
+      return new;
+    end if;
+  elsif tg_op = 'DELETE' then
+    if not exists (select 1 from public.organizations o where o.id = old.organization_id) then
+      return old;
+    end if;
+  end if;
+  raise exception 'supplier_risk_event_is_kept' using errcode = '55000', hint = 'supplier_risk_event_is_kept';
+end;
+$$;
+
+revoke all on function public._supplier_risk_events_guard() from public, anon, authenticated, service_role;
+
+comment on function public._supplier_risk_events_guard() is
+  'Private (0481), the trigger function of supplier_risk_events_kept: the history is append only. An update may only empty actor_user_id and change nothing else (an account deleted); a delete goes through only when the row''s organization is already gone (the organization deleted). Anything else raises 55000 supplier_risk_event_is_kept. No API role may call it.';
+
+create trigger supplier_risk_events_kept
+  before update or delete on public.supplier_risk_events
+  for each row execute function public._supplier_risk_events_guard();
+
 -- ── People ───────────────────────────────────────────────────────────────────
 -- A person's name as a review or an item keeps it, as plain text.
 create function public._supplier_risk_person_name(p_user_id uuid)
@@ -1524,6 +1779,59 @@ grant execute on function public.supplier_risk_items_for_organization(uuid, bool
 comment on function public.supplier_risk_items_for_organization(uuid, boolean) is
   'The items of an organization''s current reviews (0481), open and in_progress only unless p_open_only is false: item_id, review_id, supplier_id, supplier_name (today''s), reviewed_as_name, name_changed, supplier_state, question_key, answer (no, not_shown, out_of_date), severity, finding, action, owner_user_id, owner_name, owner_is_admin, due_on, status, closed_at, changed_by_name, changed_at, accepted_by_name, accepted_reason, created_at, updated_at; most severe first, then by due date (none last), supplier and question. For its owners and admins only: 42501 as supplier_risk_register. Read-only.';
 
+create function public.supplier_risk_events(
+  p_organization_id uuid,
+  p_supplier_id uuid,
+  p_limit integer default 50,
+  p_before_at timestamptz default null,
+  p_before_id uuid default null
+)
+returns table (
+  event_id               uuid,
+  review_id              uuid,
+  item_id                uuid,
+  question_key           text,
+  event                  text,
+  actor_user_id          uuid,
+  actor_name             text,
+  actor_account_deleted  boolean,
+  happened_at            timestamptz,
+  detail                 jsonb
+)
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+begin
+  if p_organization_id is null
+     or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
+    raise exception 'supplier_risk_not_allowed' using errcode = '42501', hint = 'supplier_risk_not_allowed';
+  end if;
+  perform public.security_events_reader_check(p_organization_id);
+
+  -- Newest first; the next page is what comes after the last row read:
+  -- (happened_at, event_id) below (p_before_at, p_before_id). A time with no
+  -- id reads what happened before that time.
+  return query
+    select e.id, e.review_id, e.item_id, i.question_key, e.event, e.actor_user_id, e.actor_name,
+           (e.actor_user_id is null), e.happened_at, e.detail
+      from public.supplier_risk_events e
+      left join public.supplier_risk_items i on i.id = e.item_id and i.organization_id = e.organization_id
+     where e.organization_id = p_organization_id
+       and e.supplier_id = p_supplier_id
+       and (p_before_at is null or (e.happened_at, e.id) < (p_before_at, p_before_id))
+     order by e.happened_at desc, e.id desc
+     limit least(greatest(coalesce(p_limit, 50), 1), 200);
+end;
+$$;
+
+revoke all on function public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid) from public, anon, authenticated, service_role;
+grant execute on function public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid) to authenticated;
+
+comment on function public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid) is
+  'The history of one supplier in an organization (0481), newest first, at most p_limit rows (1 to 200, default 50): event_id, review_id, item_id, question_key (an item change''s question, from the item), event (draft_discarded, review_finished, result_overridden, item_changed, risk_accepted, risk_acceptance_withdrawn), actor_user_id, actor_name, actor_account_deleted (the link emptied), happened_at, detail (fixed keys per kind: see the table''s comment). The next page: p_before_at and p_before_id from the last row read (a time alone reads what happened before it). None for a supplier of another organization. For its owners and admins only (a support seat reads it too): 42501 as supplier_risk_register. Read-only.';
+
 -- ── The admins' writes ───────────────────────────────────────────────────────
 -- Each write takes this file's advisory lock for the supplier (4810001 and
 -- the hash of the organization and supplier ids), so two writes for one
@@ -1826,6 +2134,19 @@ begin
     from pg_catalog.jsonb_array_elements(v_items) e
     join public._supplier_risk_questions() q on q.key = e.value ->> 'question_key';
 
+  -- The history, in this transaction: the finish, or the finish whose result
+  -- the admin overrode (what the rules gave, what was chosen and why).
+  insert into public.supplier_risk_events (organization_id, supplier_id, review_id, event, actor_user_id, actor_name, detail)
+  values (p_organization_id, p_supplier_id, v_id,
+          case when p_override_result is null then 'review_finished' else 'result_overridden' end,
+          v_uid, v_me,
+          case when p_override_result is null
+               then pg_catalog.jsonb_build_object('version', v_version, 'result', v_eval ->> 'result', 'rules_version', 1)
+               else pg_catalog.jsonb_build_object('version', v_version, 'rules_version', 1,
+                                                  'computed_result', v_eval ->> 'result',
+                                                  'chosen_result', p_override_result, 'reason', p_override_reason)
+          end);
+
   return pg_catalog.jsonb_build_object(
     'review_id', v_id,
     'version', v_version,
@@ -1848,7 +2169,7 @@ revoke all on function public.supplier_risk_finalise(uuid, uuid, text, jsonb, da
 grant execute on function public.supplier_risk_finalise(uuid, uuid, text, jsonb, date, text, text, jsonb) to authenticated;
 
 comment on function public.supplier_risk_finalise(uuid, uuid, text, jsonb, date, text, text, jsonb) is
-  'Finishes a supplier''s review in one transaction (0481): the open draft (or a new version) becomes final and current with these answers (every question asked at the level answered; a Yes to the security report or insurance with the date on the document, at most one day after today in UTC), what the database''s rules give on the organization''s today (never a result sent to it; a security report or insurance dated more than 12 months before today counts as Not shown, out of date), the override and its reason if any, the caller as the reviewer, now, and the next review date (p_next_review_on after today and at most 3 years ahead, days in the organization''s zone; null: 12 months, 6 with student data); the review that was current becomes history; one item is written for each gap from p_items, an array of {question_key, finding, action, owner_user_id (a current owner or admin, or null), due_on (today to 3 years ahead, or null)} with exactly one element for each gap the rules found (No, Not shown, or out of date) and no other field (the severity and the answer are the rules''; the caller is written as who changed each item last). Returns {review_id, version, superseded_review_id, starting_risk, evidence, residual_risk, hard_stops, pending_hard_stops, out_of_date, computed_result, override_result, result, next_review_on, items}. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only; 22023 supplier_not_found, supplier_archived, the answer words (answer_date_in_future, answer_date_missing and answers_incomplete included), bad_next_review_on, bad_override (no result, not one of the four, or the computed one; or a reason with no result), bad_override_reason (the reason rule: 1 to 2000 characters with no hidden character, at least 20 once each run of spaces is one, at least 5 different), items_not_an_array, items_do_not_match_answers, bad_item, bad_item_text (finding 1 to 500, action 1 to 1000), item_owner_not_an_admin, bad_item_due_on. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
+  'Finishes a supplier''s review in one transaction (0481): the open draft (or a new version) becomes final and current with these answers (every question asked at the level answered; a Yes to the security report or insurance with the date on the document, at most one day after today in UTC), what the database''s rules give on the organization''s today (never a result sent to it; a security report or insurance dated more than 12 months before today counts as Not shown, out of date), the override and its reason if any, the caller as the reviewer, now, and the next review date (p_next_review_on after today and at most 3 years ahead, days in the organization''s zone; null: 12 months, 6 with student data); the review that was current becomes history; one item is written for each gap from p_items, an array of {question_key, finding, action, owner_user_id (a current owner or admin, or null), due_on (today to 3 years ahead, or null)} with exactly one element for each gap the rules found (No, Not shown, or out of date) and no other field (the severity and the answer are the rules''; the caller is written as who changed each item last); a review_finished row of the history (version, result, rules version), or result_overridden with an override (version, rules version, the computed and the chosen result, the reason), names the caller, now, in the same transaction. Returns {review_id, version, superseded_review_id, starting_risk, evidence, residual_risk, hard_stops, pending_hard_stops, out_of_date, computed_result, override_result, result, next_review_on, items}. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only; 22023 supplier_not_found, supplier_archived, the answer words (answer_date_in_future, answer_date_missing and answers_incomplete included), bad_next_review_on, bad_override (no result, not one of the four, or the computed one; or a reason with no result), bad_override_reason (the reason rule: 1 to 2000 characters with no hidden character, at least 20 once each run of spaces is one, at least 5 different), items_not_an_array, items_do_not_match_answers, bad_item, bad_item_text (finding 1 to 500, action 1 to 1000), item_owner_not_an_admin, bad_item_due_on. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
 
 create function public.supplier_risk_draft_discard(p_organization_id uuid, p_supplier_id uuid)
 returns boolean
@@ -1858,7 +2179,8 @@ set search_path = ''
 set lock_timeout = '5s'
 as $$
 declare
-  v_n integer;
+  v_uid   uuid := auth.uid();
+  v_draft uuid;
 begin
   if p_organization_id is null
      or not coalesce(public.has_org_role(p_organization_id, 'admin'), false) then
@@ -1875,12 +2197,20 @@ begin
   perform pg_catalog.pg_advisory_xact_lock(4810001, pg_catalog.hashtext(p_organization_id::text || ':' || p_supplier_id::text));
 
   -- A draft is not evidence and has no items: it may go. A final never does.
+  -- (At most one draft per supplier of an organization: a unique index.)
   delete from public.supplier_risk_reviews r
    where r.supplier_id = p_supplier_id
      and r.organization_id = p_organization_id
-     and r.status = 'draft';
-  get diagnostics v_n = row_count;
-  return v_n > 0;
+     and r.status = 'draft'
+  returning r.id into v_draft;
+  if v_draft is null then
+    return false;
+  end if;
+
+  -- The history, in this transaction: who discarded which draft, and when.
+  insert into public.supplier_risk_events (organization_id, supplier_id, review_id, event, actor_user_id, actor_name)
+  values (p_organization_id, p_supplier_id, v_draft, 'draft_discarded', v_uid, public._supplier_risk_person_name(v_uid));
+  return true;
 end;
 $$;
 
@@ -1888,7 +2218,7 @@ revoke all on function public.supplier_risk_draft_discard(uuid, uuid) from publi
 grant execute on function public.supplier_risk_draft_discard(uuid, uuid) to authenticated;
 
 comment on function public.supplier_risk_draft_discard(uuid, uuid) is
-  'Deletes the open draft review of a supplier (0481), also when the supplier is archived or deleted; true when there was one, false when there was none (or it is another organization''s). Never deletes a final review. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
+  'Deletes the open draft review of a supplier (0481), also when the supplier is archived or deleted; true when there was one, false when there was none (or it is another organization''s). Never deletes a final review. Writes a draft_discarded row of the history (the draft''s id, the caller, now) in the same transaction when it deletes one. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
 
 create function public.supplier_risk_item_update(
   p_organization_id uuid,
@@ -1909,6 +2239,7 @@ declare
   v_uid        uuid := auth.uid();
   v_supplier   uuid;
   v_i          public.supplier_risk_items;
+  v_before     public.supplier_risk_items;
   v_current    boolean;
   v_today      date;
   v_owner_nm   text;
@@ -2002,6 +2333,7 @@ begin
     raise exception 'bad_item_reason' using errcode = '22023', hint = 'bad_item_reason';
   end if;
 
+  v_before := v_i;
   update public.supplier_risk_items i
      set status = p_status,
          owner_user_id = p_owner_user_id,
@@ -2021,6 +2353,23 @@ begin
    where i.id = p_item_id
   returning i.* into v_i;
 
+  -- The history, in this transaction: the status, owner and due date before
+  -- and after; a reason given is a risk accepted (the reason as written),
+  -- leaving accepted a withdrawal, anything else an item change.
+  insert into public.supplier_risk_events
+    (organization_id, supplier_id, review_id, item_id, event, actor_user_id, actor_name, detail)
+  values (p_organization_id, v_supplier, v_i.review_id, v_i.id,
+          case when p_reason is not null then 'risk_accepted'
+               when v_before.status = 'accepted' and v_i.status <> 'accepted' then 'risk_acceptance_withdrawn'
+               else 'item_changed' end,
+          v_uid, v_me,
+          pg_catalog.jsonb_build_object('status_before', v_before.status, 'status_after', v_i.status,
+                                        'owner_before_id', v_before.owner_user_id, 'owner_before_name', v_before.owner_name,
+                                        'owner_after_id', v_i.owner_user_id, 'owner_after_name', v_i.owner_name,
+                                        'due_on_before', v_before.due_on, 'due_on_after', v_i.due_on)
+          || case when p_reason is not null then pg_catalog.jsonb_build_object('reason', p_reason)
+                  else '{}'::jsonb end);
+
   return public._supplier_risk_item_json(v_i);
 end;
 $$;
@@ -2029,7 +2378,7 @@ revoke all on function public.supplier_risk_item_update(uuid, uuid, text, uuid, 
 grant execute on function public.supplier_risk_item_update(uuid, uuid, text, uuid, date, text, text) to authenticated;
 
 comment on function public.supplier_risk_item_update(uuid, uuid, text, uuid, date, text, text) is
-  'Changes one item of a current review (0481): its status (open, in_progress, done, accepted; done and accepted stamp closed_at, kept while it stays closed; open and in_progress clear it), owner (null for none; a new owner must be a current owner or admin, the same owner stays after leaving; a name kept for a deleted account stays until a new owner is named), due date (null for none; a new one today to 3 years ahead, days in the organization''s zone), action (null keeps it) and, for accepted, the reason (required to accept, by the reason rule; null keeps it while it stays accepted; refused with any other status). Writes the caller as who changed it last, and as who accepted it with the reason. The finding, answer and severity never change. Returns the item as supplier_risk_review gives it. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only; 22023 item_not_found (none, or another organization''s), item_not_current (an earlier version''s), bad_item_status, item_owner_not_an_admin, bad_item_due_on, bad_item_text, bad_item_reason. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
+  'Changes one item of a current review (0481): its status (open, in_progress, done, accepted; done and accepted stamp closed_at, kept while it stays closed; open and in_progress clear it), owner (null for none; a new owner must be a current owner or admin, the same owner stays after leaving; a name kept for a deleted account stays until a new owner is named), due date (null for none; a new one today to 3 years ahead, days in the organization''s zone), action (null keeps it) and, for accepted, the reason (required to accept, by the reason rule; null keeps it while it stays accepted; refused with any other status). Writes the caller as who changed it last, and as who accepted it with the reason; and one row of the history in the same transaction: risk_accepted when a reason is given (with the reason), risk_acceptance_withdrawn when it leaves accepted, else item_changed, each with the status, owner (id and name) and due date before and after. The finding, answer and severity never change. Returns the item as supplier_risk_review gives it. 42501 supplier_risk_not_allowed, mfa_required, aal2_required, supplier_risk_act_as_read_only; 22023 item_not_found (none, or another organization''s), item_not_current (an earlier version''s), bad_item_status, item_owner_not_an_admin, bad_item_due_on, bad_item_text, bad_item_reason. Takes the supplier''s lock (4810001); a wait ends after 5 s (55P03).';
 
 -- ── The daily job's reminders ────────────────────────────────────────────────
 -- Two reminders for the current review of an active supplier: 'due_soon'
@@ -2254,9 +2603,9 @@ comment on function public.supplier_risk_due_reminder_sent(uuid) is
 -- row security check that reads them, waits behind it. Run it in a quiet
 -- minute, as one transaction with a short lock_timeout; if it gives up
 -- (55P03) nothing is dropped, and it can be run again as it is. The rows go
--- with the tables. In this order: the functions first (one takes the items'
--- row type), then the tables (with their triggers), then the trigger
--- functions and the helpers their CHECKs use.
+-- with the tables (the history's with it). In this order: the functions
+-- first (one takes the items' row type), then the tables (with their
+-- triggers), then the trigger functions and the helpers their CHECKs use.
 --   begin;
 --   set local lock_timeout = '900ms';
 --   drop function if exists public.supplier_risk_due_reminder_sent(uuid);
@@ -2266,6 +2615,7 @@ comment on function public.supplier_risk_due_reminder_sent(uuid) is
 --   drop function if exists public.supplier_risk_draft_discard(uuid, uuid);
 --   drop function if exists public.supplier_risk_finalise(uuid, uuid, text, jsonb, date, text, text, jsonb);
 --   drop function if exists public.supplier_risk_draft_save(uuid, uuid, text, jsonb);
+--   drop function if exists public.supplier_risk_events(uuid, uuid, integer, timestamptz, uuid);
 --   drop function if exists public.supplier_risk_items_for_organization(uuid, boolean);
 --   drop function if exists public.supplier_risk_review(uuid, uuid);
 --   drop function if exists public.supplier_risk_history(uuid, uuid);
@@ -2277,10 +2627,13 @@ comment on function public.supplier_risk_due_reminder_sent(uuid) is
 --   drop function if exists public._supplier_risk_plain_name(text, integer);
 --   drop function if exists public._supplier_risk_org_zone(uuid);
 --   drop function if exists public._supplier_risk_default_next_review(text, date);
+--   drop table if exists public.supplier_risk_events;
 --   drop table if exists public.supplier_risk_items;
 --   drop table if exists public.supplier_risk_reviews;
+--   drop function if exists public._supplier_risk_events_guard();
 --   drop function if exists public._supplier_risk_items_guard();
 --   drop function if exists public._supplier_risk_reviews_guard();
+--   drop function if exists public._supplier_risk_event_detail_ok(text, jsonb);
 --   drop function if exists public._supplier_risk_computed_ok(smallint, text, jsonb, date, text, text, text, text[], text);
 --   drop function if exists public._supplier_risk_evaluate(smallint, text, jsonb, date);
 --   drop function if exists public._supplier_risk_answers_problem(smallint, text, jsonb, boolean, date);

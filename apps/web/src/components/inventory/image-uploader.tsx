@@ -32,6 +32,14 @@ import {
 } from '@/server/actions/item-images';
 import { cn } from '@/lib/utils';
 
+import {
+  forgetPhotoResultsHandedTo,
+  photoResultsHandedTo,
+  photoResultsToast,
+  PhotoResultsList,
+  type PhotoResult,
+} from './photo-results';
+
 interface ImageRow {
   id: string;
   url: string;
@@ -62,6 +70,16 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   const [lightboxIndex, setLightboxIndex] = React.useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<ImageRow | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  /**
+   * What became of each photo of the last pick, shown in the page under the
+   * drop zone (lab walk 6, W6-F2): never "uploaded" for a photo the server
+   * refused (lab walk 5, F4), and each one not added with its own sentence.
+   * It opens with what the new-item form handed over for this item, if any.
+   */
+  const [results, setResults] = React.useState<PhotoResult[]>(() => photoResultsHandedTo(itemId));
+  React.useEffect(() => {
+    forgetPhotoResultsHandedTo(itemId);
+  }, [itemId]);
 
   // Keep local state in sync if the server-passed list changes (e.g. after
   // router.refresh() following an upload).
@@ -73,25 +91,37 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
   async function uploadFiles(files: FileList | File[]) {
     const list = Array.from(files);
     if (list.length === 0) return;
+    setResults([]);
 
     // Validate BEFORE building the progress denominator. A file rejected here
     // never sends a byte, so leaving it in the total would strand the bar
-    // permanently short of 100%.
+    // permanently short of 100%. It is listed as not sent, with its sentence,
+    // with the rest of the pick's results.
     const accepted: File[] = [];
+    const notTaken: PhotoResult[] = [];
     for (const original of list) {
       if (!ACCEPT.includes(original.type)) {
-        toast.error(
-          `"${original.name}" isn't a supported image type. Use PNG, JPG, WEBP, or AVIF.`,
-        );
+        notTaken.push({
+          name: original.name,
+          outcome: 'unsent',
+          sentence: `"${original.name}" isn't a supported image type. Use PNG, JPG, WEBP, or AVIF.`,
+        });
         continue;
       }
       if (original.size > MAX_BYTES) {
-        toast.error(`"${original.name}" is over 10 MB. Pick a smaller image.`);
+        notTaken.push({
+          name: original.name,
+          outcome: 'unsent',
+          sentence: `"${original.name}" is over 10 MB. Pick a smaller image.`,
+        });
         continue;
       }
       accepted.push(original);
     }
-    if (accepted.length === 0) return;
+    if (accepted.length === 0) {
+      showResults(notTaken);
+      return;
+    }
 
     // Weighted by ORIGINAL sizes so the denominator is fixed for the whole
     // batch — see BatchProgress for why a compressed-size denominator would
@@ -114,7 +144,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // → PUT → record independently, so a failure on one doesn't
       // block the others (mirrors the prior `continue` semantics).
       const CONCURRENCY = 3;
-      async function processOne(original: File, index: number): Promise<void> {
+      async function processOne(original: File, index: number): Promise<PhotoResult> {
         // Validation already ran above, before the progress denominator was
         // fixed — every file reaching here is one we intend to upload.
         const progressKey = `${index}:${original.name}`;
@@ -123,8 +153,7 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
 
         const presign = await createImageUploadAction({ itemId, fileExt: ext });
         if (!presign.ok) {
-          toast.error(presign.error.message);
-          return;
+          return { name: original.name, outcome: 'refused', sentence: presign.error.message };
         }
 
         // PUT master + thumb in parallel — the thumb is tiny (~5-15 KB)
@@ -164,8 +193,11 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           // reached. A failed upload must never let the batch read 100%.
           batch.settle(progressKey, false);
           publishProgress();
-          toast.error(`Couldn't upload "${original.name}". Check your network and try again.`);
-          return;
+          return {
+            name: original.name,
+            outcome: 'unsent',
+            sentence: `Couldn't upload "${original.name}". Check your network and try again.`,
+          };
         }
         batch.settle(progressKey, true);
         publishProgress();
@@ -186,8 +218,10 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           isFirst,
         });
         if (!record.ok) {
-          toast.error(record.error.message);
+          // The server's own sentence for this photo (a refusal, a limit).
+          return { name: original.name, outcome: 'refused', sentence: record.error.message };
         }
+        return { name: original.name, outcome: 'added' };
       }
 
       // Drain the list in waves of CONCURRENCY using a worker pool —
@@ -195,20 +229,39 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
       // Drains `accepted`, not the raw list: the progress keys and the
       // isFirst index are both defined over the accepted files, so a rejected
       // file must not occupy a slot or shift an index.
+      // Each result is kept at its photo's place in the pick, whatever order
+      // the uploads finish in.
       let cursor = 0;
+      const sent: PhotoResult[] = [];
       const workers = Array.from({ length: Math.min(CONCURRENCY, accepted.length) }, async () => {
         while (cursor < accepted.length) {
           const i = cursor++;
-          await processOne(accepted[i]!, i);
+          const file = accepted[i]!;
+          try {
+            sent[i] = await processOne(file, i);
+          } catch {
+            sent[i] = { name: file.name, outcome: 'unsent', sentence: `Couldn't upload "${file.name}". Try again.` };
+          }
         }
       });
       await Promise.all(workers);
-      toast.success('Photos uploaded.');
+      showResults([...notTaken, ...sent]);
       router.refresh();
     } finally {
       setUploading(false);
       setUploadPercent(null);
     }
+  }
+
+  /**
+   * The pick's last word: each photo not added is listed in the page with its
+   * sentence, and the toast only counts (lab walk 6, W6-F2). An all-added
+   * pick puts nothing in the page (PhotoResultsList shows nothing for it).
+   */
+  function showResults(all: PhotoResult[]) {
+    setResults(all);
+    const summary = photoResultsToast(all);
+    toast[summary.tone](summary.text);
   }
 
   // Variant used by the lightbox toolbar (already confirmed there).
@@ -354,6 +407,8 @@ export function ImageUploader({ itemId, initialImages }: ImageUploaderProps) {
           <Upload className="h-3.5 w-3.5" /> Choose files
         </Button>
       </label>
+
+      <PhotoResultsList results={results} />
 
       <DestructiveConfirm
         open={deleteTarget !== null}

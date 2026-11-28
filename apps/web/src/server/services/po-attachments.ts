@@ -160,7 +160,7 @@ export class PoAttachmentsService {
     // manager opens it passes the sniff and fails the scan. On either failure
     // it REMOVES the object and throws, so no row is ever written pointing at
     // an object we did not verify.
-    const sniffed = await verifyStoredDocumentOrDelete(BUCKET, input.storagePath);
+    const sniffed = await verifyStoredDocumentOrDelete(this.ctx, BUCKET, input.storagePath);
 
     const { data, error } = await this.ctx.supabase
       .from('po_attachments')

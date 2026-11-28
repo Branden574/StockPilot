@@ -100,6 +100,14 @@
     {
       "path": "/api/cron/security-events-auth-logs",
       "schedule": "10 * * * *"
+    },
+    {
+      "path": "/api/cron/security-alerts",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/security-summary",
+      "schedule": "0 15 * * *"
     }
   ],
   "functions": {

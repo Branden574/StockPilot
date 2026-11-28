@@ -379,8 +379,8 @@ const REVIEWED: Record<string, { count: number; why: string }> = {
     why: 'the public contact form: no session and no organization context',
   },
   'support-tickets.ts#submitDashboardTicketAction': {
-    count: 1,
-    why: 'a ticket insert with its own result shape and words; no module is asked',
+    count: 2,
+    why: 'a ticket insert with its own result shape and words, and the screenshot finalize check (part 6), which answers the upload check sentence; no module is asked in either',
   },
   'support-tickets.ts#updateSupportTicketAction': {
     count: 1,

@@ -257,7 +257,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: .slice(30, 35)): the Blocked activity release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(33, 38)): the phone large text release is published at the top, below the Liquid Glass draft, and is read with the newer releases, so every position below it and every count of the reads taken moves up by one.
     // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(34, 39)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES.slice(35, 40).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: earlier positions, lists and reads): the upload checks release is published at the top, below the Liquid Glass draft, so every position below it moves down by one and every list of newer releases takes it too.
+    expect(RELEASES.slice(36, 41).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: S2_ID): the count sheet release is published after it, at the top, the newest published release.
     // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
@@ -286,7 +287,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: 'phone-authenticator-set-up-2026-11'): the Blocked activity release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
       // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: the phone large text release): the recovery code release is published at the top, below the Liquid Glass draft, so it is the first published release.
-      'recovery-code-signs-out-other-devices-2026-11',
+      // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: the recovery code release): the upload checks release is published after it, at the top, the newest published release.
+      'upload-checks-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -336,7 +338,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: RELEASES.slice(i + 30)): the phone authenticator set-up release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: RELEASES.slice(i + 34)): the phone large text release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
       for (const r of // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: RELEASES.slice(i + 35)): the recovery code release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-      RELEASES.slice(i + 36)) {
+      RELEASES.slice(i + 37)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -391,6 +393,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('upload-checks-2026-11'),
           read('recovery-code-signs-out-other-devices-2026-11'),
           read('phone-large-text-2026-11'),
           read('sign-in-alerts-2026-11'),
@@ -456,6 +459,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('upload-checks-2026-11'),
           read('recovery-code-signs-out-other-devices-2026-11'),
           read('phone-large-text-2026-11'),
           read('sign-in-alerts-2026-11'),
@@ -522,6 +526,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('upload-checks-2026-11'),
           read('recovery-code-signs-out-other-devices-2026-11'),
           read('phone-large-text-2026-11'),
           read('sign-in-alerts-2026-11'),
@@ -589,6 +594,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('upload-checks-2026-11'),
           read('recovery-code-signs-out-other-devices-2026-11'),
           read('phone-large-text-2026-11'),
           read('sign-in-alerts-2026-11'),
@@ -658,6 +664,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-phone-large-text (2026-11-23; was: without it): the phone large text release is published later, at the top, and reaches every member (its one entry has no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whats-new-upload-checks (2026-11-28; was: without it): the upload checks release is published later, at the top, and reaches every member (its first entry has no audience), so it is read, seen or listed with the newer releases.
+          'upload-checks-2026-11',
           'recovery-code-signs-out-other-devices-2026-11',
           'phone-large-text-2026-11',
           'sign-in-alerts-2026-11',
@@ -706,7 +714,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-small-fixes-1119 (2026-11-19; was: without it): the export, receipt and access release is published later, at the top, and reaches every member (its access entry has no audience), so it is read or seen first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), so it is read first, and the notice this test checks is the one it checked before.
     // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
-    expect(buildReleaseList(RELEASES, member, [read('recovery-code-signs-out-other-devices-2026-11'), read('phone-large-text-2026-11'), read('sign-in-alerts-2026-11'), read('blocked-activity-current-password-and-set-up-code-2026-11'), read('blocked-activity-2026-11'), read('phone-authenticator-set-up-2026-11'), read('export-receipt-access-fixes-2026-11'), deleteConfirmRead, authSetUpRead], null).latestUnread?.id).toBe(
+    expect(buildReleaseList(RELEASES, member, [read('upload-checks-2026-11'), read('recovery-code-signs-out-other-devices-2026-11'), read('phone-large-text-2026-11'), read('sign-in-alerts-2026-11'), read('blocked-activity-current-password-and-set-up-code-2026-11'), read('blocked-activity-2026-11'), read('phone-authenticator-set-up-2026-11'), read('export-receipt-access-fixes-2026-11'), deleteConfirmRead, authSetUpRead], null).latestUnread?.id).toBe(
       // Re-pinned by docs/whatsnew-phone-code-and-access-check (2026-11-13; was: the emailed links release): the phone authenticator code release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-phone-screens-by-access (2026-11-14; was: the phone authenticator code release): the phone screens by access release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whats-new-count-read-rule (2026-11-15; was: the phone screens by access release): the email change release is published after it and reaches every member, so a member is told it first (the count read rule release, the newest published, does not reach this member).
@@ -734,6 +742,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('upload-checks-2026-11'),
           read('recovery-code-signs-out-other-devices-2026-11'),
           read('phone-large-text-2026-11'),
           read('sign-in-alerts-2026-11'),
@@ -782,6 +791,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
           // Re-pinned by docs/whats-new-2026-11-21-phone (2026-11-21; was: without it): the phone authenticator set-up release is published later, at the top, and reaches every member (three of its five entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
           // Re-pinned by docs/whats-new-blocked-activity (2026-11-21; was: without it): the Blocked activity release is published later, at the top, and reaches owners and Super Admins (their roles are its audience), so it is read, seen or listed with the newer releases for them, and every notice this test checks is the one it checked before. A read of a release by a reader it does not reach changes nothing.
           // Re-pinned by docs/whats-new-recovery-code (2026-11-23; was: without it): the recovery code release is published later, at the top, and reaches every member (its entries have no audience), an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          read('upload-checks-2026-11'),
           read('recovery-code-signs-out-other-devices-2026-11'),
           read('phone-large-text-2026-11'),
           read('sign-in-alerts-2026-11'),

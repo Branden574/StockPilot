@@ -45,7 +45,7 @@ create temporary table expected_junctions (junction text, a text, b text, a_fk t
 create temporary table expected_pairs (a text, b text, relationships text) on commit drop;
 
 -- BEGIN GENERATED: scripts/gen-postgrest-embed-snapshot.mjs from scripts/postgrest-embeds/relationships.snapshot.json. Do not edit by hand.
--- 418 foreign keys, 9 junctions, 36 ambiguous pairs.
+-- 420 foreign keys, 9 junctions, 36 ambiguous pairs.
 insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('activity_logs', 'activity_logs_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('activity_logs', 'activity_logs_user_id_fkey', 'user_profiles', 'user_id', 'id'),
@@ -421,6 +421,8 @@ insert into expected_fks (tbl, name, ref_tbl, cols, ref_cols) values
   ('stock_reservations', 'stock_reservations_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('stock_reservations', 'stock_reservations_rental_id_fkey', 'rentals', 'rental_id', 'id'),
   ('stock_reservations', 'stock_reservations_warehouse_id_fkey', 'warehouses', 'warehouse_id', 'id'),
+  ('supplier_risk_events', 'supplier_risk_events_actor_user_id_fkey', 'user_profiles', 'actor_user_id', 'id'),
+  ('supplier_risk_events', 'supplier_risk_events_organization_id_fkey', 'organizations', 'organization_id', 'id'),
   ('supplier_risk_items', 'supplier_risk_items_accepted_by_fkey', 'user_profiles', 'accepted_by', 'id'),
   ('supplier_risk_items', 'supplier_risk_items_changed_by_fkey', 'user_profiles', 'changed_by', 'id'),
   ('supplier_risk_items', 'supplier_risk_items_owner_user_id_fkey', 'user_profiles', 'owner_user_id', 'id'),

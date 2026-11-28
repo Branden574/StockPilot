@@ -235,7 +235,7 @@ export class OrderAttachmentsService {
     // The shared gate sniffs the leading bytes AND scans the whole object for
     // active content. On either failure it REMOVES the object and throws, so
     // no row is written pointing at something we did not verify.
-    const sniffed = await verifyStoredDocumentOrDelete(BUCKET, input.storagePath);
+    const sniffed = await verifyStoredDocumentOrDelete(this.ctx, BUCKET, input.storagePath);
 
     const { data, error } = await this.ctx.supabase
       .from('order_request_attachments')

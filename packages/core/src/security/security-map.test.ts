@@ -792,31 +792,48 @@ describe("readSecurityMapAnswer: the contract's shape and nothing else", () => {
 /* ───────────────────── which categories are shown ───────────────────── */
 
 describe('the categories the map shows', () => {
-  it('today: password guessing, exploit attempts and automated traffic; Phishing and Malware are hidden', () => {
-    expect(securityMapShownCategories()).toEqual(['password_guessing', 'exploit', 'bots']);
+  it('today: password guessing, exploit attempts, automated traffic and malware (part 6); Phishing is hidden', () => {
+    expect(securityMapShownCategories()).toEqual(['password_guessing', 'exploit', 'bots', 'malware']);
     expect(SECURITY_CATEGORIES_WITH_DETECTOR.phishing.shown).toBe(false);
-    expect(SECURITY_CATEGORIES_WITH_DETECTOR.malware.shown).toBe(false);
+    expect(SECURITY_CATEGORIES_WITH_DETECTOR.malware).toEqual({
+      shown: true,
+      firesNow: ['files refused by the upload checks'],
+    });
   });
 
   it('showing Phishing is one line; a category nothing records cannot be shown', () => {
     const flipped: Record<SecurityEventCategory, SecurityCategoryDetectors> = {
       ...SECURITY_CATEGORIES_WITH_DETECTOR,
       phishing: { ...SECURITY_CATEGORIES_WITH_DETECTOR.phishing, shown: true },
-      malware: { ...SECURITY_CATEGORIES_WITH_DETECTOR.malware, shown: true },
     };
     expect(securityMapShownCategories(flipped)).toEqual([
       'password_guessing',
       'exploit',
       'bots',
       'phishing',
+      'malware',
     ]);
+    // Shown with nothing that records it: still not drawn.
+    const empty: Record<SecurityEventCategory, SecurityCategoryDetectors> = {
+      ...SECURITY_CATEGORIES_WITH_DETECTOR,
+      malware: { shown: true, firesNow: [] },
+    };
+    expect(securityMapShownCategories(empty)).toEqual(['password_guessing', 'exploit', 'bots']);
   });
 
   it("the legend's help is made from what records the category now, never a fixed sentence", () => {
     expect(securityMapLegendHelp('exploit')).toBe(
       'Counted today from: requests for files and pages this site never serves.',
     );
-    expect(securityMapLegendHelp('malware')).toBeNull();
+    expect(securityMapLegendHelp('malware')).toBe(
+      'Counted today from: files refused by the upload checks.',
+    );
+    expect(
+      securityMapLegendHelp('malware', {
+        ...SECURITY_CATEGORIES_WITH_DETECTOR,
+        malware: { shown: true, firesNow: [] },
+      }),
+    ).toBeNull();
     const two: Record<SecurityEventCategory, SecurityCategoryDetectors> = {
       ...SECURITY_CATEGORIES_WITH_DETECTOR,
       exploit: { shown: true, firesNow: ['one thing', 'another thing'] },
@@ -897,6 +914,7 @@ describe('securityMapViewOf: what leaves the server', () => {
       'password_guessing',
       'exploit',
       'bots',
+      'malware',
     ]);
     expect(view.feed.some((row) => row[4] === phishing)).toBe(false);
     expect(view.feed).toHaveLength(2);
@@ -1953,10 +1971,13 @@ describe('the words', () => {
       ['Password guessing', '7 blocked', 'at least 4 flagged, not blocked'],
       ['Exploit attempts', '150 blocked', '0 flagged, not blocked'],
       ['Automated traffic', '36 blocked', '0 flagged, not blocked'],
+      // Shown since part 6, with its own zero when nothing was refused.
+      ['Malware', '0 blocked', '0 flagged, not blocked'],
     ]);
     expect(legend.every((l) => l.help?.startsWith('Counted today from: '))).toBe(true);
-    expect(JSON.stringify(legend)).not.toMatch(/phishing|malware/i);
+    expect(JSON.stringify(legend)).not.toMatch(/phishing/i);
     expect(securityMapLegend(null).map((l) => [l.blocked, l.flagged])).toEqual([
+      [SECURITY_MAP_COULD_NOT_CHECK, SECURITY_MAP_COULD_NOT_CHECK],
       [SECURITY_MAP_COULD_NOT_CHECK, SECURITY_MAP_COULD_NOT_CHECK],
       [SECURITY_MAP_COULD_NOT_CHECK, SECURITY_MAP_COULD_NOT_CHECK],
       [SECURITY_MAP_COULD_NOT_CHECK, SECURITY_MAP_COULD_NOT_CHECK],
@@ -2255,15 +2276,19 @@ describe('the words', () => {
   });
 
   it('a hidden kind that is not a flagged sign-in alert is not drawn, in a line of its own', () => {
+    // Malware is shown since part 6, so its events are drawn and are in no such line.
     const notes = securityMapNotes(
-      whole({ totals: counts({ phishing: { flagged: 2, blocked: 1 }, malware: { blocked: 4 } }) }),
+      whole({ totals: counts({ phishing: { flagged: 2, blocked: 3 }, malware: { blocked: 4 } }) }),
     );
     expect(notes.slice(0, 2)).toEqual([
       '2 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
-      'Not drawn: 5 events of a kind this map does not show. They are on the Security page.',
+      'Not drawn: 3 events of a kind this map does not show. They are on the Security page.',
     ]);
-    const single = securityMapNotes(whole({ totals: counts({ malware: { blocked: 1 } }) }));
+    const single = securityMapNotes(whole({ totals: counts({ phishing: { blocked: 1 } }) }));
     expect(single[0]).toBe(
+      'Not drawn: 1 event of a kind this map does not show. It is on the Security page.',
+    );
+    expect(securityMapNotes(whole({ totals: counts({ malware: { blocked: 1 } }) }))).not.toContain(
       'Not drawn: 1 event of a kind this map does not show. It is on the Security page.',
     );
     for (const line of [...notes, ...single]) expect(line).not.toMatch(/phishing|malware/i);
@@ -2570,14 +2595,16 @@ describe("the size of what leaves the server, at the database's caps", () => {
   };
   const bytes = (value: unknown): number => new TextEncoder().encode(JSON.stringify(value)).length;
 
-  it('a read of the whole window stays under 90 KB and a read of the last ten minutes under 40 KB (plain names)', () => {
+  // 100 KB since part 6: a fourth shown kind (malware) adds its own rows at
+  // the caps (measured 91,415 bytes against the 90 KB of three kinds).
+  it('a read of the whole window stays under 100 KB and a read of the last ten minutes under 40 KB (plain names)', () => {
     const a = worst('n');
     expect(readSecurityMapAnswer(a).ok).toBe(true);
     const w = securityMapViewOf(a, 'whole');
     const r = securityMapViewOf(a, 'recent');
     expect(readSecurityMapView(JSON.parse(JSON.stringify(w)))).not.toBeNull();
     expect(bytes(a)).toBeGreaterThan(400_000);
-    expect(bytes(w)).toBeLessThan(90_000);
+    expect(bytes(w)).toBeLessThan(100_000);
     expect(bytes(r)).toBeLessThan(40_000);
   });
 
