@@ -234,6 +234,18 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Scheduled purge of request samples whose hour began more than 90 days ago; no active organization.',
   ],
+  'app/api/cron/supplier-risk-reminders/route.ts::supplier_risk_reminders_due': [
+    'not_org_data',
+    'Scheduled vendor review reminders due in every organization (service role only, 0481); no active organization.',
+  ],
+  'app/api/cron/supplier-risk-reminders/route.ts::supplier_risk_reminder_claim': [
+    'not_org_data',
+    'The scheduled job claims one reminder by its review (service role only, 0481); no active organization.',
+  ],
+  'app/api/cron/supplier-risk-reminders/route.ts::supplier_risk_due_reminder_sent': [
+    'not_org_data',
+    'The scheduled job confirms one due reminder by its review (service role only, 0481); no active organization.',
+  ],
   'app/api/orders/sign/route.ts::confirm_order_signature': [
     'not_org_data',
     'Public sign link: the signature token names the order; no active organization.',
@@ -421,6 +433,34 @@ const REGISTRY: Record<string, Entry> = {
   ],
   'server/services/sign-in-alerts.ts::my_sign_in_alerts': RO("The caller's own sign-in alerts."),
   'server/services/sign-in-alerts.ts::sign_in_alerts_for_organization': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/supplier-risk.ts::supplier_risk_register': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/supplier-risk.ts::supplier_risk_history': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/supplier-risk.ts::supplier_risk_review': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/supplier-risk.ts::supplier_risk_draft_save': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/supplier-risk.ts::supplier_risk_finalise': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/supplier-risk.ts::supplier_risk_draft_discard': [
+    'takes_org',
+    'Passes the active organization.',
+  ],
+  'server/services/supplier-risk.ts::supplier_risk_item_update': [
     'takes_org',
     'Passes the active organization.',
   ],
