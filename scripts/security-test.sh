@@ -1162,6 +1162,36 @@ PGTAP_TESTS=(
   # or anonymous account, at most 20 addresses) each answer as documented. The
   # two-session checks are scripts/db-concurrency/0480_platform_security_alerts_race.sh.
   supabase/tests/0480_platform_security_alerts.test.sql
+  # Vendor risk reviews (0481): no API role reads or writes
+  # supplier_risk_reviews, supplier_risk_items or supplier_risk_events
+  # directly (RLS on, no policy, no privilege for anon, authenticated or
+  # service_role; every direct read and write refused); the nine admin functions are
+  # authenticated only and open with has_org_role(organization, 'admin') and
+  # 0472's authenticator check, so a manager, a staff member, a viewer, an
+  # admin of another organization, a disabled admin, an invitation, an expired
+  # act-as seat, an outsider and a session with no account are refused every
+  # read and write, and the second step is asked for where it is owed; the
+  # two reminder functions are service_role only with a second lock that
+  # refuses a member even with EXECUTE. A supplier of another organization is
+  # never reviewed. The answers are held to the fixed question list and a
+  # final's result to the rules by the table's own CHECKs (the case table is
+  # core's too: vendor-risk.parity.test.ts); an override needs its reason;
+  # no stored text holds a hidden character (one list, core's too) and a
+  # reason is counted over what can be seen; a Yes on the security report or
+  # the insurance needs its date, never later than tomorrow in UTC;
+  # one current review and one draft per supplier; a final review and an
+  # item's finding are kept as written on every path; an account deleted
+  # keeps the name and loses the link; the reminder claim stamps once. Every
+  # finish, override, discarded draft and item change (a risk accepted, an
+  # acceptance withdrawn) keeps one row of supplier_risk_events in its own
+  # transaction, after its checks (a refused call none), with fixed keys per
+  # kind and never an answer or a question key; no API role reads, writes,
+  # changes, deletes or truncates it, a trigger refuses every change and
+  # delete but an account deletion's SET NULL and the organization's own
+  # deletion, and only owners and admins read it (not managers, who read the
+  # shared audit log, where nothing about vendor risk is written). The
+  # two-session checks are scripts/db-concurrency/0481_supplier_risk_reminder_race.sh.
+  supabase/tests/0481_supplier_risk_reviews.test.sql
   # The request context reads the caller's own rows by index (0471): the same
   # answer as 0413's body for every kind of caller (several organizations, an
   # invitation not accepted, a disabled account, live and expired Act-as
