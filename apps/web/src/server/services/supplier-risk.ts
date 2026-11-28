@@ -212,8 +212,12 @@ export interface SupplierRiskItem {
   status: VendorRiskItemStatus;
   closedAt: string | null;
   changedByName: string | null;
+  /** The account that last changed the item was deleted since (the name is kept). */
+  changedByDeleted: boolean;
   changedAt: string | null;
   acceptedByName: string | null;
+  /** The account that accepted the risk was deleted since (the name is kept). */
+  acceptedByDeleted: boolean;
   acceptedReason: string | null;
 }
 
@@ -681,7 +685,10 @@ function eventOf(raw: Record<string, unknown>): SupplierRiskEvent | null {
     at,
     detail: {
       version: intOf(d.version),
-      result: oneOf(VENDOR_RISK_RESULTS, event === 'result_overridden' ? d.chosen_result : d.result),
+      result: oneOf(
+        VENDOR_RISK_RESULTS,
+        event === 'result_overridden' ? d.chosen_result : d.result,
+      ),
       computedResult: oneOf(VENDOR_RISK_RESULTS, d.computed_result),
       reason: text(d.reason),
       before: eventItemStateOf(d, 'before'),
@@ -741,8 +748,14 @@ function itemOf(raw: unknown): SupplierRiskItem | null {
     status,
     closedAt: text(r.closed_at),
     changedByName: text(r.changed_by_name),
+    // A name beside an id the database emptied is a deleted account; a read
+    // that carries no such key says nothing.
+    changedByDeleted:
+      'changed_by' in r && text(r.changed_by_name) !== null && text(r.changed_by) === null,
     changedAt: text(r.changed_at),
     acceptedByName: text(r.accepted_by_name),
+    acceptedByDeleted:
+      'accepted_by' in r && text(r.accepted_by_name) !== null && text(r.accepted_by) === null,
     acceptedReason: text(r.accepted_reason),
   };
 }
@@ -1119,6 +1132,7 @@ export class SupplierRiskService {
         .eq('organization_id', this.ctx.organizationId)
         .not('accepted_at', 'is', null)
         .is('impersonation_expires_at', null)
+        .in('role', ['owner', 'admin'])
         .order('created_at', { ascending: true })
         .limit(1000);
       if (error || !Array.isArray(data)) {

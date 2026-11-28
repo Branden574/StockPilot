@@ -11,6 +11,7 @@ import {
 
 import { csvFilename, csvMetaLine, toCsv } from '@/lib/csv';
 
+import { supplierNameAsText } from './reminder-words';
 import {
   SUPPLIER_RISK_DUE_REMINDER_NOT_SENT,
   SUPPLIER_RISK_REVIEW_DUE_WORDS,
@@ -96,8 +97,8 @@ export function supplierRiskRegisterCsv(
   const table = toCsv(
     [...SUPPLIER_RISK_CSV_HEADER],
     rows.map((r) => ({
-      Supplier: r.supplierName,
-      'Reviewed as': r.nameChanged ? (r.reviewedAsName ?? '') : '',
+      Supplier: supplierNameAsText(r.supplierName),
+      'Reviewed as': r.nameChanged ? supplierNameAsText(r.reviewedAsName) : '',
       'Supplier state': SUPPLIER_RISK_SUPPLIER_STATE_WORDS[r.supplierState],
       'What they hold': r.dataLevel ? VENDOR_RISK_DATA_LEVEL_WORDS[r.dataLevel].label : '',
       Result: r.result ? supplierRiskResultWords(r.result) : 'Not reviewed',

@@ -438,13 +438,18 @@ describe('the loop', () => {
     const stub = adminWith({ due: { data: off, error: null } });
     const res = await run();
     expect(stub.rpcCalls.filter((c) => c.name === 'supplier_risk_reminders_due')).toHaveLength(3);
-    expect(await res.json()).toMatchObject({ stoppedBy: 'nothing_new' });
+    expect(await res.json()).toMatchObject({ stoppedBy: 'nothing_new', partial: true });
     expect(h.log).not.toContain('claim');
+    // Reported as stopped early, with no supplier name or other text.
+    expect(h.report).toHaveBeenCalledTimes(1);
+    const [err, ctx] = h.report.mock.calls[0] as [Error, { extra: Record<string, unknown> }];
+    expect(err.message).toBe('Vendor review reminders stopped early (nothing_new)');
+    expect(JSON.stringify(ctx)).not.toMatch(/Example Supply/i);
   });
 
   it('an empty read ends the run', async () => {
     adminWith({ due: { data: [], error: null } });
     const res = await run();
-    expect(await res.json()).toMatchObject({ ok: true, stoppedBy: 'empty' });
+    expect(await res.json()).toMatchObject({ ok: true, partial: false, stoppedBy: 'empty' });
   });
 });

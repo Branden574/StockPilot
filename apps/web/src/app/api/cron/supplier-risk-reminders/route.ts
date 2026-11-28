@@ -281,15 +281,17 @@ export async function GET(req: Request) {
     }
   }
 
-  if (stoppedBy === 'deadline' || stoppedBy === 'pages') {
-    void reportError(new Error(`Vendor review reminders stopped (${stoppedBy})`), {
+  // A run that ended before the database ran out of due rows is partial.
+  const partial = stoppedBy === 'deadline' || stoppedBy === 'pages' || stoppedBy === 'nothing_new';
+  if (partial) {
+    void reportError(new Error(`Vendor review reminders stopped early (${stoppedBy})`), {
       tag: 'cron.supplier-risk-reminders.stopped',
       level: 'warning',
       extra: { stoppedBy, sent: counts.remindersSent },
     });
   }
   const status = stoppedBy === 'read_failed' ? 500 : 200;
-  return NextResponse.json({ ok: status === 200, stoppedBy, ...counts }, { status });
+  return NextResponse.json({ ok: status === 200, partial, stoppedBy, ...counts }, { status });
 }
 
 /**

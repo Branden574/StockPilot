@@ -8,11 +8,7 @@ import {
 } from '@stockpilot/core';
 
 import { ServiceError, type ServiceContext } from '@/server/services/context';
-import {
-  assertMayUseSupplierRisk,
-  SupplierRiskService,
-  type SupplierRiskSeat,
-} from '@/server/services/supplier-risk';
+import { assertMayUseSupplierRisk, SupplierRiskService } from '@/server/services/supplier-risk';
 
 /** What the Suppliers list shows in its Risk column for one supplier. */
 export interface SupplierRiskListCell {
@@ -40,7 +36,6 @@ export interface SupplierRiskListCell {
 export type SuppliersRiskView =
   | {
       state: 'ok';
-      seat: SupplierRiskSeat;
       /** The register was read whole: a supplier missing from it was not reviewed. */
       complete: boolean;
       bySupplier: Record<string, SupplierRiskListCell>;
@@ -74,7 +69,7 @@ export async function loadSuppliersRiskView(
   }
   try {
     const svc = new SupplierRiskService(ctx);
-    const [read, seat] = await Promise.all([svc.register(), svc.seat()]);
+    const read = await svc.register();
     if (read.state !== 'ok') return { state: 'could_not_check' };
     const bySupplier: Record<string, SupplierRiskListCell> = {};
     for (const row of read.value) {
@@ -87,7 +82,7 @@ export async function loadSuppliersRiskView(
         overridden: row.overridden,
       };
     }
-    return { state: 'ok', seat, complete: read.complete, bySupplier };
+    return { state: 'ok', complete: read.complete, bySupplier };
   } catch (e) {
     if (stepUpOwed(e)) return { state: 'step_up' };
     if (e instanceof ServiceError && e.code === 'forbidden') return null;

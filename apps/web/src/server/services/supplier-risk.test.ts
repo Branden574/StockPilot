@@ -777,6 +777,42 @@ describe('an item: read in this organization first, then changed', () => {
   });
 });
 
+describe('an item: who last changed it and who accepted it', () => {
+  it('a name kept beside an emptied account link is a deleted account; a linked name is not', async () => {
+    const item = (over: Record<string, unknown>) => ({
+      changed_by_name: 'Blake Example',
+      accepted_by_name: 'Casey Example',
+      ...over,
+    });
+    const gone = setup({
+      'rpc:supplier_risk_review': reviewWithItem({}, item({ changed_by: null, accepted_by: null })),
+    });
+    const a = await gone.svc.review(REVIEW);
+    expect(a.state === 'ok' && a.value?.items[0]).toMatchObject({
+      changedByDeleted: true,
+      acceptedByDeleted: true,
+    });
+    const here = setup({
+      'rpc:supplier_risk_review': reviewWithItem(
+        {},
+        item({ changed_by: ME, accepted_by: OTHER_ADMIN }),
+      ),
+    });
+    const b = await here.svc.review(REVIEW);
+    expect(b.state === 'ok' && b.value?.items[0]).toMatchObject({
+      changedByDeleted: false,
+      acceptedByDeleted: false,
+    });
+    // A read that carries no id key says nothing.
+    const none = setup({ 'rpc:supplier_risk_review': reviewWithItem({}, item({})) });
+    const c = await none.svc.review(REVIEW);
+    expect(c.state === 'ok' && c.value?.items[0]).toMatchObject({
+      changedByDeleted: false,
+      acceptedByDeleted: false,
+    });
+  });
+});
+
 describe('the owners and admins an item may be given to', () => {
   it('owners and admins only, accepted, not a support seat, not disabled', async () => {
     const stub = makeSupabaseStub({
@@ -813,7 +849,12 @@ describe('the owners and admins an item may be given to', () => {
       ],
     });
     const chain = stub.chains.get('organization_members.select') ?? [];
-    expect(chain).toEqual(expect.arrayContaining(['eq', 'not', 'is']));
+    expect(chain).toEqual(expect.arrayContaining(['eq', 'not', 'is', 'in']));
+    // Only owners and admins are asked for, so the row cap cannot hide an admin.
+    expect(stub.chainArgs.get('organization_members.select')).toContainEqual([
+      'role',
+      ['owner', 'admin'],
+    ]);
     expect(stub.chainArgs.get('organization_members.select')).toContainEqual([
       'impersonation_expires_at',
       null,
@@ -903,7 +944,12 @@ describe("the history: the database's own record of a supplier's reviews, newest
   });
 
   it('each kind reads its own detail keys: a finished review, a result set by an admin, a discarded draft', async () => {
-    const finish = { event_id: EVENT(1).event_id, review_id: REVIEW, item_id: null, question_key: null };
+    const finish = {
+      event_id: EVENT(1).event_id,
+      review_id: REVIEW,
+      item_id: null,
+      question_key: null,
+    };
     const { svc } = setup({
       'rpc:supplier_risk_events': {
         data: [
@@ -1130,7 +1176,9 @@ describe('the register past the API row cap: every page is read, never cut silen
 
   it('more than the pages it reads: the rows read, said to be incomplete', async () => {
     const most = SUPPLIER_RISK_REGISTER_MAX_PAGES * SUPPLIER_RISK_REGISTER_PAGE_ROWS;
-    const { stub, svc } = setup({ 'rpc:supplier_risk_register': servedLikePostgrest(rows(most + 1)) });
+    const { stub, svc } = setup({
+      'rpc:supplier_risk_register': servedLikePostgrest(rows(most + 1)),
+    });
     const read = await svc.register();
     if (read.state !== 'ok') throw new Error('expected ok');
     expect(read.complete).toBe(false);
@@ -1211,7 +1259,8 @@ describe('the newest version, for a finish another admin got to first (S2)', () 
         },
       },
     });
-    for (const c of stub.rpcCalls) expect((c.args as { p_organization_id: string }).p_organization_id).toBe(ORG);
+    for (const c of stub.rpcCalls)
+      expect((c.args as { p_organization_id: string }).p_organization_id).toBe(ORG);
   });
 
   it('no draft any more (discarded or finished elsewhere): only the current review', async () => {

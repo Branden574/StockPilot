@@ -372,6 +372,7 @@ export default async function SupplierRiskReviewPage({
               reviewId={currentReview.id}
               items={currentReview.items}
               people={owners}
+              peopleKnown={people.state === 'ok'}
               canWrite={member && !couldNotCheck}
               orgToday={orgToday}
               timeZone={timeZone}
@@ -412,8 +413,7 @@ export default async function SupplierRiskReviewPage({
           aside={
             draftRow?.updatedAt ? (
               <span className="text-muted-foreground text-[12px]">
-                Draft saved{' '}
-                <SupplierRiskTime at={draftRow.updatedAt} timeZone={timeZone} clock />
+                Draft saved <SupplierRiskTime at={draftRow.updatedAt} timeZone={timeZone} clock />
               </span>
             ) : null
           }

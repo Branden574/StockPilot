@@ -59,6 +59,7 @@ export function SupplierRiskItems({
   reviewId,
   items,
   people,
+  peopleKnown = true,
   canWrite,
   orgToday,
   timeZone,
@@ -66,6 +67,8 @@ export function SupplierRiskItems({
   reviewId: string;
   items: SupplierRiskItem[];
   people: SupplierRiskPerson[];
+  /** False when the owners and admins could not be listed: no owner is then called "no longer" one. */
+  peopleKnown?: boolean;
   canWrite: boolean;
   orgToday: string;
   /** The organization's zone (resolved), for "Last changed". */
@@ -82,6 +85,7 @@ export function SupplierRiskItems({
           reviewId={reviewId}
           item={item}
           people={people}
+          peopleKnown={peopleKnown}
           canWrite={canWrite}
           orgToday={orgToday}
           timeZone={timeZone}
@@ -95,6 +99,7 @@ function ItemRow({
   reviewId,
   item,
   people,
+  peopleKnown,
   canWrite,
   orgToday,
   timeZone,
@@ -102,6 +107,7 @@ function ItemRow({
   reviewId: string;
   item: SupplierRiskItem;
   people: SupplierRiskPerson[];
+  peopleKnown: boolean;
   canWrite: boolean;
   orgToday: string;
   timeZone: string;
@@ -149,7 +155,8 @@ function ItemRow({
       </dl>
       {item.status === 'accepted' && item.acceptedReason ? (
         <p className="text-ink-2 text-[13px]" data-slot="supplier-risk-accepted">
-          Accepted by <bdi>{item.acceptedByName ?? 'Unknown'}</bdi>:{' '}
+          Accepted by <bdi>{item.acceptedByName ?? 'Unknown'}</bdi>
+          {item.acceptedByDeleted ? ' (account deleted)' : null}:{' '}
           <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
             {item.acceptedReason}
           </span>
@@ -157,7 +164,8 @@ function ItemRow({
       ) : null}
       {item.changedByName ? (
         <p className="text-muted-foreground text-[12px]">
-          Last changed by <bdi>{item.changedByName}</bdi> on{' '}
+          Last changed by <bdi>{item.changedByName}</bdi>
+          {item.changedByDeleted ? ' (account deleted)' : null} on{' '}
           <SupplierRiskTime at={item.changedAt} timeZone={timeZone} />.
         </p>
       ) : null}
@@ -167,6 +175,7 @@ function ItemRow({
             reviewId={reviewId}
             item={item}
             people={people}
+            peopleKnown={peopleKnown}
             orgToday={orgToday}
             onDone={() => setEditing(false)}
           />
@@ -190,12 +199,14 @@ function ItemEditor({
   reviewId,
   item,
   people,
+  peopleKnown,
   orgToday,
   onDone,
 }: {
   reviewId: string;
   item: SupplierRiskItem;
   people: SupplierRiskPerson[];
+  peopleKnown: boolean;
   orgToday: string;
   onDone: () => void;
 }) {
@@ -293,7 +304,9 @@ function ItemEditor({
               <option value="">No owner</option>
               {!ownerListed && item.ownerUserId ? (
                 <option value={item.ownerUserId}>
-                  {`${item.ownerName ?? 'Unknown'} (${SUPPLIER_RISK_OWNER_NOT_ADMIN})`}
+                  {peopleKnown
+                    ? `${item.ownerName ?? 'Unknown'} (${SUPPLIER_RISK_OWNER_NOT_ADMIN})`
+                    : (item.ownerName ?? 'Unknown')}
                 </option>
               ) : null}
               {people.map((p) => (

@@ -332,8 +332,10 @@ function item(over: Partial<SupplierRiskItem> = {}): SupplierRiskItem {
     status: 'accepted',
     closedAt: null,
     changedByName: 'Blake Example',
+    changedByDeleted: false,
     changedAt: '2026-11-27T10:00:00Z',
     acceptedByName: 'Casey Example',
+    acceptedByDeleted: false,
     acceptedReason: 'Accepted until the new contract starts in January.',
     ...over,
   };
@@ -379,6 +381,41 @@ describe('follow-up 4: names in <bdi>, and text as text', () => {
     );
     expect(container.querySelector('img')).toBeNull();
     expect(container.textContent).toContain('<img src=x onerror=alert(1)> no clause');
+  });
+
+  it('a deleted account is marked on "Accepted by" and "Last changed by"', () => {
+    const { container } = render(
+      <SupplierRiskItems
+        reviewId="r"
+        items={[item({ changedByDeleted: true, acceptedByDeleted: true })]}
+        people={[]}
+        canWrite={false}
+        orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
+      />,
+    );
+    expect(container.querySelector('[data-slot="supplier-risk-accepted"]')?.textContent).toMatch(
+      /^Accepted by Casey Example \(account deleted\): /,
+    );
+    expect(container.textContent).toMatch(/Last changed by Blake Example \(account deleted\) on/);
+  });
+
+  it('owners that could not be listed: no current owner is called "no longer an owner or admin"', () => {
+    render(
+      <SupplierRiskItems
+        reviewId="r"
+        items={[item()]}
+        people={[]}
+        peopleKnown={false}
+        canWrite
+        orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Change the item/ }));
+    const form = screen.getByRole('form', { name: 'Change this item' });
+    expect(within(form).getByRole('option', { name: 'Avery Example' })).toBeTruthy();
+    expect(form.textContent).not.toContain('no longer an owner or admin');
   });
 
   it('no Change control without the right to write; one per item with it', () => {
@@ -448,7 +485,8 @@ describe('the stored summary says what is true about the hard stops (S5)', () =>
     }
     return { ...out, ...over };
   }
-  const notRuledOut = 'A hard-stop question is not answered yet: more information is needed.';
+  const notRuledOut =
+    'The rules found no hard stop, but a hard-stop question was answered Not shown to us.';
 
   it('a hard-stop question answered Not shown to us: never "No hard stop applies."', () => {
     const { container } = render(
@@ -612,16 +650,16 @@ describe("the history: the database's record, every value as text", () => {
     );
     const li = container.querySelector('[data-event="item_changed"]')!;
     expect(li.textContent).toMatch(/Item changed/);
-    expect(li.textContent).toContain('Does the contract say how soon they must tell us about a breach of our data?');
+    expect(li.textContent).toContain(
+      'Does the contract say how soon they must tell us about a breach of our data?',
+    );
     expect(li.textContent).toContain('November 28, 2026, 1:30 AM GMT+9');
     expect(li.querySelector('time')?.getAttribute('title')).toBe('27 Nov 2026, 16:30 UTC');
     const names = Array.from(li.querySelectorAll('bdi')).map((b) => b.textContent);
     expect(names).toEqual(['Rami \u202eExample', 'Avery Example', 'Blake <b>Example</b>']);
     expect(li.textContent).toMatch(/Status changed from Open to Risk accepted\./);
     expect(li.textContent).toMatch(/Due changed from December 31, 2026 to none\./);
-    expect(li.textContent).toContain(
-      'Reason: Line one <img src=x onerror=alert(1)>\n  line two',
-    );
+    expect(li.textContent).toContain('Reason: Line one <img src=x onerror=alert(1)>\n  line two');
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('b')).toBeNull();
   });
@@ -632,7 +670,12 @@ describe("the history: the database's record, every value as text", () => {
         read={{
           state: 'ok',
           value: {
-            events: [event({ event: 'something_new', detail: { ...event().detail, before: null, after: null, reason: null } })],
+            events: [
+              event({
+                event: 'something_new',
+                detail: { ...event().detail, before: null, after: null, reason: null },
+              }),
+            ],
             next: null,
           },
         }}
@@ -732,7 +775,9 @@ describe("the history: the database's record, every value as text", () => {
     const li = container.querySelector('[data-event="result_overridden"]')!;
     expect(li.textContent).toMatch(/Result set by an admin/);
     expect(li.textContent).toMatch(/Version 3/);
-    expect(li.textContent).toMatch(/The rules gave Do not use; the result is More information needed\./);
+    expect(li.textContent).toMatch(
+      /The rules gave Do not use; the result is More information needed\./,
+    );
     expect(screen.getByRole('link', { name: 'Older changes' }).getAttribute('href')).toBe(
       '/dashboard/suppliers/x/risk?history=cursor',
     );
@@ -769,7 +814,8 @@ describe('the finish panel never loses typed answers (S2)', () => {
   const first = asked[0]!;
   function staffAllYes(): VendorRiskAnswers {
     const out: VendorRiskAnswers = {};
-    for (const q of asked) out[q.key] = q.date ? { answer: 'yes', date: '2026-10-01' } : { answer: 'yes' };
+    for (const q of asked)
+      out[q.key] = q.date ? { answer: 'yes', date: '2026-10-01' } : { answer: 'yes' };
     return out;
   }
   const startForm = () =>
@@ -787,7 +833,8 @@ describe('the finish panel never loses typed answers (S2)', () => {
         name: 'No',
       }),
     );
-  const pressFinish = () => fireEvent.click(screen.getByRole('button', { name: 'Finish the review' }));
+  const pressFinish = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'Finish the review' }));
 
   it('an answer changed with the panel open: the result is worked out again and confirmed, never "reload"', async () => {
     h.finish.mockResolvedValue({ ok: true, data: { result: 'approve_with_conditions' } });
@@ -822,11 +869,15 @@ describe('the finish panel never loses typed answers (S2)', () => {
       ok: false,
       error: {
         code: 'conflict',
-        message: 'This draft was changed in another window, or by another admin, after you opened it.',
+        message:
+          'This draft was changed in another window, or by another admin, after you opened it.',
         details: { reason: 'draft_moved' },
       },
     });
-    const theirs: VendorRiskAnswers = { ...staffAllYes(), [asked[1]!.key]: { answer: 'not_shown', note: 'Their <b>note</b>' } };
+    const theirs: VendorRiskAnswers = {
+      ...staffAllYes(),
+      [asked[1]!.key]: { answer: 'not_shown', note: 'Their <b>note</b>' },
+    };
     h.latest.mockResolvedValue({
       ok: true,
       data: {
@@ -869,7 +920,10 @@ describe('the finish panel never loses typed answers (S2)', () => {
     fireEvent.click(within(other).getByRole('button', { name: 'Keep my answers' }));
     pressFinish();
     await vi.waitFor(() => expect(h.finish).toHaveBeenCalledTimes(2));
-    const second = h.finish.mock.calls[1]?.[0] as { draftUpdatedAt: string; answers: VendorRiskAnswers };
+    const second = h.finish.mock.calls[1]?.[0] as {
+      draftUpdatedAt: string;
+      answers: VendorRiskAnswers;
+    };
     expect(second.draftUpdatedAt).toBe('2026-11-27T19:30:00+00:00');
     expect(second.answers[first.key]?.answer).toBe('no');
   });
@@ -879,7 +933,10 @@ describe('the finish panel never loses typed answers (S2)', () => {
       ok: false,
       error: { code: 'conflict', message: 'moved', details: { reason: 'draft_moved' } },
     });
-    const theirs: VendorRiskAnswers = { ...staffAllYes(), [asked[1]!.key]: { answer: 'not_shown' } };
+    const theirs: VendorRiskAnswers = {
+      ...staffAllYes(),
+      [asked[1]!.key]: { answer: 'not_shown' },
+    };
     h.latest.mockResolvedValue({
       ok: true,
       data: {
@@ -904,11 +961,19 @@ describe('the finish panel never loses typed answers (S2)', () => {
       return el as HTMLElement;
     });
     fireEvent.click(within(other).getByRole('button', { name: 'Use their answers' }));
-    const theirQuestion = within(document.querySelector(`[data-question="${asked[1]!.key}"]`) as HTMLElement);
-    expect((theirQuestion.getByRole('radio', { name: 'Not shown to us' }) as HTMLInputElement).checked).toBe(true);
+    const theirQuestion = within(
+      document.querySelector(`[data-question="${asked[1]!.key}"]`) as HTMLElement,
+    );
+    expect(
+      (theirQuestion.getByRole('radio', { name: 'Not shown to us' }) as HTMLInputElement).checked,
+    ).toBe(true);
     pressFinish();
     // Their answers give another result: confirmed first, never sent unseen.
     expect(h.finish).toHaveBeenCalledTimes(1);
-    expect(screen.getAllByRole('status').some((n) => /The answers changed after you opened this/.test(n.textContent ?? ''))).toBe(true);
+    expect(
+      screen
+        .getAllByRole('status')
+        .some((n) => /The answers changed after you opened this/.test(n.textContent ?? '')),
+    ).toBe(true);
   });
 });

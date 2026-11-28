@@ -53,7 +53,6 @@ const ROWS = [row(A, 'Example Supply Co'), row(B, 'Sample Paper Ltd')];
 
 const OK: SuppliersRiskView = {
   state: 'ok',
-  seat: 'member',
   complete: true,
   bySupplier: {
     [A]: {
@@ -135,7 +134,6 @@ describe('the Risk column and the Review link', () => {
         canManage
         risk={{
           state: 'ok',
-          seat: 'member',
           complete: true,
           bySupplier: { [A]: OK.state === 'ok' ? OK.bySupplier[A]! : null! },
         }}
@@ -167,7 +165,6 @@ describe('the Risk column and the Review link', () => {
         canManage
         risk={{
           state: 'ok',
-          seat: 'member',
           complete: true,
           bySupplier: {
             [A]: {
@@ -195,7 +192,6 @@ describe('the Risk column and the Review link', () => {
         canManage
         risk={{
           state: 'ok',
-          seat: 'member',
           complete: false,
           bySupplier: { [A]: OK.state === 'ok' ? OK.bySupplier[A]! : null! },
         }}

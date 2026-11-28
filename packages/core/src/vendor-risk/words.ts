@@ -63,7 +63,8 @@ export const VENDOR_RISK_KEY_PAPERS_WORDS =
  */
 export const VENDOR_RISK_HARD_STOP_SUMMARY_WORDS = {
   found: 'Hard stops (each one alone means Do not use)',
-  not_ruled_out: 'A hard-stop question is not answered yet: more information is needed.',
+  not_ruled_out:
+    'The rules found no hard stop, but a hard-stop question was answered Not shown to us.',
   not_ruled_out_each: 'Not shown to us, so not ruled out:',
   none: 'No hard stop applies.',
 } as const;

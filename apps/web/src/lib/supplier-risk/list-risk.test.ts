@@ -91,11 +91,10 @@ describe('loadSuppliersRiskView', () => {
     expect(await loadSuppliersRiskView(refused.ctx)).toBeNull();
   });
 
-  it('read: one cell per supplier, keyed by its id in lower case, with the seat', async () => {
+  it('read: one cell per supplier, keyed by its id in lower case', async () => {
     const { stub, ctx } = ctxWith({ data: [ROW], error: null }, { role: 'owner' });
     expect(await loadSuppliersRiskView(ctx)).toEqual({
       state: 'ok',
-      seat: 'member',
       complete: true,
       bySupplier: {
         [A.toLowerCase()]: {

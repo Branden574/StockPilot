@@ -165,7 +165,11 @@ describe('vendorRiskHardStopSummary: what a finished review says about its hard 
     const summary = vendorRiskHardStopSummary(e);
     expect(summary).toEqual({ kind: 'not_ruled_out', stops: ['student_data_no_agreement'] });
     expect(VENDOR_RISK_HARD_STOP_SUMMARY_WORDS[summary.kind]).toBe(
-      'A hard-stop question is not answered yet: more information is needed.',
+      'The rules found no hard stop, but a hard-stop question was answered Not shown to us.',
+    );
+    // About what the rules found only: it never claims the result (an admin may have set another).
+    expect(VENDOR_RISK_HARD_STOP_SUMMARY_WORDS.not_ruled_out).not.toMatch(
+      /not answered|more information/i,
     );
   });
 

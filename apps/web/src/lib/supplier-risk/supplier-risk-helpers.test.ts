@@ -90,6 +90,23 @@ function cells(csv: string): string[][] {
 }
 
 describe('the register CSV', () => {
+  it('direction marks and other invisible characters leave a name, as on the page', () => {
+    const csv = supplierRiskRegisterCsv(
+      [
+        csvRow({
+          supplierName: 'Example\u202E Supplies\u200B',
+          reviewedAsName: 'Old\u2066 Name',
+          nameChanged: true,
+        }),
+      ],
+      { timeZone: 'UTC', complete: true },
+    );
+    const row = cells(csv)[1];
+    expect(row?.[0]).toBe('Example Supplies');
+    expect(row?.[1]).toBe('Old Name');
+    expect(csv).not.toMatch(/[\u202E\u200B\u2066]/);
+  });
+
   it('a formula in a typed name arrives as text', () => {
     const csv = supplierRiskRegisterCsv(
       [
