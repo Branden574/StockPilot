@@ -142,6 +142,20 @@ export type AuditEvent =
   | 'charter.restored'
   | 'supplier.archived'
   | 'supplier.restored'
+  /**
+   * Vendor risk reviews (0481; server/services/supplier-risk.ts), written by
+   * owners and admins. entity_type 'supplier', entity_id the supplier. The
+   * metadata holds ids, versions, results, statuses, owners and dates, never
+   * an answer, a note, a finding, an action or a reason (audit_logs is read by
+   * anyone holding activity_logs:read): an override's or an acceptance's
+   * reason is recorded as reason_length only.
+   */
+  | 'supplier.risk_draft_saved'
+  | 'supplier.risk_draft_discarded'
+  | 'supplier.risk_review_finished'
+  | 'supplier.risk_review_overridden'
+  | 'supplier.risk_item_changed'
+  | 'supplier.risk_accepted'
   | 'category.archived'
   | 'category.created'
   | 'category.restored'
