@@ -12,6 +12,7 @@ import {
   securityBotReason,
   securityConsoleCategoryLabel,
   securityEventCategoryLabel,
+  securityMemberCategoryLabel,
   securityEventOutcomeLabel,
   securityEventPlaceLabel,
   securityEventReasonLabel,
@@ -72,6 +73,11 @@ describe('security events: the lists the database checks', () => {
       'too_many_forms_to_count',
       'over_minute_cap',
       'over_buffer_cap',
+      'upload_wrong_type',
+      'upload_active_content',
+      'upload_hidden_file',
+      'upload_could_not_check',
+      'upload_refused_in_use',
       ...SECURITY_PROBE_KINDS,
       ...SECURITY_BOT_FAMILIES.map(securityBotReason),
     ];
@@ -82,6 +88,29 @@ describe('security events: the lists the database checks', () => {
       expect(label, reason).not.toBe(SECURITY_EVENT_UNKNOWN_REASON_LABEL);
       expect(label.length, reason).toBeGreaterThan(5);
     }
+  });
+
+  it('names the words of a refused file an earlier record still uses (review round 2, F1)', () => {
+    expect(securityEventReasonLabel('upload_refused_in_use')).toBe(
+      'A refused file that an earlier record still uses',
+    );
+  });
+
+  it('names the plain words of the four upload refusals (part 6), each under malware', () => {
+    expect(securityEventReasonLabel('upload_wrong_type')).toBe(
+      'A file of the wrong kind was refused',
+    );
+    expect(securityEventReasonLabel('upload_active_content')).toBe(
+      'A file that could run something when opened was refused',
+    );
+    expect(securityEventReasonLabel('upload_hidden_file')).toBe(
+      'A file with another file hidden inside it was refused',
+    );
+    expect(securityEventReasonLabel('upload_could_not_check')).toBe(
+      'A file that could not be checked was refused',
+    );
+    expect(securityEventCategoryLabel('malware')).toBe('Malware');
+    expect(securityConsoleCategoryLabel('malware')).toBe('Malware');
   });
 
   it('the two overflow rows read the same', () => {
@@ -211,6 +240,27 @@ describe('security events: a value this build does not know still renders', () =
     for (const c of [...SECURITY_EVENT_CATEGORIES.filter((c) => c !== 'phishing'), 'ransomware']) {
       expect(securityConsoleCategoryLabel(c), c).toBe(securityEventCategoryLabel(c));
       expect(securityConsoleCategoryLabel(c, 'kind'), c).toBe(securityEventCategoryLabel(c));
+    }
+  });
+});
+
+describe("security events: an organization's own pages name the malware kind \"Refused file\" (part 6)", () => {
+  it('a member reads "Refused file" and "Refused files"; the console and the shared label keep "Malware"', () => {
+    expect(securityMemberCategoryLabel('malware')).toBe('Refused file');
+    expect(securityMemberCategoryLabel('malware', 'kind')).toBe('Refused files');
+    expect(securityConsoleCategoryLabel('malware')).toBe('Malware');
+    expect(securityConsoleCategoryLabel('malware', 'kind')).toBe('Malware');
+    expect(securityEventCategoryLabel('malware')).toBe('Malware');
+    for (const form of ['one', 'kind'] as const) {
+      const member = SECURITY_EVENT_CATEGORIES.map((c) => securityMemberCategoryLabel(c, form));
+      expect(member, form).not.toContain('Malware');
+      const console = SECURITY_EVENT_CATEGORIES.map((c) => securityConsoleCategoryLabel(c, form));
+      expect(console.join(' '), form).not.toMatch(/Refused file/);
+    }
+    // Every other category, and an unknown one, as the shared label says it (Phishing stays).
+    for (const c of [...SECURITY_EVENT_CATEGORIES.filter((c) => c !== 'malware'), 'ransomware']) {
+      expect(securityMemberCategoryLabel(c), c).toBe(securityEventCategoryLabel(c));
+      expect(securityMemberCategoryLabel(c, 'kind'), c).toBe(securityEventCategoryLabel(c));
     }
   });
 });

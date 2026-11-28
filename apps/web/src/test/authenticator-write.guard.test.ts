@@ -115,6 +115,8 @@ const NOT_WRITES: Record<string, string> = {
     'The shared ISBN cache: book facts from public sources, held for every organization alike, no organization data.',
   'server/security/events.ts#recordSecurityEvent':
     'Counts a refused or flagged request in the security-events record: bookkeeping about the request, in fixed words the server chooses, stored through the service-role-only writer. Nothing a member owns or typed is written.',
+  'server/security/upload-checks.ts#auditRemoval':
+    "Writes the one audit line of what was done with a refused upload's objects (part 6: removed, kept, or a removal storage did not confirm): bookkeeping about the request, in fixed words the server chooses (the place, the kind of refusal, how many objects, why kept or the storage error's code). Nothing a member owns or typed is written.",
 };
 
 const ROUTE_WRITE_METHODS = ['POST', 'PUT', 'PATCH', 'DELETE'];

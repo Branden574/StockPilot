@@ -23,7 +23,7 @@ import {
 } from '@/server/services/security-events';
 
 import {
-  securityEventCategoryLabel,
+  securityMemberCategoryLabel,
   securityEventOutcomeLabel,
   securityEventPlaceLabel,
   securityEventReasonLabel,
@@ -96,7 +96,7 @@ export default async function BlockedActivityPage() {
     <SettingsPage width="wide">
       <PageHeader
         title="Blocked activity"
-        subline="Wrong passwords and codes the app refused for the accounts in your organization. Kept for 90 days."
+        subline="Wrong passwords and codes the app refused for the accounts in your organization, and files it refused at upload. Kept for 90 days."
         back={
           <PageHeaderBackLink href="/dashboard/settings/security">
             ← Back to security
@@ -121,7 +121,7 @@ export default async function BlockedActivityPage() {
             {totals.map((t) => (
               <div key={t.category} className="bg-sunk rounded-lg border px-4 py-3">
                 <dt className="text-muted-foreground text-[12.5px]">
-                  {securityEventCategoryLabel(t.category)}
+                  {securityMemberCategoryLabel(t.category, 'kind')}
                 </dt>
                 <dd className="text-foreground mt-1 font-mono text-[20px] tabular-nums">
                   {t.events.toLocaleString('en-US')}
@@ -165,7 +165,7 @@ export default async function BlockedActivityPage() {
                     <TableCell>
                       <span className="text-foreground">{securityEventReasonLabel(row.reason)}</span>
                       <span className="text-muted-foreground block text-[12px]">
-                        {securityEventCategoryLabel(row.category)} ·{' '}
+                        {securityMemberCategoryLabel(row.category)} ·{' '}
                         {securityEventOutcomeLabel(row.outcome)}
                       </span>
                     </TableCell>

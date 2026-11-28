@@ -1129,25 +1129,69 @@ PGTAP_TESTS=(
   # (shown with the grant made inside a savepoint), and even then the second
   # lock in each body refuses a signed-in member and a signed-out caller.
   # Every write takes this file's own advisory lock, never the security
-  # events' or the samples'; the reads take none. The inputs count 8 hours of
-  # the record as the map counts it (folded, tallies apart; worked out by hand
-  # for a made-up record), never give a source hash, and say when the row
-  # ceiling cut the window. The claim keeps one row per alert however often
-  # it is claimed (a subject of null and '' the same; the key from the
-  # event's hour, not the run's clock), hands an alert with no result out once
-  # more after 5 minutes and then marks it not_sent; serious flags have their
-  # own 6 pushes an hour, then email only; volume and record alerts 8 a day
-  # together and 4 for one rule and subject; a planned check holds those and
-  # never a serious flag; with both switches off an alert is still recorded.
-  # Every refusal of all nine is a fixed word, never raised. The result, the
-  # heartbeat (missed runs, three failures reported once), the set (ranges,
-  # compare-and-set, a change row for every change), the console's list, the
+  # events' or the samples', before its first read of the alerts tables (a
+  # text pin); the reads take none. The inputs count 8 hours of the record as
+  # the map counts it (folded, tallies apart; worked out by hand for a
+  # made-up record), never give a source hash, say when the row ceiling cut
+  # the window, and list the serious flags due their retry apart from the
+  # others. The claim keeps one row per alert however often it is claimed (a
+  # subject of null and '' the same; the key from the event's hour, not the
+  # run's clock), hands an alert with no result out once more after 5
+  # minutes and then marks it not_sent; a serious flag's retry is never lost
+  # (not swept for 10 hours, taken after its hour left the window); serious
+  # flags have their own 6 pushes an hour and 4 a day for one reason (each a
+  # threshold that is never 0), then go by email even with email alerts off
+  # (the row says why; so at the least thresholds every new flag still
+  # sends), and by push and email as far as the switches go; volume and
+  # record alerts 8 pushes a day together and 4 for one rule and subject, 24
+  # volume emails and 6 of record trouble a day, each its own, then held for
+  # the summary when it is on, else held with one notice in 6 hours that
+  # alerts are held (none unsent and unreported); a start with an ended
+  # state's key is refused; a
+  # planned check holds volume and record alerts and never a serious flag,
+  # and is refused while one is on, within 30 minutes of the last and past 4
+  # a day; with both switches off an alert is still recorded. Every refusal
+  # of all nine is a fixed word, never raised. The result (a serious push that
+  # reached no one owes its email), the heartbeat (missed runs, three
+  # failures reported at most once in 6 hours, a run that could not check
+  # fully), the set (ranges, compare-and-set, a change row for every change),
+  # the console's list (the latest change of every setting however old), the
   # baseline (the 99th percentile of a week's buckets, worked out by hand),
   # the purge (400 days, 5,000 a call, change rows kept) and the push
   # recipients (a confirmed sign-in email, no disabled, banned, deleted, SSO
   # or anonymous account, at most 20 addresses) each answer as documented. The
   # two-session checks are scripts/db-concurrency/0480_platform_security_alerts_race.sh.
   supabase/tests/0480_platform_security_alerts.test.sql
+  # Vendor risk reviews (0481): no API role reads or writes
+  # supplier_risk_reviews, supplier_risk_items or supplier_risk_events
+  # directly (RLS on, no policy, no privilege for anon, authenticated or
+  # service_role; every direct read and write refused); the nine admin functions are
+  # authenticated only and open with has_org_role(organization, 'admin') and
+  # 0472's authenticator check, so a manager, a staff member, a viewer, an
+  # admin of another organization, a disabled admin, an invitation, an expired
+  # act-as seat, an outsider and a session with no account are refused every
+  # read and write, and the second step is asked for where it is owed; the
+  # two reminder functions are service_role only with a second lock that
+  # refuses a member even with EXECUTE. A supplier of another organization is
+  # never reviewed. The answers are held to the fixed question list and a
+  # final's result to the rules by the table's own CHECKs (the case table is
+  # core's too: vendor-risk.parity.test.ts); an override needs its reason;
+  # no stored text holds a hidden character (one list, core's too) and a
+  # reason is counted over what can be seen; a Yes on the security report or
+  # the insurance needs its date, never later than tomorrow in UTC;
+  # one current review and one draft per supplier; a final review and an
+  # item's finding are kept as written on every path; an account deleted
+  # keeps the name and loses the link; the reminder claim stamps once. Every
+  # finish, override, discarded draft and item change (a risk accepted, an
+  # acceptance withdrawn) keeps one row of supplier_risk_events in its own
+  # transaction, after its checks (a refused call none), with fixed keys per
+  # kind and never an answer or a question key; no API role reads, writes,
+  # changes, deletes or truncates it, a trigger refuses every change and
+  # delete but an account deletion's SET NULL and the organization's own
+  # deletion, and only owners and admins read it (not managers, who read the
+  # shared audit log, where nothing about vendor risk is written). The
+  # two-session checks are scripts/db-concurrency/0481_supplier_risk_reminder_race.sh.
+  supabase/tests/0481_supplier_risk_reviews.test.sql
   # Policy sign-off (0482): four tables and thirteen functions. RLS on with no
   # policy; anon and authenticated hold nothing on the tables and service_role
   # SELECT only; authenticated EXECUTE on the twelve member and admin
@@ -1279,6 +1323,38 @@ WEB_TESTS=(
   # the finalize limiter fails closed, and a recorded photo's files are never
   # rewritten or deleted by a later finalize.
   src/server/services/maintenance-attachments.metadata.test.ts
+  # Every upload path's one check (security tools part 6, stage 6a): the
+  # verdict from the bytes (kind, active content, a hidden file, could not be
+  # checked within the scanner's time and work budgets); one malware / blocked
+  # event per refusal with the organization and no file name, path or byte; a
+  # recorder failure changes no answer; a clean file unchanged; a refused
+  # stored copy removed (kept when another record names it or that look
+  # fails), with an audit line for each removal; each stored file read within
+  # its bucket's size ceiling (pinned to the migrations), a video from its
+  # first window only. The registry guard lists every way a file comes in
+  # (a mint, a form, a raw, base64 or remote read, bytes handed to a model,
+  # a recorded object path, a stored-object read, a storage copy or write, a
+  # signed-URL write) with the check that covers it, or a later stage by
+  # reference, and pins a producer for each reason. Blocked activity names
+  # the kind "Refused file".
+  src/lib/upload-inspect.test.ts
+  src/server/security/upload-checks.test.ts
+  src/lib/upload-size-limits.test.ts
+  src/server/services/upload-still-named.test.ts
+  src/server/security/upload-checks.registry.guard.test.ts
+  src/server/security/upload-checks.capture-paths.test.ts
+  src/server/security/upload-checks.support-paths.test.ts
+  src/server/security/upload-checks.isbn-paths.test.ts
+  src/server/services/item-images.upload-checks.test.ts
+  src/server/services/po-imports.upload-checks.test.ts
+  src/server/services/procedure-videos.upload-checks.test.ts
+  # The finalize check with the real storage reader through Next's fetch over
+  # a socket, and every storage step's time limit and each check's one
+  # deadline (review round 3).
+  src/server/security/upload-checks.seam.test.ts
+  src/lib/storage-steps.test.ts
+  src/app/api/orders/sign/route.test.ts
+  src/server/services/security-events.test.ts
 
   # AI boundaries: org-scoped tool reads, prompt-injection containment, SSRF.
   src/lib/ai/tools.security.test.ts
@@ -2748,6 +2824,80 @@ WEB_TESTS=(
   src/components/platform/platform-security-map-section.test.tsx
   src/components/platform/security-map/security-map-client.test.tsx
   'src/app/(platform)/platform/security/map/page.test.tsx'
+
+  # What scanners asked for (part 5, stage 3): a sample is kept only when the
+  # path the request carries is taken by a rule of the route's own kind (the
+  # re-match), never under a path that can carry a token or key (the list is
+  # read from the route tree and fails on a new token route outside it),
+  # never for a method outside the seven, with the rule's own rewrite
+  # parameters dropped from the query string, and only after the core scrub.
+  # The scanner route's answer and its event are the same byte for byte with
+  # or without a sample, and a failing sample changes neither. The recorder
+  # has its own buffer (at most 50, merged, counts capped), never throws and
+  # is never waited on, drops a batch on 55P03 or a missing writer, and logs
+  # one count line of numbers only after every call. Its flush is on the
+  # security events' delay and never starts after their flush, so a probe
+  # request is held no longer with its sample than with its event alone
+  # (review 3B S5; event-samples.hold runs both real recorders). Every
+  # made-up scanner path comes out of the scrub as it was sent
+  # (probe-paths). The new files carry the "Security invariant" marker.
+  src/lib/security/probe-paths.test.ts
+  src/lib/security/probe-match.test.ts
+  src/lib/security/probe-sample.test.ts
+  'src/app/api/security/probe/[kind]/route.test.ts'
+  src/server/security/event-samples.test.ts
+  src/server/security/event-samples.hold.test.ts
+
+  # What was asked for, on the platform console (part 5, stage 3b): the read
+  # is imported by the panel's Server Action alone, which asks the console's
+  # own rule (checkPlatformConsoleRead) before its input or the table, and
+  # answers one fixed refusal; every argument is checked on both sides (a
+  # probe kind, a whole UTC hour within 7 days, two capitals); a missing
+  # function, a failed or refused read and an answer this build does not know
+  # are "could not check", never an empty list; what leaves the server is the
+  # view's keys alone (no organization). The panel's section reads once when
+  # it opens and renders every path and query string as text only, never a
+  # link, never markup; neither panel folder sets HTML from a string.
+  src/server/services/platform/security-event-samples.test.ts
+  src/server/services/platform/security-event-samples.callers.test.ts
+  src/server/actions/platform/security-event-samples.test.ts
+  src/components/platform/security-response/security-response-samples.test.tsx
+  src/components/platform/security-response/security-panels-no-raw-html.guard.test.ts
+
+  # The security alerts (part 5, stage 4a: RECORD ONLY). Nothing is sent: the
+  # setter and the recipients' lookup are called from nowhere, each of 0480's
+  # functions only from its one module, and each module of the alerts imports
+  # exactly its listed modules and the listed names from each, calls only its
+  # listed functions and tables, writes nothing and names no fetch or sender,
+  # its imports followed one level deep, where network, process and
+  # code-loading names are held to the uses judged (alerts-record-only, an
+  # allow-list and a tripwire, not a proof: review stays the control). The
+  # alert job fails closed on its cron secret, makes its calls in the
+  # contract's order (every serious flag before any other claim), opens a new
+  # state after a refused start only under a bucket where the condition
+  # holds, takes every refusal as an answer, closes a
+  # handed-out channel, the email floor's second result and the held notice as
+  # skipped, always finishes the heartbeat it started, ends inside its
+  # deadline, never throws, and reports three missed or failed runs once.
+  # Every report of the two jobs goes through one helper: a fixed tag, counts
+  # and codes only, each tag at most once in 6 hours on an instance, the
+  # failing report when the database says so (alerts-reports). The
+  # daily job only computes the baseline and says it sent nothing. On the
+  # console the read is imported by the alerts section and the Check again
+  # action alone, the action asks checkPlatformConsoleRead() first and
+  # answers one frozen refusal, a failed read is "could not check" (never an
+  # empty list), and the page says it is record only first and never says
+  # anything was sent. Each file carries the "Security invariant" marker.
+  src/server/security/alerts-record-only.guard.test.ts
+  src/server/security/alerts-reports.test.ts
+  src/app/api/cron/security-alerts/route.test.ts
+  src/app/api/cron/security-summary/route.test.ts
+  src/server/services/platform/security-alerts.test.ts
+  src/server/services/platform/security-alerts.callers.test.ts
+  src/server/actions/platform/security-alerts.test.ts
+  src/components/platform/platform-security-alerts-section.test.tsx
+  src/components/platform/security-alerts/security-alerts-client.test.tsx
+  'src/app/(platform)/platform/security/alerts/page.test.tsx'
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3123,6 +3273,29 @@ CORE_TESTS=(
   # every sentence; a flagged event is never called blocked, a floor says
   # "at least", and a number that could not be read is never a zero.
   src/security/security-map.test.ts
+  # The scrub of what scanners asked for (part 5, stage 3): a path or query
+  # string is kept only as printable ASCII, cut to length, with anything that
+  # reads as an email, an id, a number, an address, a long value or a token
+  # (a 22-character invite token in every position) replaced by a fixed
+  # marker, and a secret-named key's value removed; a second scrub never
+  # shows more than the first; the last step is the table's own predicate; the
+  # ways through that the independent review found (3B) are pinned. Generated hostile
+  # inputs; ordinary scanner shapes come out unchanged (apps/web's
+  # probe-paths.test.ts holds every made-up scanner path to that too).
+  src/security/request-scrub.test.ts
+  # What was asked for, on the console (part 5, stage 3b): the browser's
+  # reader takes exactly the view's keys, each path and query string passing
+  # the table's own text rules, else "could not check"; the refusal is one
+  # fixed answer; an entry asks for its own kind and UTC hour, never one more
+  # than 7 days back.
+  src/security/security-event-samples.test.ts
+  # The security alerts' rules (part 5, stage 4a): the contract's lists, a
+  # strict reader of every answer, the keys, the state model (a start, its
+  # reminders at 1, 6 and 24 hours, an end only after three quiet whole
+  # buckets and never from a partial read), built from the events and the
+  # database's own time, never this machine's clock, every serious flag
+  # first; and the console's words, none of which says anything was sent.
+  src/security/security-alerts.test.ts
   # Policy sign-off's text (web and phone): the normal form the database
   # stores, the refused invisible and direction-changing characters, and a
   # parser that knows headings, bullets and paragraphs only, so the words are

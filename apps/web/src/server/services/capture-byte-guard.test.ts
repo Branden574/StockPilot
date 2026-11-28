@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { UPLOAD_WRONG_TYPE_MESSAGE } from '@/server/security/upload-checks';
 
 // ---------------------------------------------------------------------------
 // SNIFF-BEFORE-WRITE — the server-side capture paths.
@@ -108,7 +109,7 @@ describe('SizeCountsService.recordTrainingSample — sniff before write', () => 
     const err = await s
       .recordTrainingSample(input(ascii('<html/>')))
       .catch((e: unknown) => e);
-    expect((err as ServiceError).message).toMatch(/failed our security checks/i);
+    expect((err as ServiceError).message).toBe(UPLOAD_WRONG_TYPE_MESSAGE);
     expect((err as ServiceError).message).not.toMatch(/magic|signature|sniff|webp/i);
   });
 });

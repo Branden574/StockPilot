@@ -10,10 +10,13 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 /**
  * The hard limit, explicit. The first loop starts no call after RUN_BUDGET_MS
- * (45 s) and the sign-in alerts loop none after SIGN_IN_ALERTS_BUDGET_MS
- * (30 s) of its own; the call in flight then waits at most 2 s for its turn
- * (each function's lock_timeout) and removes at most 5,000 rows (and clears at
- * most 5,000 hashes), so a run ends well inside 120 s.
+ * (45 s), the sign-in alerts loop none after SIGN_IN_ALERTS_BUDGET_MS (30 s)
+ * of its own, the event samples loop none after EVENT_SAMPLES_BUDGET_MS
+ * (15 s) of its own and the security alerts loop none after
+ * SECURITY_ALERTS_BUDGET_MS (5 s) of its own; in each, the call in flight then
+ * waits at most 2 s for its turn (each function's lock_timeout) and removes
+ * at most 5,000 rows (and clears at most 5,000 hashes), so a run ends inside
+ * 120 s (95 s of budgets and four calls in flight).
  */
 export const maxDuration = 120;
 
@@ -32,6 +35,20 @@ const BUSY_STOP_AFTER = 3;
 
 /** No sign-in alerts call starts after this long into that loop (part 3). */
 const SIGN_IN_ALERTS_BUDGET_MS = 30_000;
+
+/** No event samples call starts after this long into that loop (part 5, stage 3). */
+const EVENT_SAMPLES_BUDGET_MS = 15_000;
+
+/**
+ * No security alerts call starts after this long into that loop (part 5,
+ * stage 4). The alerts are a few rows a day; a call removes those claimed
+ * more than 400 days ago, so this loop is one cheap call on every day there
+ * is.
+ */
+const SECURITY_ALERTS_BUDGET_MS = 5_000;
+
+/** A function the database does not have (Postgres, then PostgREST's schema cache). */
+const MISSING_FUNCTION_CODES = new Set(['42883', 'PGRST202']);
 
 const TAG = 'cron.security-events-retention';
 
@@ -78,6 +95,31 @@ const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * so a failure here never hides them. This loop's early stop and its errors
  * are reported the same way, once, marked with the table; an error in either
  * loop answers 500.
+ *
+ * EVENT SAMPLES (part 5, stage 3: what scanners asked for): then
+ * purge_security_event_samples() (migration 0479), which deletes samples whose
+ * hour began more than 90 days ago, at most 5,000 a call and answers
+ * {"deleted": n}, by the same rule again, with EVENT_SAMPLES_BUDGET_MS of its
+ * own, whether or not an earlier loop failed. The function missing (42883,
+ * PGRST202) ends this loop only: this code ships after migration 0479 is
+ * live, so a missing function means the migration was rolled back or
+ * something is wrong. It is reported once per run (warning, marked with the
+ * table, the code and nothing else) and said in the answer as
+ * `eventSamples: { ok: false, missing: true, ... }` and in the summary line;
+ * the other purges' work and answer are unchanged. Its early stop and its
+ * errors are reported like the others', marked with its table; an error
+ * answers 500.
+ *
+ * SECURITY ALERTS (part 5, stage 4): last, platform_security_alert_purge()
+ * (migration 0480), which deletes alerts claimed more than 400 days ago (the
+ * change rows are kept), at most 5,000 a call, and answers {"deleted": n}, by
+ * the same rule as the event samples, with SECURITY_ALERTS_BUDGET_MS of its
+ * own, whether or not an earlier loop failed, and with the same tolerance:
+ * the function missing (42883, PGRST202; this code ships after 0480 is live)
+ * ends this loop only, reported once per run as a warning marked with the
+ * table and the code, and said as `securityAlerts: { ok: false, missing:
+ * true, ... }`; its early stop and its errors are reported the same way; an
+ * error answers 500.
  *
  * The passkey upkeep (server/security/passkey-maintenance.ts: the purge of
  * old challenges and removed passkeys, the sweep, the counts, the Auth
@@ -181,13 +223,26 @@ export async function GET(req: Request) {
   if (signInAlerts !== null) {
     console.info(`[${TAG}]`, JSON.stringify({ table: 'sign_in_alerts', ...signInAlerts }));
   }
-  if (failed || signInAlerts === null) {
+  // Part 5, stage 3: the event samples, whether or not an earlier loop failed.
+  const eventSamples = await purgeEventSamples();
+  if (eventSamples !== null) {
+    console.info(`[${TAG}]`, JSON.stringify({ table: 'security_event_samples', ...eventSamples }));
+  }
+  // Part 5, stage 4: the security alerts, whether or not an earlier loop failed.
+  const securityAlerts = await purgeSecurityAlerts();
+  if (securityAlerts !== null) {
+    console.info(
+      `[${TAG}]`,
+      JSON.stringify({ table: 'platform_security_alerts', ...securityAlerts }),
+    );
+  }
+  if (failed || signInAlerts === null || eventSamples === null || securityAlerts === null) {
     await passkeyUpkeep;
     return NextResponse.json({ error: 'internal_error' }, { status: 500 });
   }
 
   await passkeyUpkeep;
-  return NextResponse.json({ ok: true, ...events, signInAlerts });
+  return NextResponse.json({ ok: true, ...events, signInAlerts, eventSamples, securityAlerts });
 }
 
 /** The sign-in alerts loop's answer, for the run's own answer. */
@@ -259,4 +314,207 @@ async function purgeSignInAlerts(): Promise<SignInAlertsPurge | null> {
     });
   }
   return { deleted, calls, stoppedEarly: stop !== null, stop };
+}
+
+/** The event samples loop's answer, for the run's own answer. */
+interface EventSamplesPurge {
+  /** False when the purge could not run at all (the function missing). */
+  ok: boolean;
+  deleted: number;
+  calls: number;
+  stoppedEarly: boolean;
+  stop: StopReason | null;
+  /** The purge function is not in the database (migration 0479 rolled back?): nothing was purged; reported. */
+  missing: boolean;
+}
+
+/**
+ * purge_security_event_samples() until a call removes fewer than PURGE_BATCH,
+ * by the first loop's rule (see GET), within EVENT_SAMPLES_BUDGET_MS. The
+ * function missing ends the loop with `ok: false, missing: true`, reported
+ * once as a warning. Null when it failed (reported, counts only). Never
+ * throws.
+ */
+async function purgeEventSamples(): Promise<EventSamplesPurge | null> {
+  const started = Date.now();
+  let deleted = 0;
+  let calls = 0;
+  let busyInARow = 0;
+  let stop: StopReason | null = null;
+  let missing: string | null = null;
+  try {
+    const admin = createAdminClient();
+    for (;;) {
+      if (calls >= MAX_CALLS) {
+        stop = 'call_limit';
+        break;
+      }
+      if (Date.now() - started >= EVENT_SAMPLES_BUDGET_MS) {
+        stop = 'time_limit';
+        break;
+      }
+      calls += 1;
+      const { data, error } = await admin.rpc('purge_security_event_samples');
+      if (error) {
+        const code = String((error as { code?: unknown }).code ?? 'no code');
+        if (MISSING_FUNCTION_CODES.has(code)) {
+          missing = code;
+          break;
+        }
+        if (code === '55P03') {
+          busyInARow += 1;
+          if (busyInARow >= BUSY_STOP_AFTER) {
+            stop = 'busy';
+            break;
+          }
+          await pause(BUSY_RETRY_MS);
+          continue;
+        }
+        throw new Error(`purge_security_event_samples failed (${code})`);
+      }
+      busyInARow = 0;
+      const removed = countOf((data as { deleted?: unknown } | null)?.deleted);
+      if (removed === null)
+        throw new Error('purge_security_event_samples answered without its count');
+      deleted += removed;
+      if (removed < PURGE_BATCH) break;
+    }
+  } catch (err) {
+    await reportError(err, {
+      tag: TAG,
+      extra: { table: 'security_event_samples', calls, deleted },
+    });
+    return null;
+  }
+  if (stop !== null) {
+    const why =
+      stop === 'busy'
+        ? 'the table stayed busy'
+        : stop === 'call_limit'
+          ? 'more was left than one run takes'
+          : 'the run reached its time limit';
+    await reportError(new Error(`Security event samples retention stopped: ${why}`), {
+      tag: TAG,
+      level: 'warning',
+      extra: { table: 'security_event_samples', calls, deleted, stop },
+    });
+  }
+  if (missing !== null) {
+    await reportError(
+      new Error('Security event samples retention: the purge function is missing'),
+      {
+        tag: TAG,
+        level: 'warning',
+        extra: { table: 'security_event_samples', code: missing },
+      },
+    );
+  }
+  return {
+    ok: missing === null,
+    deleted,
+    calls,
+    stoppedEarly: stop !== null,
+    stop,
+    missing: missing !== null,
+  };
+}
+
+/** The security alerts loop's answer, for the run's own answer. */
+interface SecurityAlertsPurge {
+  /** False when the purge could not run at all (the function missing). */
+  ok: boolean;
+  deleted: number;
+  calls: number;
+  stoppedEarly: boolean;
+  stop: StopReason | null;
+  /** The purge function is not in the database (migration 0480 rolled back?): nothing was purged; reported. */
+  missing: boolean;
+}
+
+/**
+ * platform_security_alert_purge() until a call removes fewer than PURGE_BATCH,
+ * by the first loop's rule (see GET), within SECURITY_ALERTS_BUDGET_MS. The
+ * function missing ends the loop with `ok: false, missing: true`, reported
+ * once as a warning. Null when it failed (reported, counts only). Never
+ * throws.
+ */
+async function purgeSecurityAlerts(): Promise<SecurityAlertsPurge | null> {
+  const started = Date.now();
+  let deleted = 0;
+  let calls = 0;
+  let busyInARow = 0;
+  let stop: StopReason | null = null;
+  let missing: string | null = null;
+  try {
+    const admin = createAdminClient();
+    for (;;) {
+      if (calls >= MAX_CALLS) {
+        stop = 'call_limit';
+        break;
+      }
+      if (Date.now() - started >= SECURITY_ALERTS_BUDGET_MS) {
+        stop = 'time_limit';
+        break;
+      }
+      calls += 1;
+      const { data, error } = await admin.rpc('platform_security_alert_purge');
+      if (error) {
+        const code = String((error as { code?: unknown }).code ?? 'no code');
+        if (MISSING_FUNCTION_CODES.has(code)) {
+          missing = code;
+          break;
+        }
+        if (code === '55P03') {
+          busyInARow += 1;
+          if (busyInARow >= BUSY_STOP_AFTER) {
+            stop = 'busy';
+            break;
+          }
+          await pause(BUSY_RETRY_MS);
+          continue;
+        }
+        throw new Error(`platform_security_alert_purge failed (${code})`);
+      }
+      busyInARow = 0;
+      const removed = countOf((data as { deleted?: unknown } | null)?.deleted);
+      if (removed === null)
+        throw new Error('platform_security_alert_purge answered without its count');
+      deleted += removed;
+      if (removed < PURGE_BATCH) break;
+    }
+  } catch (err) {
+    await reportError(err, {
+      tag: TAG,
+      extra: { table: 'platform_security_alerts', calls, deleted },
+    });
+    return null;
+  }
+  if (stop !== null) {
+    const why =
+      stop === 'busy'
+        ? 'the table stayed busy'
+        : stop === 'call_limit'
+          ? 'more was left than one run takes'
+          : 'the run reached its time limit';
+    await reportError(new Error(`Security alerts retention stopped: ${why}`), {
+      tag: TAG,
+      level: 'warning',
+      extra: { table: 'platform_security_alerts', calls, deleted, stop },
+    });
+  }
+  if (missing !== null) {
+    await reportError(new Error('Security alerts retention: the purge function is missing'), {
+      tag: TAG,
+      level: 'warning',
+      extra: { table: 'platform_security_alerts', code: missing },
+    });
+  }
+  return {
+    ok: missing === null,
+    deleted,
+    calls,
+    stoppedEarly: stop !== null,
+    stop,
+    missing: missing !== null,
+  };
 }

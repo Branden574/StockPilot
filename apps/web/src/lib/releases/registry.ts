@@ -163,7 +163,9 @@ export const RELEASES: Release[] = [
     // large text release below is dated 2026-11-23T06:00:00Z, so the placeholder is that same minute.
     // Moved again by docs/whats-new-recovery-code (2026-11-23; was: '2026-11-23T06:00:00Z'): the recovery
     // code release below is dated 2026-11-23T06:30:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-23T06:30:00Z',
+    // Moved again by docs/whats-new-upload-checks (2026-11-28; was: '2026-11-23T06:30:00Z'): the upload
+    // checks release below is dated 2026-11-28T06:57:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-28T06:57:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -248,6 +250,56 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'upload-checks-2026-11',
+    revision: 1,
+    // Upload checks (part 6 of the security tools; PR #655, live 2026-11-28T06:57:01Z, so
+    // publishedAt is the whole minute 06:57). No phone app update: the phone uses the same
+    // server paths.
+    // Left out on purpose: what a check looks for, the kinds of file and the limits, and
+    // anything the checks do not catch.
+    // Who is told: entry 1 every member (no link, no audience), because members on the
+    // website and on the phone upload files through the same server paths; entry 2
+    // owners and admins, the page's own rule. The phone has no Blocked activity page of
+    // its own (Settings, Security opens the website's page).
+    status: 'published',
+    title: 'Uploaded files are checked in more places, and Blocked activity lists a refused file',
+    summary:
+      'StockPilot now checks files in more places before it stores them: item photos, profile pictures and logos, attachments, support screenshots, maintenance and evidence photos, procedure videos, purchase order imports and scans, and the order signature. A file that fails is refused with a plain sentence and is not stored. Owners and admins can see each refused file in Settings, Security, Blocked activity. These are our own checks, not an antivirus, and no file is sent to an outside service.',
+    publishedAt: '2026-11-28T06:57:00Z',
+    entries: [
+      {
+        id: 'upload-checks-more-places',
+        category: 'improved',
+        area: 'Uploads',
+        title: 'Uploaded files are checked in more places',
+        whatChanged:
+          'StockPilot now checks files in more places before it stores them: item photos, profile pictures and logos, attachments, support screenshots, maintenance and evidence photos, procedure videos, purchase order imports and scans, and the order signature. A file that fails the check is refused with a plain sentence and is not stored.',
+        whyItMatters:
+          'A file is checked as it arrives, so a file that fails the check is never stored for someone to open later.',
+        howItAffectsYou:
+          "A file that passes is stored as before. These are StockPilot's own structure checks, not an antivirus. No file is sent to an outside service. This applies to uploads from the website and from the mobile app.",
+        whatToDo:
+          'No action needed. If a file you trust is refused, save a fresh copy of it and upload that.',
+      },
+      {
+        id: 'blocked-activity-refused-file',
+        category: 'new',
+        area: 'Security',
+        title: 'Blocked activity lists a refused file',
+        whatChanged:
+          'When StockPilot refuses a file uploaded in your organization, Settings, Security, Blocked activity now shows a new kind of row, Refused file, with a plain reason.',
+        whyItMatters:
+          'One refused file is often an honest mistake. Several in a short time can mean someone is sending files on purpose.',
+        howItAffectsYou:
+          'The row shows when it happened, where it came from and how many times. It never shows a file name.',
+        whatToDo:
+          'No action needed. If you see several in a short time, ask your team whether they know where the files came from.',
+        link: { href: '/dashboard/settings/security/activity', label: 'Open Blocked activity' },
+        audience: { roles: ['owner', 'admin'] },
       },
     ],
   },

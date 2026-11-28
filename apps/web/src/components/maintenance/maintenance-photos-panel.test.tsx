@@ -210,4 +210,45 @@ describe('MaintenancePhotosPanel (component test 5)', () => {
     await userEvent.click(retryButton);
     expect(fetchSpy).toHaveBeenCalled();
   });
+
+  it('a refused photo is told in a plain sentence, never the code word the route answers (lab walk 5, F5)', async () => {
+    const onChange = vi.fn();
+    const answers = stubMintAndFinalize();
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes('/attachments/finalize')) {
+        return {
+          ok: false,
+          status: 400,
+          json: async () => ({ error: 'validation_error', message: 'invalid_image' }),
+        } as Response;
+      }
+      return answers(url, init);
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    render(<MaintenancePhotosPanel requestId="r1" photos={[]} onChange={onChange} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, makeFile('new.jpg'));
+    expect(
+      await screen.findByText('This photo could not be added. Use a JPEG, PNG or WEBP photo up to 10 MB, or take it again.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/invalid_image/)).toBeNull();
+    expect(toastErrorMock.mock.calls.flat().join(' ')).not.toMatch(/invalid_image/);
+  });
+
+  it('any other code word is not shown either: the plain fallback is (lab walk 5, F5)', async () => {
+    const answers = stubMintAndFinalize();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) =>
+        url.includes('/attachments/finalize')
+          ? ({ ok: false, status: 400, json: async () => ({ error: 'validation_error', message: 'some_code' }) } as Response)
+          : answers(url, init),
+      ),
+    );
+    render(<MaintenancePhotosPanel requestId="r1" photos={[]} onChange={vi.fn()} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, makeFile('new.jpg'));
+    expect(await screen.findByText('That file is not a supported photo.')).toBeInTheDocument();
+    expect(screen.queryByText(/some_code/)).toBeNull();
+  });
 });

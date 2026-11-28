@@ -29,6 +29,31 @@ vi.mock('next/link', async () => {
   };
 });
 
+const samples = vi.hoisted(() =>
+  vi.fn(async (..._a: unknown[]) => ({
+    ok: true,
+    view: {
+      country: null,
+      windowFrom: null,
+      targets: [
+        {
+          reason: 'env_file',
+          target: '/backup/.env',
+          events: 2,
+          pairs: [{ method: 'GET', sample: null, events: 2 }],
+          pairsTruncated: false,
+        },
+      ],
+      targetsTruncated: false,
+      listedTargets: 1,
+      moreThanListed: [],
+    },
+  })),
+);
+vi.mock('@/server/actions/platform/security-event-samples', () => ({
+  readSecurityEventSamplesAction: (...a: unknown[]) => samples(...a),
+}));
+
 import { SecurityResponseButton } from './security-response-button';
 import { SecurityResponseHost, type SecurityResponseRequest } from './security-response-host';
 import { SecurityResponsePanel, filledRoute } from './security-response-panel';
@@ -296,6 +321,44 @@ describe('the card in the panel', () => {
     ).toBeNull();
   });
 
+  it('"What was asked for": only for an entry that hands one, at the top of the body, read once; kept while another card is shown', async () => {
+    samples.mockClear();
+    const { unmount } = render(<Panel />);
+    expect(within(dialog()).queryByRole('region', { name: 'What was asked for' })).toBeNull();
+    unmount();
+    expect(samples).not.toHaveBeenCalled();
+
+    render(
+      <Panel
+        req={request({
+          cardId: 'wrong-password',
+          asked: { reason: 'env_file', at: Date.now(), country: null, timeZone: 'UTC' },
+        })}
+      />,
+    );
+    const region = within(dialog()).getByRole('region', { name: 'What was asked for' });
+    const body = within(dialog()).getByTestId('security-response-body');
+    expect(body.firstElementChild?.contains(region)).toBe(true);
+    // Not one of the card's five parts.
+    expect(region).not.toHaveAttribute('data-part');
+    await waitFor(() => expect(region.textContent).toContain('/backup/.env'));
+    // The entry's context above says nothing of what was asked for.
+    expect(within(dialog()).getByTestId('security-response-context').textContent).not.toContain(
+      '/backup/.env',
+    );
+    fireEvent.click(
+      within(dialog()).getByRole('button', {
+        name: `${SECURITY_RESPONSE_WORDS.seeCard}: ${securityResponseCard('sign-in-not-me').title}`,
+      }),
+    );
+    expect(within(dialog()).queryByRole('region', { name: 'What was asked for' })).toBeNull();
+    fireEvent.click(within(dialog()).getByRole('button', { name: SECURITY_RESPONSE_WORDS.back }));
+    expect(
+      within(dialog()).getByRole('region', { name: 'What was asked for' }).textContent,
+    ).toContain('/backup/.env');
+    expect(samples).toHaveBeenCalledTimes(1);
+  });
+
   it("every card renders with no number and no hidden kind's name in its words", () => {
     for (const card of SECURITY_RESPONSE_CARDS) {
       const { unmount } = render(
@@ -308,7 +371,9 @@ describe('the card in the panel', () => {
       );
       const words = dialog().textContent ?? '';
       expect(words.replace(/\/[a-z/<>?=.-]+/gi, ''), card.id).not.toMatch(/\d/);
-      expect(words, card.id).not.toMatch(/phishing|malware/i);
+      expect(words, card.id).not.toMatch(/phishing/i);
+      // Part 6: only the malware kind's own card says the word, to say what it means here.
+      if (card.id !== 'upload-checks') expect(words, card.id).not.toMatch(/malware/i);
       unmount();
     }
   });

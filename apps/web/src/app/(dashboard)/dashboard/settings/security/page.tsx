@@ -233,7 +233,7 @@ export default async function SecuritySettingsPage({
       {isAdmin && (
         <SettingsPanel
           title="Blocked activity"
-          description="Wrong passwords and codes the app refused for the accounts in your organization."
+          description="Wrong passwords and codes the app refused for the accounts in your organization, and files it refused at upload."
         >
           <Button asChild size="sm" variant="outline">
             <Link href="/dashboard/settings/security/activity">View blocked activity</Link>

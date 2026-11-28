@@ -332,15 +332,24 @@ select is(
   -- passkey_bridges.user_id>user_profiles:c:NN and
   -- passkey_challenges.user_id>user_profiles:c:NN (the local census through
   -- 0474 gave 1f02404a...|138; with 0475 applied it gave 76aff65d...|141).
+  -- 0481 (vendor risk reviews) adds five that SET NULL, so a review, an
+  -- item and a row of its history keep the names written beside them when
+  -- the account is deleted:
+  -- supplier_risk_reviews.reviewer_id>user_profiles:n,
+  -- supplier_risk_items.owner_user_id>user_profiles:n,
+  -- supplier_risk_items.changed_by>user_profiles:n,
+  -- supplier_risk_items.accepted_by>user_profiles:n and
+  -- supplier_risk_events.actor_user_id>user_profiles:n (the local census
+  -- through 0480 gave 76aff65d...|141; with 0481 applied it gives this).
   -- 0482 (policy sign-off) adds three: the publisher of a policy version and
   -- the person of an acknowledgement, both SET NULL (the record stays, with
   -- the name it kept), and a person's policy reminders,
   -- org_policy_versions.published_by>user_profiles:n,
   -- org_policy_acknowledgements.user_id>user_profiles:n and
   -- org_policy_reminders.user_id>user_profiles:c:NN (the local census through
-  -- 0480 gave 76aff65d...|141; with 0482 applied it gives this).
-  'd2c4fcaf2284b7397ac4e1ad141bb59a|144|0/0',
-  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log, 0418''s appearance, 0474''s sign-in alerts and countries, 0475''s passkeys, bridge and challenges and 0482''s policy publisher, acknowledgement person and reminders (144 keys), and no key to a person is composite or names SET NULL columns');
+  -- 0481 gave 3fbbfbad...|146; with 0482 applied it gives this).
+  '2de375f5f11c5cfeb7159c7ef28ede9b|149|0/0',
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log, 0418''s appearance, 0474''s sign-in alerts and countries, 0475''s passkeys, bridge and challenges, 0481''s reviewer, item owner, item changer, item acceptor and history actor and 0482''s policy publisher, acknowledgement person and reminders (149 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c

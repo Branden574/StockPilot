@@ -14,15 +14,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * Part 3 (sign-in alerts): the same run then calls purge_sign_in_alerts() by
  * the same rule (5,000 a call, 40 calls, a busy call tried again 500 ms
  * later, three in a row end it), within 30 s of its own, and whether or not
- * the first loop failed. Its counts are answered under signInAlerts. The
- * harness answers each function by its name: h.rpc is purge_security_events,
- * h.alerts is purge_sign_in_alerts (nothing to purge unless a test says).
+ * the first loop failed. Its counts are answered under signInAlerts.
+ *
+ * Part 5, stage 3 (what scanners asked for): then
+ * purge_security_event_samples() by the same rule, within 15 s of its own,
+ * whether or not an earlier loop failed; its counts are answered under
+ * eventSamples. The function missing (42883, PGRST202) is no silent
+ * success: the code ships after migration 0479 is live, so it is reported
+ * once per run as a warning (the table and the code only) and answered as
+ * `eventSamples: { ok: false, missing: true }`, while the other purges'
+ * work and answer stand.
+ *
+ * Part 5, stage 4 (the platform console's security alerts): last,
+ * platform_security_alert_purge() by the same rule, within 5 s of its own,
+ * whether or not an earlier loop failed, with the samples' tolerance for a
+ * missing function; its counts are answered under securityAlerts.
+ *
+ * The harness answers each function by its name: h.rpc is
+ * purge_security_events, h.alerts is purge_sign_in_alerts, h.samples is
+ * purge_security_event_samples, h.secAlerts is platform_security_alert_purge
+ * (nothing to purge unless a test says).
  */
 
 const h = vi.hoisted(() => ({
   env: { CRON_SECRET: 'cron-secret-for-tests' as string | undefined },
   rpc: vi.fn(),
   alerts: vi.fn(),
+  samples: vi.fn(),
+  secAlerts: vi.fn(),
   report: vi.fn(async () => undefined),
 }));
 
@@ -31,7 +50,13 @@ vi.mock('@/lib/error-reporter', () => ({ reportError: h.report }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
     rpc: (fn: string, ...rest: unknown[]) =>
-      fn === 'purge_sign_in_alerts' ? h.alerts(fn, ...rest) : h.rpc(fn, ...rest),
+      fn === 'purge_sign_in_alerts'
+        ? h.alerts(fn, ...rest)
+        : fn === 'purge_security_event_samples'
+          ? h.samples(fn, ...rest)
+          : fn === 'platform_security_alert_purge'
+            ? h.secAlerts(fn, ...rest)
+            : h.rpc(fn, ...rest),
   }),
 }));
 
@@ -45,13 +70,20 @@ const counts = (deleted: number, hashes_cleared: number) => ({
   data: { deleted, hashes_cleared },
   error: null,
 });
-const busy = { data: null, error: { code: '55P03', message: 'canceling statement due to lock timeout' } };
+const busy = {
+  data: null,
+  error: { code: '55P03', message: 'canceling statement due to lock timeout' },
+};
 
 beforeEach(() => {
   h.env.CRON_SECRET = 'cron-secret-for-tests';
   h.rpc.mockReset();
   h.alerts.mockReset();
   h.alerts.mockResolvedValue({ data: 0, error: null });
+  h.samples.mockReset();
+  h.samples.mockResolvedValue({ data: { deleted: 0 }, error: null });
+  h.secAlerts.mockReset();
+  h.secAlerts.mockResolvedValue({ data: { deleted: 0 }, error: null });
   h.report.mockClear();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
   vi.useFakeTimers();
@@ -80,6 +112,9 @@ describe('the secret', () => {
     expect((await run(req({ authorization: 'Bearer not-the-secret' }))).status).toBe(401);
     expect((await run(req({ authorization: 'cron-secret-for-tests' }))).status).toBe(401);
     expect(h.rpc).not.toHaveBeenCalled();
+    expect(h.alerts).not.toHaveBeenCalled();
+    expect(h.samples).not.toHaveBeenCalled();
+    expect(h.secAlerts).not.toHaveBeenCalled();
   });
 
   it('exports GET only (a Vercel Cron job), with a 120 s limit', () => {
@@ -102,6 +137,22 @@ describe('the loop', () => {
         stoppedEarly: false,
         stop: null,
         signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+        eventSamples: {
+          ok: true,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: false,
+        },
+        securityAlerts: {
+          ok: true,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: false,
+        },
       },
     });
     expect(h.rpc).toHaveBeenCalledWith('purge_security_events');
@@ -121,6 +172,22 @@ describe('the loop', () => {
       stoppedEarly: false,
       stop: null,
       signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+      eventSamples: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
+      securityAlerts: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
     });
   });
 
@@ -134,6 +201,22 @@ describe('the loop', () => {
       stoppedEarly: true,
       stop: 'call_limit',
       signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+      eventSamples: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
+      securityAlerts: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
     });
     expect(h.rpc).toHaveBeenCalledTimes(40);
     // The purge was outrun: more is left than one run takes. Once, as a warning, counts only.
@@ -153,7 +236,12 @@ describe('the loop', () => {
       await new Promise((resolve) => setTimeout(resolve, 10_000));
       return counts(5000, 0);
     });
-    expect((await run()).body).toMatchObject({ calls: 5, deleted: 25000, stoppedEarly: true, stop: 'time_limit' });
+    expect((await run()).body).toMatchObject({
+      calls: 5,
+      deleted: 25000,
+      stoppedEarly: true,
+      stop: 'time_limit',
+    });
     expect(h.report).toHaveBeenCalledTimes(1);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
       tag: 'cron.security-events-retention',
@@ -190,6 +278,22 @@ describe('the loop', () => {
       stoppedEarly: false,
       stop: null,
       signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+      eventSamples: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
+      securityAlerts: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
     });
     expect(h.report).not.toHaveBeenCalled();
   });
@@ -210,6 +314,22 @@ describe('the loop', () => {
         stoppedEarly: true,
         stop: 'busy',
         signInAlerts: { deleted: 0, calls: 1, stoppedEarly: false, stop: null },
+        eventSamples: {
+          ok: true,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: false,
+        },
+        securityAlerts: {
+          ok: true,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: false,
+        },
       },
     });
     expect(h.rpc).toHaveBeenCalledTimes(4);
@@ -222,7 +342,13 @@ describe('the loop', () => {
   });
 
   it.each([
-    ['another error', { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }],
+    [
+      'another error',
+      {
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      },
+    ],
     ['an answer without its counts', { data: { deleted: 'many' }, error: null }],
     ['no answer', { data: null, error: null }],
   ])('%s is reported and answered 500', async (_what, answer) => {
@@ -294,9 +420,7 @@ describe('sign-in alerts (part 3): the same run, the same rule', () => {
 
   it('a busy call is tried again 500 ms later; three in a row end its part', async () => {
     h.rpc.mockResolvedValueOnce(counts(0, 0));
-    h.alerts
-      .mockResolvedValueOnce(busy)
-      .mockResolvedValueOnce(alertsCount(3));
+    h.alerts.mockResolvedValueOnce(busy).mockResolvedValueOnce(alertsCount(3));
     expect((await run()).body).toMatchObject({
       signInAlerts: { deleted: 3, calls: 2, stoppedEarly: false, stop: null },
     });
@@ -309,7 +433,13 @@ describe('sign-in alerts (part 3): the same run, the same rule', () => {
   });
 
   it.each([
-    ['another error', { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }],
+    [
+      'another error',
+      {
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      },
+    ],
     ['an answer that is not a count', { data: 'many', error: null }],
   ])('%s is reported and answered 500', async (_what, answer) => {
     h.rpc.mockResolvedValueOnce(counts(1, 1));
@@ -324,7 +454,10 @@ describe('sign-in alerts (part 3): the same run, the same rule', () => {
 
   it('a security events purge that stops on its call limit is still reported when the sign-in alerts purge fails; both reports, and 500', async () => {
     h.rpc.mockResolvedValue(counts(5000, 5000));
-    h.alerts.mockResolvedValueOnce({ data: null, error: { code: '57014', message: 'canceling statement' } });
+    h.alerts.mockResolvedValueOnce({
+      data: null,
+      error: { code: '57014', message: 'canceling statement' },
+    });
     expect(await run()).toEqual({ status: 500, body: { error: 'internal_error' } });
     expect(h.report).toHaveBeenCalledTimes(2);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
@@ -346,6 +479,410 @@ describe('sign-in alerts (part 3): the same run, the same rule', () => {
     h.alerts.mockResolvedValueOnce(alertsCount(4));
     expect((await run()).status).toBe(500);
     expect(h.alerts).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('event samples (part 5, stage 3): the same run, the same rule', () => {
+  const removed = (n: number) => ({ data: { deleted: n }, error: null });
+  const TABLE = 'security_event_samples';
+
+  it('after the sign-in alerts, purge_security_event_samples() is called, with no arguments', async () => {
+    h.rpc.mockResolvedValueOnce(counts(1, 1));
+    h.samples.mockResolvedValueOnce(removed(9));
+    expect((await run()).body).toMatchObject({
+      ok: true,
+      eventSamples: {
+        ok: true,
+        deleted: 9,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
+      securityAlerts: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
+    });
+    expect(h.samples).toHaveBeenCalledWith('purge_security_event_samples');
+    expect(h.alerts.mock.invocationCallOrder[0]!).toBeLessThan(
+      h.samples.mock.invocationCallOrder[0]!,
+    );
+    expect(console.info).toHaveBeenCalledWith(
+      '[cron.security-events-retention]',
+      JSON.stringify({
+        table: TABLE,
+        ok: true,
+        deleted: 9,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      }),
+    );
+  });
+
+  it('calls again while a call removes 5,000, and sums', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.samples
+      .mockResolvedValueOnce(removed(5000))
+      .mockResolvedValueOnce(removed(5000))
+      .mockResolvedValueOnce(removed(1));
+    expect((await run()).body).toMatchObject({
+      eventSamples: { deleted: 10001, calls: 3, stoppedEarly: false, stop: null, missing: false },
+    });
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it('stops after 40 calls and reports it once, as a warning with counts only', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.samples.mockResolvedValue(removed(5000));
+    expect((await run()).body).toMatchObject({
+      ok: true,
+      eventSamples: {
+        deleted: 200000,
+        calls: 40,
+        stoppedEarly: true,
+        stop: 'call_limit',
+        missing: false,
+      },
+      securityAlerts: {
+        ok: true,
+        deleted: 0,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
+    });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { table: TABLE, calls: 40, deleted: 200000, stop: 'call_limit' },
+    });
+  });
+
+  it('starts no call 15 s into its own part of the run', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.samples.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      return removed(5000);
+    });
+    expect((await run()).body).toMatchObject({
+      eventSamples: { calls: 2, deleted: 10000, stoppedEarly: true, stop: 'time_limit' },
+    });
+  });
+
+  it('a busy call is tried again 500 ms later; three in a row end its part', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.samples.mockResolvedValueOnce(busy).mockResolvedValueOnce(removed(3));
+    expect((await run()).body).toMatchObject({
+      eventSamples: { deleted: 3, calls: 2, stoppedEarly: false, stop: null },
+    });
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.samples.mockReset();
+    h.samples.mockResolvedValue(busy);
+    h.report.mockClear();
+    expect((await run()).body).toMatchObject({
+      eventSamples: { deleted: 0, calls: 3, stoppedEarly: true, stop: 'busy' },
+    });
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { table: TABLE, calls: 3, deleted: 0, stop: 'busy' },
+    });
+  });
+
+  it.each(['42883', 'PGRST202'])(
+    'the function missing (%s): the other purges stand, the samples half is not ok, reported once as a warning',
+    async (code) => {
+      h.rpc.mockResolvedValueOnce(counts(2, 3));
+      h.alerts.mockResolvedValueOnce({ data: 4, error: null });
+      h.samples.mockResolvedValue({ data: null, error: { code, message: 'function not found' } });
+      expect(await run()).toEqual({
+        status: 200,
+        body: {
+          ok: true,
+          deleted: 2,
+          hashesCleared: 3,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          signInAlerts: { deleted: 4, calls: 1, stoppedEarly: false, stop: null },
+          eventSamples: {
+            ok: false,
+            deleted: 0,
+            calls: 1,
+            stoppedEarly: false,
+            stop: null,
+            missing: true,
+          },
+          securityAlerts: {
+            ok: true,
+            deleted: 0,
+            calls: 1,
+            stoppedEarly: false,
+            stop: null,
+            missing: false,
+          },
+        },
+      });
+      // One call: a missing function is not tried again in the same run.
+      expect(h.samples).toHaveBeenCalledTimes(1);
+      expect(h.report).toHaveBeenCalledTimes(1);
+      expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'cron.security-events-retention',
+        level: 'warning',
+        extra: { table: TABLE, code },
+      });
+      expect(console.info).toHaveBeenCalledWith(
+        '[cron.security-events-retention]',
+        JSON.stringify({
+          table: TABLE,
+          ok: false,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: true,
+        }),
+      );
+    },
+  );
+
+  it('the function missing is reported once per run: each run reports it again', async () => {
+    h.samples.mockResolvedValue({
+      data: null,
+      error: { code: '42883', message: 'function not found' },
+    });
+    h.rpc.mockResolvedValue(counts(0, 0));
+    await run();
+    await run();
+    expect(h.report).toHaveBeenCalledTimes(2);
+  });
+
+  it('the function missing with the security events purge failing: both reported, and 500', async () => {
+    h.rpc.mockRejectedValueOnce(new Error('fetch failed'));
+    h.samples.mockResolvedValue({
+      data: null,
+      error: { code: 'PGRST202', message: 'function not found' },
+    });
+    expect((await run()).status).toBe(500);
+    expect(h.report).toHaveBeenCalledTimes(2);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { table: TABLE, code: 'PGRST202' },
+    });
+  });
+
+  it.each([
+    [
+      'another error',
+      {
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      },
+    ],
+    ['an answer without its count', { data: { deleted: 'many' }, error: null }],
+    ['a bare count', { data: 5, error: null }],
+    ['no answer', { data: null, error: null }],
+  ])('%s is reported and answered 500', async (_what, answer) => {
+    h.rpc.mockResolvedValueOnce(counts(1, 1));
+    h.samples.mockResolvedValueOnce(answer);
+    expect(await run()).toEqual({ status: 500, body: { error: 'internal_error' } });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      extra: { table: TABLE, calls: 1, deleted: 0 },
+    });
+  });
+
+  it('runs whether or not an earlier loop failed, and the run still answers 500', async () => {
+    h.rpc.mockRejectedValueOnce(new Error('fetch failed'));
+    h.alerts.mockResolvedValueOnce({
+      data: null,
+      error: { code: '57014', message: 'canceling statement' },
+    });
+    h.samples.mockResolvedValueOnce(removed(4));
+    expect((await run()).status).toBe(500);
+    expect(h.samples).toHaveBeenCalledTimes(1);
+    expect(console.info).toHaveBeenCalledWith(
+      '[cron.security-events-retention]',
+      JSON.stringify({
+        table: TABLE,
+        ok: true,
+        deleted: 4,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      }),
+    );
+  });
+
+  it("a failure here leaves the earlier loops' summary lines written first", async () => {
+    h.rpc.mockResolvedValueOnce(counts(1, 1));
+    h.samples.mockRejectedValueOnce(new Error('fetch failed'));
+    expect((await run()).status).toBe(500);
+    const lines = vi.mocked(console.info).mock.calls.map((c) => String(c[1]));
+    // The events, the sign-in alerts, then (part 5, stage 4) the security alerts after it.
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toContain('"table":"sign_in_alerts"');
+    expect(lines[2]).toContain('"table":"platform_security_alerts"');
+  });
+
+  it('the four budgets and a call in flight for each stay inside maxDuration', () => {
+    const src = readFileSync(path.join(__dirname, 'route.ts'), 'utf8');
+    const budget = (name: string) => {
+      const m = new RegExp(`const ${name} = ([0-9_]+);`).exec(src);
+      expect(m, name).not.toBeNull();
+      return Number(m![1]!.replace(/_/g, ''));
+    };
+    const budgets = [
+      'RUN_BUDGET_MS',
+      'SIGN_IN_ALERTS_BUDGET_MS',
+      'EVENT_SAMPLES_BUDGET_MS',
+      'SECURITY_ALERTS_BUDGET_MS',
+    ].map(budget);
+    expect(budgets).toEqual([45_000, 30_000, 15_000, 5_000]);
+    // Each loop's last call may wait 2 s for its lock and then delete 5,000 rows
+    // (about 0.1 s measured for this table, CONTRACT.md); 5 s each is far more.
+    expect(budgets.reduce((a, b) => a + b, 0) + 4 * 5_000).toBeLessThan(route.maxDuration * 1000);
+  });
+});
+
+describe('security alerts (part 5, stage 4): the same run, the same rule', () => {
+  const removed = (n: number) => ({ data: { deleted: n }, error: null });
+  const TABLE = 'platform_security_alerts';
+
+  it('after the event samples, platform_security_alert_purge() is called, with no arguments', async () => {
+    h.rpc.mockResolvedValueOnce(counts(1, 1));
+    h.secAlerts.mockResolvedValueOnce(removed(6));
+    expect((await run()).body).toMatchObject({
+      ok: true,
+      securityAlerts: {
+        ok: true,
+        deleted: 6,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      },
+    });
+    expect(h.secAlerts).toHaveBeenCalledWith('platform_security_alert_purge');
+    expect(h.samples.mock.invocationCallOrder[0]!).toBeLessThan(
+      h.secAlerts.mock.invocationCallOrder[0]!,
+    );
+    expect(console.info).toHaveBeenCalledWith(
+      '[cron.security-events-retention]',
+      JSON.stringify({
+        table: TABLE,
+        ok: true,
+        deleted: 6,
+        calls: 1,
+        stoppedEarly: false,
+        stop: null,
+        missing: false,
+      }),
+    );
+  });
+
+  it('calls again while a call removes 5,000, and sums; a busy call is tried again, three end it', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.secAlerts
+      .mockResolvedValueOnce(removed(5000))
+      .mockResolvedValueOnce(busy)
+      .mockResolvedValueOnce(removed(2));
+    expect((await run()).body).toMatchObject({
+      securityAlerts: { deleted: 5002, calls: 3, stoppedEarly: false, stop: null },
+    });
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.secAlerts.mockReset();
+    h.secAlerts.mockResolvedValue(busy);
+    h.report.mockClear();
+    expect((await run()).body).toMatchObject({
+      securityAlerts: { deleted: 0, calls: 3, stoppedEarly: true, stop: 'busy' },
+    });
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      level: 'warning',
+      extra: { table: TABLE, calls: 3, deleted: 0, stop: 'busy' },
+    });
+  });
+
+  it('starts no call 5 s into its own part of the run', async () => {
+    h.rpc.mockResolvedValueOnce(counts(0, 0));
+    h.secAlerts.mockImplementation(async () => {
+      vi.advanceTimersByTime(2_600);
+      return removed(5000);
+    });
+    expect((await run()).body).toMatchObject({
+      securityAlerts: { calls: 2, deleted: 10000, stoppedEarly: true, stop: 'time_limit' },
+    });
+  });
+
+  it.each(['42883', 'PGRST202'])(
+    'the function missing (%s): the other purges stand, the alerts half is not ok, reported once as a warning',
+    async (code) => {
+      h.rpc.mockResolvedValueOnce(counts(2, 3));
+      h.secAlerts.mockResolvedValue({ data: null, error: { code, message: 'function not found' } });
+      const { status, body } = await run();
+      expect(status).toBe(200);
+      expect(body).toMatchObject({
+        ok: true,
+        deleted: 2,
+        eventSamples: { ok: true, missing: false },
+        securityAlerts: {
+          ok: false,
+          deleted: 0,
+          calls: 1,
+          stoppedEarly: false,
+          stop: null,
+          missing: true,
+        },
+      });
+      expect(h.secAlerts).toHaveBeenCalledTimes(1);
+      expect(h.report).toHaveBeenCalledTimes(1);
+      expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'cron.security-events-retention',
+        level: 'warning',
+        extra: { table: TABLE, code },
+      });
+    },
+  );
+
+  it.each([
+    [
+      'another error',
+      {
+        data: null,
+        error: { code: '57014', message: 'canceling statement due to statement timeout' },
+      },
+    ],
+    ['an answer without its count', { data: { deleted: 'many' }, error: null }],
+    ['a bare count', { data: 5, error: null }],
+  ])('%s is reported and answered 500', async (_what, answer) => {
+    h.rpc.mockResolvedValueOnce(counts(1, 1));
+    h.secAlerts.mockResolvedValueOnce(answer);
+    expect(await run()).toEqual({ status: 500, body: { error: 'internal_error' } });
+    expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
+      tag: 'cron.security-events-retention',
+      extra: { table: TABLE, calls: 1, deleted: 0 },
+    });
+  });
+
+  it('runs whether or not an earlier loop failed', async () => {
+    h.rpc.mockRejectedValueOnce(new Error('fetch failed'));
+    h.samples.mockRejectedValueOnce(new Error('fetch failed'));
+    h.secAlerts.mockResolvedValueOnce(removed(1));
+    expect((await run()).status).toBe(500);
+    expect(h.secAlerts).toHaveBeenCalledTimes(1);
   });
 });
 

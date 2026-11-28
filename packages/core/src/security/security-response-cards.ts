@@ -143,6 +143,19 @@ export const SECURITY_RESPONSE_STEPS: Readonly<
 
 const NOTHING_STOPPED = { text: 'Nothing: this was stopped.' } as const;
 
+/**
+ * Two "already did" lines both refused-file cards share (part 6), each true of
+ * every upload path that records one: a copy in storage is deleted unless
+ * another record uses the same file or that could not be confirmed (every
+ * path that removes one looks first), and a failed delete leaves it unused;
+ * the person is told. (A cover picture the server fetched itself records
+ * nothing: nobody sent it.)
+ */
+const UPLOAD_COPY_DELETED =
+  'A copy that had already reached storage was deleted, unless another record still uses the same file or that could not be confirmed. A delete that storage refuses leaves the copy where it was, unused.';
+const UPLOAD_TOLD_AND_RECORDED =
+  'The person who sent it was told in a plain sentence that it was refused. The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.';
+
 /** The cards, in the order the record lists its reasons. */
 export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
   {
@@ -653,8 +666,8 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
       'A program asked for a file or a page StockPilot does not have, such as a settings file, source control files, a WordPress page or a database admin tool. Programs ask every public site for these.',
     alreadyDid: [
       'Blocked: the answer was a plain Not found with nothing in it.',
-      'These paths are on a fixed list of well-known probes, and each is answered by a small page that records the kind and nothing more.',
-      'The exact path, the query and the body are not kept.',
+      'These paths are on a fixed list of well-known probes, and each is answered by a small page that records the kind.',
+      'The path and the query string are kept for a limited time, with anything that looked like an email address, an id, a long value or a secret removed. The body is never kept.',
     ],
     doNow: [
       {
@@ -665,7 +678,7 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
       { text: 'Nothing was served, so nothing got through from this kind of request.' },
     ],
     cannotTell:
-      'A kind is all that is kept: not the path, the network address or the program. Only the probes on the list are noticed here; a request to a page that exists is not.',
+      'Who sent it: the network address and the program are not kept. Only the probes on the list are noticed here; a request to a page that exists is not.',
   },
   {
     id: 'public-forms-paused',
@@ -775,6 +788,134 @@ export const SECURITY_RESPONSE_CARDS: readonly SecurityResponseCard[] = [
       },
     ],
     cannotTell: 'It does not show the alert or the account.',
+  },
+  {
+    // The general card of the kind (security-response.ts): it describes the
+    // kind and claims no outcome; each reason's own card says what was done.
+    id: 'upload-checks',
+    title: 'A file the upload checks refused or could not check',
+    reasons: [],
+    whatThisIs:
+      "Malware here means a file the upload checks refused or could not finish checking, not a confirmed virus. StockPilot reads most files sent to it with its own file checks before anything uses them.",
+    alreadyDid: [
+      'What was done with each file depends on the reason of its entry: open the entry in the events list to read the card of that reason.',
+      'The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.',
+    ],
+    doNow: [
+      {
+        text: 'On the Security page, open the entries of this kind in the events list and read the card of each reason.',
+        place: SECURITY_PAGE,
+      },
+      { text: 'A run of them from one organization in a short time is worth a look, whatever the reason.' },
+      {
+        step: 'tell-the-owner',
+        lead: 'If one organization has a run of them, ask whether they know where the files came from:',
+      },
+    ],
+    ifGotThrough: [
+      {
+        text: "The card of each reason says what to do if one of its files may have reached the organization another way, such as by email.",
+      },
+    ],
+    cannotTell:
+      'It does not say who sent a file, what it was called or what was in it. The checks read what kind of file it is and how it is built; they hold no list of known viruses, so a file they pass is not proven safe.',
+  },
+  {
+    id: 'upload-refused',
+    title: 'A file was refused at upload',
+    reasons: ['upload_wrong_type', 'upload_active_content', 'upload_hidden_file'],
+    whatThisIs:
+      "A file sent to StockPilot was refused by the app's own file checks: it was not a kind of file that part of the app takes, or it carried a script, a macro or another file inside it. An honest file can be refused too, such as a PDF sent where only pictures are taken.",
+    alreadyDid: [
+      'Blocked: the file was refused before anything used it. It was not attached or imported.',
+      UPLOAD_COPY_DELETED,
+      "The checks decide from the file's own bytes: no name, and no type a browser or the phone claims, can make a file pass. Where a name or a stated type picks the kind of file expected, it can only narrow what the bytes must be.",
+      UPLOAD_TOLD_AND_RECORDED,
+    ],
+    doNow: [
+      NOTHING_STOPPED,
+      {
+        step: 'tell-the-owner',
+        lead: 'If one organization has many of these in a short time, someone may be sending such files on purpose, or a supplier keeps sending documents that cannot be taken:',
+      },
+    ],
+    ifGotThrough: [
+      { text: 'The refused file was not used for anything in StockPilot.' },
+      {
+        step: 'tell-the-owner',
+        lead: 'If the same file may have reached the organization another way, such as by email, ask them not to open it:',
+      },
+      { step: 'ask-member-not-me' },
+    ],
+    cannotTell:
+      'It does not say who sent the file, what it was called or what was in it. The checks read what kind of file it is and how it is built; they hold no list of known viruses, so a file they pass is not proven safe.',
+  },
+  {
+    id: 'upload-not-checked',
+    title: 'A file was refused because it could not be checked',
+    reasons: ['upload_could_not_check'],
+    whatThisIs:
+      "A file sent to StockPilot was refused because the app's own file checks could not finish reading it: it was locked with a password, too large or too complex to read safely, or not put together the way its kind should be. An honest file can do this, and so can a file built to wear a checker out, and this alone does not say which.",
+    alreadyDid: [
+      'Blocked: the file was refused because the checks could not finish, and nothing used it. It was not attached or imported.',
+      UPLOAD_COPY_DELETED,
+      'The checks stop after a set amount of time and work on one file, and a file that reaches that point is refused, never let through.',
+      UPLOAD_TOLD_AND_RECORDED,
+    ],
+    doNow: [
+      { text: 'The file was refused because the checks could not finish, so it was not used.' },
+      {
+        text: 'On the Security page, look in the events list for more of these from the same organization.',
+        place: SECURITY_PAGE,
+      },
+      {
+        text: 'One now and then is usually an honest file, such as a password-protected PDF. A run of them is worth a look: a file built to wear out a checker is itself a sign, even though no single one shows what was inside.',
+      },
+      {
+        step: 'tell-the-owner',
+        lead: 'If one organization has a run of them, ask whether they know where the files came from:',
+      },
+    ],
+    ifGotThrough: [
+      { text: 'A file that could not be checked was refused, not let through, so it was not used for anything in StockPilot.' },
+      { step: 'ask-member-not-me' },
+    ],
+    cannotTell:
+      'It does not say whether the file was harmful, who sent it, what it was called or what was in it. The checks read what kind of file it is and how it is built; they hold no list of known viruses.',
+  },
+  {
+    id: 'upload-refused-in-use',
+    title: 'A refused file is still used by an earlier record',
+    reasons: ['upload_refused_in_use'],
+    whatThisIs:
+      "A file sent to StockPilot was refused by the app's own file checks, and a record the organization already had, such as an item photo, an attachment, a profile picture or the logo, still points at that same file. The file was kept so that the record does not break, and a record that points at a refused file is not expected, so it needs a look.",
+    alreadyDid: [
+      'Flagged, not stopped: this upload was refused and nothing new was saved with it, but the file itself was kept, because the earlier record still uses it.',
+      'The person who sent it was told in a plain sentence that it was refused.',
+      "The organization's audit record has a line saying the file was kept and why, with the kind of refusal and no file name.",
+      'The record keeps the kind of refusal, the organization when there is one, the place it came from and the time, never the file, its name or what was in it.',
+    ],
+    doNow: [
+      {
+        text: 'On the Security page, look in the events list for more of these from the same organization.',
+        place: SECURITY_PAGE,
+      },
+      {
+        step: 'tell-the-owner',
+        lead: 'Ask the organization which record was being saved again, such as an item photo, an attachment, a profile picture or the logo, and to replace its file with a fresh copy, or remove it if they do not know where it came from:',
+      },
+    ],
+    ifGotThrough: [
+      { text: 'The file is still where the earlier record points, so anyone who opens that record can still open the file.' },
+      { step: 'look-at-audit' },
+      {
+        step: 'tell-the-owner',
+        lead: 'If someone may have opened it, ask them not to open it again, and ask the organization to replace or remove it:',
+      },
+      { step: 'ask-member-not-me' },
+    ],
+    cannotTell:
+      'It does not say which record points at the file, who sent it, what it was called or what was in it. The checks read what kind of file it is and how it is built; they hold no list of known viruses, so a file they pass is not proven safe.',
   },
 ];
 

@@ -21,9 +21,10 @@ import {
  * WebGL cannot run in the test environment; globe-math.test.ts holds its
  * arithmetic).
  *
- * Security invariant. Pinned: the categories the map does not show
- * (Phishing, Malware) are never drawn, listed in the legend or the table, and
- * their events are one line of words; flagged is a different mark from
+ * Security invariant. Pinned: the category the map does not show
+ * (Phishing) is never drawn, listed in the legend or the table, and its
+ * events are one line of words (Malware is shown since part 6, when the
+ * upload checks began recording it, and is named only as its own kind); flagged is a different mark from
  * blocked (a dashed line and a hollow mark) and is called "flagged, not
  * blocked" in words; a flagged sum says "at least"; an organization's name
  * that looks like markup is put on the page as plain text; after two failed
@@ -47,6 +48,12 @@ import {
 const h = vi.hoisted(() => ({
   globeProps: [] as Array<Record<string, unknown>>,
   globeFails: null as null | 'unavailable' | 'lost',
+  samples: vi.fn(async (..._a: unknown[]) => ({ ok: false, reason: 'could_not_check' })),
+}));
+
+// The panel's "What was asked for" reads through its own Server Action.
+vi.mock('@/server/actions/platform/security-event-samples', () => ({
+  readSecurityEventSamplesAction: (...a: unknown[]) => h.samples(...a),
 }));
 
 vi.mock('@/server/actions/platform/security-map', () => ({
@@ -661,17 +668,20 @@ describe('the reads', () => {
 });
 
 describe('what is never drawn or listed', () => {
-  it('the hidden categories are not in the legend, the table, the feed or the drawing; their events are one line of words', async () => {
+  it('the hidden category is not in the legend, the table, the feed or the drawing; its events are one line of words', async () => {
     mount(async () => wholeRead());
     const legend = screen.getAllByRole('listitem').filter((li) => li.hasAttribute('data-legend'));
+    // Malware is shown since part 6: the upload checks record it.
     expect(legend.map((li) => li.getAttribute('data-legend'))).toEqual([
       'password_guessing',
       'exploit',
       'bots',
+      'malware',
     ]);
     const text = document.body.textContent ?? '';
-    // Their names: the category labelled "Sign-in alert" since lab walk 3 (F1) is drawn as sign-in alerts.
-    expect(text).not.toMatch(/phishing|malware/i);
+    // Its name: the category labelled "Sign-in alert" since lab walk 3 (F1) is drawn as sign-in alerts.
+    expect(text).not.toMatch(/phishing/i);
+    expectMalwareOnlyAsItsOwnKind();
     expect(
       screen.getByText(
         'At least 2 flagged sign-in alerts are not in the numbers by kind. The newest are drawn with a grey mark, from the flagged list, and every one is on the Security page.',
@@ -865,13 +875,14 @@ describe('the flagged list beside the map', () => {
     expect(split.querySelector('svg path')!.getAttribute('stroke')).toBe(HIDDEN_KIND_LOOK.hex);
   });
 
-  it('the words Phishing and Malware appear nowhere on the page, the flagged sign-in alert listed', () => {
+  it('the word Phishing appears nowhere on the page, and Malware only as its own kind in the legend, the flagged sign-in alert listed', () => {
     mount(async () => new Promise(() => {}));
     expect(entries()).toHaveLength(2);
     for (const view of ['globe', 'flat'] as const) {
       if (view === 'flat') chooseFlat();
       const page = document.body.innerHTML;
-      expect(page).not.toMatch(/phishing|malware/i);
+      expect(page).not.toMatch(/phishing/i);
+      expectMalwareOnlyAsItsOwnKind();
     }
   });
 
@@ -902,7 +913,7 @@ describe('the flagged list beside the map', () => {
     const legend = [...document.querySelectorAll('[data-legend]')].map((li) =>
       li.getAttribute('data-legend'),
     );
-    expect(legend).toEqual(['password_guessing', 'exploit', 'bots']);
+    expect(legend).toEqual(['password_guessing', 'exploit', 'bots', 'malware']);
     expect(document.querySelector('[data-legend-alert]')!.textContent).toContain(
       SECURITY_MAP_WORDS.legendSignInAlert,
     );
@@ -1296,7 +1307,9 @@ describe('the stage', () => {
     expect(legend.closest('[aria-hidden="true"]')).not.toBeNull();
     expect(legend.textContent).toContain(SECURITY_MAP_WORDS.legendBlocked);
     expect(legend.textContent).toContain(SECURITY_MAP_WORDS.legendFlagged);
-    expect(legend.textContent).not.toMatch(/phishing|malware/i);
+    expect(legend.textContent).not.toMatch(/phishing/i);
+    // Shown since part 6, with its own mark: the stage's legend names it.
+    expect(legend.textContent).toContain('Malware');
     expect(lastGlobe().showLabels).toBe(true);
   });
 
@@ -1716,6 +1729,23 @@ const contextOf = (panel: HTMLElement) =>
     (dt) => [dt.textContent, dt.nextElementSibling?.textContent],
   );
 const respond = (what: string) => screen.getByRole('button', { name: `How to respond: ${what}` });
+
+/**
+ * Part 6: Malware is a shown kind, so its name is on the page, but only as
+ * that kind: every piece of text that says it is inside the kind's own legend
+ * item (on the stage's legend too), or an entry of the kind.
+ */
+function expectMalwareOnlyAsItsOwnKind() {
+  const saying = [...document.body.querySelectorAll('*')].filter(
+    (el) => el.children.length === 0 && /malware/i.test(el.textContent ?? ''),
+  );
+  for (const el of saying) {
+    expect(
+      el.closest('[data-legend="malware"], [data-testid="security-map-stage-legend"], [data-category="malware"]'),
+      el.outerHTML,
+    ).not.toBeNull();
+  }
+}
 /** The link on the organization's name under "Opened from", or null. */
 const organizationLinkOf = (panel: HTMLElement): HTMLAnchorElement | null => {
   const dt = [...panel.querySelectorAll('dt')].find((d) => d.textContent === 'Organization');
@@ -1742,6 +1772,57 @@ describe('how to respond, from the map', () => {
       ['Organization', MARKUP_NAME],
     ]);
     expect(panel.querySelector('img')).toBeNull();
+  });
+
+  it('an upload refusal (part 6): drawn with the kind\'s own mark, counted in its legend item, and each reason opens its own card', async () => {
+    const base = answer();
+    const totals = { ...base.totals, malware: { blocked: 3, flagged: 0, allowed: 0 } };
+    mount(
+      async () => new Promise(() => {}),
+      wholeRead(
+        answer({
+          totals,
+          blocked_window: base.blocked_window + 3,
+          timeline: [...base.timeline, cell('2026-11-23T10:30:00+00:00', 600, 'NL', 'malware', 'blocked', 3)],
+          by_country: [...base.by_country, { country: 'NL', category: 'malware', outcome: 'blocked', events: 3 }],
+          feed: [
+            ...base.feed,
+            feedEntry({ category: 'malware', reason: 'upload_could_not_check', country: 'NL', city: 'Example Polder', events: 2, organization_id: ORG, organization_name: 'Example Upload School', organizations: 1 }),
+            feedEntry({ minute: '2026-11-23T21:57:00+00:00', category: 'malware', reason: 'upload_hidden_file', country: 'NL', city: 'Example Polder', events: 1, organization_id: ORG, organization_name: 'Example Upload School', organizations: 1 }),
+          ],
+        }),
+      ),
+    );
+    const item = document.querySelector('[data-legend="malware"]') as HTMLElement;
+    expect(item.textContent).toContain('Malware');
+    expect(item.textContent).toContain('3 blocked');
+    // A file that could not be checked: its own card, Look today.
+    const notChecked = respond('A file that could not be checked was refused');
+    const control = notChecked.closest('[data-slot="security-response-control"]') as HTMLElement;
+    expect(within(control).getByTestId('security-response-level').textContent).toBe('Look today');
+    let panel = await openCard(notChecked);
+    expect(panel).toHaveAttribute('data-card', 'upload-not-checked');
+    expect(contextOf(panel)[0]).toEqual(['Kind', 'Malware']);
+    // The console's name for the kind is "Malware"; "Refused file" is the organization's page's.
+    expect(document.body.textContent).not.toMatch(/Refused file/);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    // A file with another file hidden inside it: the refused-file card, Stopped.
+    const hidden = respond('A file with another file hidden inside it was refused');
+    expect(
+      within(hidden.closest('[data-slot="security-response-control"]') as HTMLElement).getByTestId(
+        'security-response-level',
+      ).textContent,
+    ).toBe('Stopped: nothing to do');
+    panel = await openCard(hidden);
+    expect(panel).toHaveAttribute('data-card', 'upload-refused');
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    // Drawn with its own look on the flat map (in the replay's first hour, beside the others).
+    chooseFlat();
+    const arcs = [...document.querySelectorAll('[data-arc^="NL:"]')];
+    expect(arcs.length).toBeGreaterThan(0);
+    expect(arcs.every((g) => g.getAttribute('data-look') === 'malware')).toBe(true);
   });
 
   it('a flagged entry of a shown kind: its kind, place, time and organization, the name a link to its console page', async () => {
@@ -1857,11 +1938,14 @@ describe('how to respond, from the map', () => {
       'password_guessing',
       'exploit',
       'bots',
+      'malware',
     ]);
     const general: Record<string, string> = {
       password_guessing: 'repeated-wrong-guesses',
       exploit: 'probe-scan',
       bots: 'public-forms-paused',
+      // Part 6: the card that describes the kind; each reason's card says what was done.
+      malware: 'upload-checks',
     };
     for (const li of kinds) {
       const category = li.getAttribute('data-legend')!;
@@ -1883,6 +1967,34 @@ describe('how to respond, from the map', () => {
     );
     expect(panel).toHaveAttribute('data-card', 'sign-in-new-country');
     expect(panel.textContent).not.toMatch(/phishing|malware/i);
+  });
+
+  it("an exploit entry's card reads what was asked for in its hour, kind and country; the legend's exploit card the last 24 hours; another kind's card nothing", async () => {
+    h.samples.mockClear();
+    mount(async () => wholeRead());
+    let panel = await openCard(respond('Request for a settings file'));
+    const region = within(panel).getByRole('region', { name: 'What was asked for' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(region.textContent).toContain('Could not check what was asked for.');
+    expect(h.samples.mock.calls).toEqual([
+      [{ reason: 'env_file', hour: '2026-11-23T21:00:00.000Z', country: 'DE' }],
+    ]);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    const exploit = document.querySelector('[data-legend="exploit"]') as HTMLElement;
+    panel = await openCard(
+      within(exploit).getByRole('button', { name: 'How to respond: Exploit attempts' }),
+    );
+    expect(within(panel).getByRole('region', { name: 'What was asked for' })).toBeTruthy();
+    expect(h.samples.mock.calls[1]).toEqual([{ reason: null, hour: null, country: null }]);
+    fireEvent.keyDown(panel, { key: 'Escape' });
+    await advance(0);
+    const guessing = document.querySelector('[data-legend="password_guessing"]') as HTMLElement;
+    panel = await openCard(within(guessing).getByRole('button'));
+    expect(within(panel).queryByRole('region', { name: 'What was asked for' })).toBeNull();
+    expect(h.samples).toHaveBeenCalledTimes(2);
   });
 
   it('Escape closes the panel and focus goes back to the control that opened it', async () => {

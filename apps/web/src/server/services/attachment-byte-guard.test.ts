@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
+import { scanDocumentBytes } from '@/lib/document-threat-scan';
+import { recordSecurityEvent } from '@/server/security/events';
+import { UPLOAD_REFUSED_MESSAGE, UPLOAD_WRONG_TYPE_MESSAGE } from '@/server/security/upload-checks';
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 
 // ---------------------------------------------------------------------------
@@ -23,16 +25,23 @@ const { createAdminClientMock } = vi.hoisted(() => ({
   // createAdminClient() at import, so a mock that yields undefined until a
   // test arms it fails the whole file at collection rather than in a test.
   createAdminClientMock: vi.fn(() => ({
-    storage: { from: () => ({ remove: async () => ({ data: null, error: null }) }) },
+    storage: { from: () => ({ remove: async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }) }) },
   })),
 }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMock }));
 
-const { fetchObjectPrefixMock } = vi.hoisted(() => ({ fetchObjectPrefixMock: vi.fn() }));
+const { fetchObjectWindowMock, fetchObjectWholeMock, stillNamedMock } = vi.hoisted(() => ({
+  fetchObjectWindowMock: vi.fn(),
+  fetchObjectWholeMock: vi.fn(),
+  stillNamedMock: vi.fn(async () => false),
+}));
 vi.mock('@/lib/storage-object-prefix', () => ({
-  fetchObjectPrefix: fetchObjectPrefixMock,
+  fetchObjectWindow: fetchObjectWindowMock,
+  fetchObjectWhole: fetchObjectWholeMock,
   SNIFF_PREFIX_BYTES: 4096,
 }));
+// Part 6: the look for a recorded attachment before a refused one is removed.
+vi.mock('./upload-still-named', () => ({ uploadObjectsStillNamed: stillNamedMock }));
 vi.mock('./context', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./context')>();
   return { ...actual, assertPermission: vi.fn(), assertModuleEnabled: vi.fn() };
@@ -61,32 +70,25 @@ const SVG = ascii('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')
 const PE = new Uint8Array([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]); // MZ
 
 let remove: ReturnType<typeof vi.fn>;
-let download: ReturnType<typeof vi.fn>;
 
 /**
- * The SMALL-object arming: the prefix read returns the whole file, because the
+ * The SMALL-object arming: the window read returns the whole file, because the
  * whole file fits inside the 4 KB sniff window.
  *
- * `download` is armed here too — and armed to FAIL — on purpose. When the
- * prefix already is the entire object there is nothing left to re-read, so a
- * change that made the finalize gate download unconditionally would both blow
- * up these tests' accept path AND be named by the explicit
- * `expect(download).not.toHaveBeenCalled()` below. Before this spy existed the
- * stub had no `download` at all, so the whole-object branch was not merely
- * unasserted — it was unreachable without a TypeError.
+ * The whole read is armed to FAIL on purpose. When the window already is the
+ * entire object there is nothing left to re-read, so a change that made the
+ * finalize gate read whole unconditionally would both blow up these tests'
+ * accept path AND be named by the explicit
+ * `expect(fetchObjectWholeMock).not.toHaveBeenCalled()` below.
  */
 function armStorage(body: Uint8Array | null) {
-  fetchObjectPrefixMock.mockImplementation(async () =>
+  fetchObjectWindowMock.mockImplementation(async () =>
     body ? { prefix: body, totalSize: body.byteLength } : null,
   );
-  remove = vi.fn(async () => ({ data: null, error: null }));
-  download = vi.fn(async () => ({
-    data: null,
-    error: { message: 'download() must not be called when the prefix IS the whole object' },
-  }));
+  fetchObjectWholeMock.mockImplementation(async () => null);
+  remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
   const api = {
     remove,
-    download,
     createSignedUrl: vi.fn(async () => ({ data: null, error: null })),
   };
   createAdminClientMock.mockReturnValue({ storage: { from: vi.fn(() => api) } } as never);
@@ -94,22 +96,21 @@ function armStorage(body: Uint8Array | null) {
 
 /**
  * The LARGE-object arming: the object is bigger than the sniff window, so the
- * prefix read returns only the leading 4 KB and the real full size — exactly
- * the shape `fetchObjectPrefix` produces in production for anything over
- * 4096 bytes. That is what forces `verifyStoredDocumentOrDelete` down its
- * re-download branch, which is the branch the scanner's whole-file contract
- * depends on.
+ * window read returns only the leading 4 KB and the real full size — exactly
+ * the shape `fetchObjectWindow` produces in production for anything over
+ * 4096 bytes. That is what forces the check down its whole-read branch, which
+ * is the branch the scanner's whole-file contract depends on. `whole` is what
+ * the whole read answers (null: it failed).
  */
-function armStorageLarge(full: Uint8Array, downloadResult: unknown) {
-  fetchObjectPrefixMock.mockImplementation(async () => ({
+function armStorageLarge(full: Uint8Array, whole: Uint8Array | null) {
+  fetchObjectWindowMock.mockImplementation(async () => ({
     prefix: full.subarray(0, 4096),
     totalSize: full.byteLength,
   }));
-  remove = vi.fn(async () => ({ data: null, error: null }));
-  download = vi.fn(async () => downloadResult);
+  fetchObjectWholeMock.mockImplementation(async () => whole);
+  remove = vi.fn(async (paths: string[]) => ({ data: paths.map((name) => ({ name })), error: null }));
   const api = {
     remove,
-    download,
     createSignedUrl: vi.fn(async () => ({ data: null, error: null })),
   };
   createAdminClientMock.mockReturnValue({ storage: { from: vi.fn(() => api) } } as never);
@@ -237,7 +238,7 @@ describe('OrderAttachmentsService.add — finalize byte guard', () => {
     armStorage(PE);
     const { svc } = orderSvc();
     const err = await svc.add(base).catch((e: unknown) => e);
-    expect((err as ServiceError).message).toMatch(/failed our security checks/i);
+    expect((err as ServiceError).message).toBe(UPLOAD_WRONG_TYPE_MESSAGE);
     expect((err as ServiceError).message).not.toMatch(/magic|signature|MZ|sniff/i);
   });
 });
@@ -297,7 +298,7 @@ describe('finalize byte guard — whole-object scan', () => {
   });
 
   it('PO: re-downloads the object and REJECTS a /Launch action hidden past the prefix', async () => {
-    armStorageLarge(LAUNCH_PDF, { data: new Blob([LAUNCH_PDF]), error: null });
+    armStorageLarge(LAUNCH_PDF, LAUNCH_PDF);
     const { stub, svc } = poSvc();
 
     const err = await svc.add(poInput()).catch((e: unknown) => e);
@@ -306,9 +307,9 @@ describe('finalize byte guard — whole-object scan', () => {
     expect((err as ServiceError).code).toBe('validation_error');
     // The SPECIFIC message: the uploader is a manager holding a real invoice,
     // and this one names the problem and the way out.
-    expect((err as ServiceError).message).toBe(THREAT_MESSAGES.pdf_launch_action);
+    expect((err as ServiceError).message).toBe(UPLOAD_REFUSED_MESSAGE);
     // The re-read actually happened, against the same object.
-    expect(download).toHaveBeenCalledWith(poInput().storagePath);
+    expect(fetchObjectWholeMock).toHaveBeenCalledWith(expect.anything(), poInput().storagePath, LAUNCH_PDF.byteLength);
     // No row, and the bytes do not survive the rejection.
     expect(stub.fromCalls).not.toContain('po_attachments');
     expect(remove).toHaveBeenCalledWith([poInput().storagePath]);
@@ -316,8 +317,9 @@ describe('finalize byte guard — whole-object scan', () => {
 
   it('PO: fails CLOSED when the object is readable at prefix time but not at full-read time', async () => {
     // A transient storage failure must NOT degrade to "accept on what we saw".
-    // We have not inspected this object, so it does not get a row.
-    armStorageLarge(LAUNCH_PDF, { data: null, error: { message: 'boom' } });
+    // We have not inspected this object, so it does not get a row. Nor is it
+    // removed (part 6): nothing was judged, and the person is asked to try again.
+    armStorageLarge(LAUNCH_PDF, null);
     const { stub, svc } = poSvc();
 
     const err = await svc.add(poInput()).catch((e: unknown) => e);
@@ -325,7 +327,7 @@ describe('finalize byte guard — whole-object scan', () => {
     expect(err).toBeInstanceOf(ServiceError);
     expect((err as ServiceError).message).toBe('This file could not be verified.');
     expect(stub.fromCalls).not.toContain('po_attachments');
-    expect(remove).toHaveBeenCalledWith([poInput().storagePath]);
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('PO: ACCEPTS a big PDF that is clean all the way to the end', async () => {
@@ -342,11 +344,11 @@ describe('finalize byte guard — whole-object scan', () => {
       out.set(tail, head.byteLength + filler.byteLength);
       return out;
     })();
-    armStorageLarge(clean, { data: new Blob([clean]), error: null });
+    armStorageLarge(clean, clean);
     const { stub, svc } = poSvc();
 
     await expect(svc.add(poInput())).resolves.toEqual({ id: 'poa-1' });
-    expect(download).toHaveBeenCalledTimes(1);
+    expect(fetchObjectWholeMock).toHaveBeenCalledTimes(1);
     expect(stub.fromCalls).toContain('po_attachments');
     expect(remove).not.toHaveBeenCalled();
   });
@@ -359,14 +361,14 @@ describe('finalize byte guard — whole-object scan', () => {
     armStorage(PDF);
     const { svc } = poSvc();
     await expect(svc.add(poInput())).resolves.toEqual({ id: 'poa-1' });
-    expect(download).not.toHaveBeenCalled();
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
   });
 
   it('ORDER: the same re-download and refusal, on the other caller', async () => {
     // Pattern #26: the two callers share ONE gate now, but the sibling is
     // asserted anyway — a future divergence in either service is the exact
     // failure this file exists to catch.
-    armStorageLarge(LAUNCH_PDF, { data: new Blob([LAUNCH_PDF]), error: null });
+    armStorageLarge(LAUNCH_PDF, LAUNCH_PDF);
     const { stub, svc } = orderSvc();
     const path = `${ORG}/${ENTITY}/${FILE}.pdf`;
 
@@ -381,9 +383,123 @@ describe('finalize byte guard — whole-object scan', () => {
       })
       .catch((e: unknown) => e);
 
-    expect((err as ServiceError).message).toBe(THREAT_MESSAGES.pdf_launch_action);
-    expect(download).toHaveBeenCalledWith(path);
+    expect((err as ServiceError).message).toBe(UPLOAD_REFUSED_MESSAGE);
+    expect(fetchObjectWholeMock).toHaveBeenCalledWith(expect.anything(), path, LAUNCH_PDF.byteLength);
     expect(stub.fromCalls).not.toContain('order_request_attachments');
     expect(remove).toHaveBeenCalledWith([path]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PART 6: a refusal is recorded as a security event (malware / blocked, the
+// verdict's family, this organization), exactly once, with nothing of the
+// file in it; a clean attachment records nothing; a recorder that fails
+// changes no answer.
+// ---------------------------------------------------------------------------
+describe('both attachment finalizes record a refusal, once', () => {
+  const record = vi.mocked(recordSecurityEvent);
+
+  it.each([
+    ['PO, the wrong type', 'po', HTML, 'upload_wrong_type'],
+    ['PO, a launch action', 'po', LAUNCH_PDF, 'upload_active_content'],
+    ['order, the wrong type', 'order', HTML, 'upload_wrong_type'],
+    ['order, a launch action', 'order', LAUNCH_PDF, 'upload_active_content'],
+  ] as const)('%s: one event, this organization, no file name', async (_what, which, body, reason) => {
+    armStorage(body);
+    const err =
+      which === 'po'
+        ? await poSvc().svc.add(poInput()).catch((e: unknown) => e)
+        : await orderSvc()
+            .svc.add({
+              orderRequestId: ENTITY,
+              storagePath: `${ORG}/${ENTITY}/${FILE}.pdf`,
+              fileName: 'proof.pdf',
+              contentType: 'application/pdf',
+              sizeBytes: 999,
+              kind: 'dropoff_photo' as const,
+            })
+            .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(record).toHaveBeenCalledTimes(1);
+    const [event] = record.mock.calls[0]!;
+    expect(event).toEqual({ category: 'malware', outcome: 'blocked', reason, source: 'web', organizationId: ORG });
+    expect(JSON.stringify(record.mock.calls[0])).not.toMatch(/invoice|proof|\.pdf/);
+  });
+
+  it('a clean attachment records nothing; an unreadable one records nothing', async () => {
+    armStorage(PDF);
+    await poSvc().svc.add(poInput());
+    armStorage(null);
+    await poSvc().svc.add(poInput()).catch(() => undefined);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('a recorder that fails: the refusal stands and the object is still removed', async () => {
+    record.mockImplementationOnce(async () => {
+      throw new Error('recorder down');
+    });
+    armStorage(HTML);
+    const { stub, svc } = poSvc();
+    await expect(svc.add(poInput())).rejects.toBeInstanceOf(ServiceError);
+    expect(stub.fromCalls).not.toContain('po_attachments');
+    expect(remove).toHaveBeenCalledWith([`${ORG}/${ENTITY}/${FILE}.pdf`]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PART 6 review: each read is held to its bucket's cap, and a refusal never
+// removes an object a row already names. Every removal leaves one audit line.
+// ---------------------------------------------------------------------------
+describe('the ceiling and the look before a removal', () => {
+  const orderInput = () => ({
+    orderRequestId: ENTITY,
+    storagePath: `${ORG}/${ENTITY}/${FILE}.pdf`,
+    fileName: 'proof.pdf',
+    contentType: 'application/pdf',
+    sizeBytes: 999,
+    kind: 'dropoff_photo' as const,
+  });
+
+  it('each read is held to 15 MB, and a larger file is refused from its stated size, never read whole', async () => {
+    armStorage(PDF);
+    fetchObjectWindowMock.mockImplementation(
+      async (_b: unknown, _p: string, _f: unknown, limit?: { maxTotalBytes?: number }) => ({
+        prefix: new Uint8Array(0),
+        totalSize: (limit?.maxTotalBytes ?? 0) + 1,
+        overLimit: true,
+      }),
+    );
+    const { stub, svc } = poSvc();
+    const err = await svc.add(poInput()).catch((e: unknown) => e);
+    expect((err as ServiceError).code).toBe('validation_error');
+    expect(fetchObjectWindowMock.mock.calls[0]![3]).toEqual({ maxTotalBytes: 15 * 1024 * 1024 });
+    expect(fetchObjectWholeMock).not.toHaveBeenCalled();
+    expect(stub.fromCalls).not.toContain('po_attachments');
+    expect(remove).toHaveBeenCalledWith([poInput().storagePath]);
+  });
+
+  it.each([
+    ['PO', 'po_attachments'],
+    ['order', 'order_request_attachments'],
+  ] as const)('%s: a recorded path finalized again and refused is never removed', async (which, table) => {
+    armStorage(HTML);
+    stillNamedMock.mockResolvedValueOnce(true);
+    const err =
+      which === 'PO'
+        ? await poSvc().svc.add(poInput()).catch((e: unknown) => e)
+        : await orderSvc().svc.add(orderInput()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ServiceError);
+    expect(stillNamedMock).toHaveBeenCalledWith(table, ['storage_path'], [`${ORG}/${ENTITY}/${FILE}.pdf`]);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('a removal leaves one audit line, with no path', async () => {
+    const { audit } = await import('./audit');
+    armStorage(HTML);
+    await poSvc().svc.add(poInput()).catch(() => undefined);
+    const lines = vi.mocked(audit).mock.calls.filter(([p]) => p.event === 'security.upload_refused_removed');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]![0].extra).toEqual({ surface: 'po_attachment', why: 'wrong_type', objects: 1 });
+    expect(JSON.stringify(lines[0])).not.toContain(FILE);
   });
 });

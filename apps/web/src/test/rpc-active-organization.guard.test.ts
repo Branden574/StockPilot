@@ -222,6 +222,10 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Scheduled purge of old AI chat history in every organization; no active organization.',
   ],
+  'app/api/cron/security-events-retention/route.ts::platform_security_alert_purge': [
+    'not_org_data',
+    'Scheduled purge of security alerts older than 400 days and change rows older than 2 years (0480); no active organization.',
+  ],
   'app/api/cron/security-events-retention/route.ts::purge_security_events': [
     'not_org_data',
     'Scheduled purge of old security events in every organization and none; no active organization.',
@@ -229,6 +233,17 @@ const REGISTRY: Record<string, Entry> = {
   'app/api/cron/security-events-retention/route.ts::purge_sign_in_alerts': [
     'not_org_data',
     'Scheduled purge of sign-in alerts older than 90 days, of every account; no active organization.',
+  ],
+  'app/api/cron/security-events-retention/route.ts::purge_security_event_samples': [
+    'not_org_data',
+    'Scheduled purge of request samples whose hour began more than 90 days ago; no active organization.',
+  ],
+  // The security alerts (part 5, stage 4, migration 0480): service role
+  // only, behind the cron secret (the two jobs) or the console's own gate
+  // (the list). No value from a request reaches any of these calls.
+  'app/api/cron/security-summary/route.ts::platform_security_alert_baseline': [
+    'not_org_data',
+    "The daily job behind the cron secret stores the spike rule's baseline (the week's high marks, counts only); no active organization.",
   ],
   'app/api/orders/sign/route.ts::confirm_order_signature': [
     'not_org_data',
@@ -343,9 +358,29 @@ const REGISTRY: Record<string, Entry> = {
   'server/loaders/orders-new-catalog.ts::rls_inv_read_warehouse_charter_ids': RO(
     "The caller's own scope sets.",
   ),
+  'server/security/alerts-job.ts::platform_security_alert_claim': [
+    'not_org_data',
+    "The alert job behind the cron secret claims an alert from the database's own inputs; an aimed alert's organization comes from those inputs, never from a request.",
+  ],
+  'server/security/alerts-job.ts::platform_security_alert_heartbeat': [
+    'not_org_data',
+    "The alert job's own heartbeat (start and finish), behind the cron secret; no active organization.",
+  ],
+  'server/security/alerts-job.ts::platform_security_alert_inputs': [
+    'not_org_data',
+    'The alert job behind the cron secret reads the security record of every organization and none; no arguments.',
+  ],
+  'server/security/alerts-job.ts::platform_security_alert_result': [
+    'not_org_data',
+    'The alert job records a channel as skipped (this release sends nothing) on the alert row its own claim returned.',
+  ],
   'server/security/auth-logs.ts::record_security_events': [
     'not_org_data',
     "The hourly job that counts refused sign-ins in Supabase's gateway log, behind the cron secret: the service client stores counts in fixed words with no organization (a log line names no account). No value from a request reaches the call.",
+  ],
+  'server/security/event-samples.ts::record_security_event_samples': [
+    'not_org_data',
+    "The event samples recorder's flush: stores scrubbed probe paths in fixed words with no organization, account or address; the service client; nothing in a request names a row.",
   ],
   'server/security/events.ts::record_security_events': [
     'not_org_data',
@@ -614,6 +649,12 @@ const REGISTRY: Record<string, Entry> = {
   'server/services/platform/security-briefing.ts::platform_security_briefing_members': RO(
     "Reads only: every organization's member counts.",
   ),
+  // The platform console's security alerts (service role, behind
+  // requirePlatformAdmin on the page and checkPlatformConsoleRead on Check
+  // again): STABLE in its migration (0480), it writes no row.
+  'server/services/platform/security-alerts.ts::platform_security_alert_list': RO(
+    'Reads only: the alert record, the job heartbeat, the thresholds and the change history.',
+  ),
   // The platform console's attack map (service role, behind the console's
   // own gate: requirePlatformAdmin on the page, checkPlatformConsoleRead on
   // the poll): one function that only reads, STABLE in its migration
@@ -621,6 +662,12 @@ const REGISTRY: Record<string, Entry> = {
   // organization and none, and writes no row.
   'server/services/platform/security-map.ts::platform_security_map': RO(
     'Reads only: the security record by country and by time, for a window, across every organization.',
+  ),
+  // What scanners asked for (service role, behind checkPlatformConsoleRead in
+  // the panel's action): one function that only reads, STABLE in its
+  // migration (0479, platform_security_event_samples).
+  'server/services/platform/security-event-samples.ts::platform_security_event_samples': RO(
+    'Reads only: what scanners asked for, by hour, across every organization and none.',
   ),
   'server/services/platform/sessions.ts::admin_revoke_user_sessions': [
     'not_org_data',

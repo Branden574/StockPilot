@@ -160,8 +160,22 @@ function extFromMime(mime: string): string {
  * for those cases), and the UI must say so plainly instead of a generic
  * failure message.
  */
+/**
+ * The maintenance finalize answers every refused photo with the code word
+ * `invalid_image` (the phone turns it into its own sentence, and older phones
+ * read it, so the route keeps it). A person is told this sentence instead,
+ * never the code word (lab walk 5, F5): it covers a photo our checks refused,
+ * one that could not be checked and one that is not a photo this takes, and
+ * says what to do without saying what the check looks for.
+ */
+const MAINTENANCE_PHOTO_NOT_ADDED =
+  'This photo could not be added. Use a JPEG, PNG or WEBP photo up to 10 MB, or take it again.';
+
 async function humanizeUploadError(res: Response, fallback: string): Promise<string> {
   const body = (await res.json().catch(() => null)) as { message?: string } | null;
+  if (body?.message === 'invalid_image') return MAINTENANCE_PHOTO_NOT_ADDED;
+  // Any other code word (lower case and underscores only) is not a sentence.
+  if (body?.message && /^[a-z0-9_]+$/.test(body.message)) return fallback;
   if (body?.message) return body.message;
   if (res.status === 409) return 'Too many uploads. Please wait a moment and try again.';
   return fallback;
