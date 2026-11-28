@@ -233,7 +233,9 @@ function parseStub() {
   });
   stub.client.storage.from = vi.fn(() => ({
     download: vi.fn(async () => ({
-      data: { arrayBuffer: async () => new ArrayBuffer(0) },
+      // A small made-up CSV (the parser is stubbed): an empty file is answered
+      // as empty before any parse (lab walk 6, W6-F1).
+      data: { arrayBuffer: async () => new TextEncoder().encode('sku,qty\nA-1,1\n').buffer },
       error: null,
     })),
   })) as never;
