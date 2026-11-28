@@ -437,6 +437,23 @@ describe('could not check is never nothing', () => {
     expect(await call(svc)).toEqual({ state: 'could_not_check' });
   });
 
+  it.each(READS)(
+    '%s: a 42501 with no known hint (a missing grant) is could_not_check, reported, never forbidden',
+    async (_n, fn, call) => {
+      const { svc } = setup({
+        [`rpc:${fn}`]: {
+          data: null,
+          error: { message: `permission denied for function ${fn}`, code: '42501' },
+        },
+      });
+      expect(await call(svc)).toEqual({ state: 'could_not_check' });
+      expect(h.report).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ level: 'error' }),
+      );
+    },
+  );
+
   it('a register that is not a list is could_not_check, never empty', async () => {
     const { svc } = setup({ 'rpc:supplier_risk_register': { data: { rows: [] }, error: null } });
     expect(await svc.register()).toEqual({ state: 'could_not_check' });
@@ -507,6 +524,14 @@ describe("the database's refusals, by the hint alone", () => {
     const seat = supplierRiskRefusalOf({ code: '42501', hint: VENDOR_RISK_ACT_AS_REFUSAL });
     expect(seat?.message).toBe(VENDOR_RISK_ACT_AS_REFUSAL_WORDS);
     expect(seat?.details?.reason).toBe(VENDOR_RISK_ACT_AS_REFUSAL);
+  });
+
+  it('a 42501 with no known hint is not a refusal (a missing grant must not read as forbidden)', () => {
+    expect(
+      supplierRiskRefusalOf({ code: '42501', message: 'permission denied for function x' }),
+    ).toBeNull();
+    expect(supplierRiskRefusalOf({ code: '42501', hint: 'some_other_word' })).toBeNull();
+    expect(supplierRiskRefusalOf({ code: '42501', hint: '' })).toBeNull();
   });
 
   it('55P03 (the supplier lock) is busy, to retry', () => {

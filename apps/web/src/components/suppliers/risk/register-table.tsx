@@ -68,11 +68,11 @@ export function SupplierRiskRegisterTable({
           <TableRow key={row.supplierId} data-supplier-id={row.supplierId}>
             <TableCell className="align-top">
               <bdi className="text-foreground font-medium [overflow-wrap:anywhere]">
-                {row.supplierName}
+                {supplierNameAsText(row.supplierName)}
               </bdi>
               {row.nameChanged && row.reviewedAsName ? (
                 <span className="text-muted-foreground block text-[12px]">
-                  Reviewed as <bdi>{row.reviewedAsName}</bdi>
+                  Reviewed as <bdi>{supplierNameAsText(row.reviewedAsName)}</bdi>
                 </span>
               ) : null}
               {row.supplierState !== 'active' ? (

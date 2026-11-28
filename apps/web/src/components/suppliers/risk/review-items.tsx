@@ -195,6 +195,9 @@ function ItemRow({
   );
 }
 
+/** The picker's value for an owner whose account was deleted (no id is left to send). */
+const DELETED_OWNER = 'deleted-owner';
+
 function ItemEditor({
   reviewId,
   item,
@@ -213,7 +216,11 @@ function ItemEditor({
   const router = useRouter();
   const stepUp = useStepUp();
   const [status, setStatus] = React.useState<VendorRiskItemStatus>(item.status);
-  const [owner, setOwner] = React.useState(item.ownerUserId ?? '');
+  // An owner whose account was deleted has no id left, only the name kept:
+  // the picker stays on that name until the admin picks someone else, and an
+  // untouched owner sends no owner (the database keeps the name then).
+  const ownerDeleted = item.ownerUserId === null && item.ownerName !== null;
+  const [owner, setOwner] = React.useState(item.ownerUserId ?? (ownerDeleted ? DELETED_OWNER : ''));
   const [dueOn, setDueOn] = React.useState(item.dueOn ?? '');
   const [action, setAction] = React.useState(item.action);
   const [reason, setReason] = React.useState('');
@@ -253,7 +260,7 @@ function ItemEditor({
       reviewId,
       itemId: item.id,
       status,
-      ownerUserId: owner || null,
+      ownerUserId: owner && owner !== DELETED_OWNER ? owner : null,
       dueOn: dueOn || null,
       action: action !== item.action ? action : null,
       reason: accepting && reason ? reason : null,
@@ -301,7 +308,13 @@ function ItemEditor({
               value={owner}
               onChange={(e) => setOwner(e.target.value)}
             >
-              <option value="">No owner</option>
+              {ownerDeleted ? (
+                <option value={DELETED_OWNER} disabled>
+                  {`${item.ownerName} (account deleted)`}
+                </option>
+              ) : (
+                <option value="">No owner</option>
+              )}
               {!ownerListed && item.ownerUserId ? (
                 <option value={item.ownerUserId}>
                   {peopleKnown

@@ -100,7 +100,7 @@ function EventRow({ e, timeZone }: { e: SupplierRiskEvent; timeZone: string }) {
           <>
             {' by '}
             <bdi>{e.actorName}</bdi>
-            {e.actorAccountDeleted ? ' (account since deleted)' : null}
+            {e.actorAccountDeleted ? ' (account deleted)' : null}
           </>
         ) : null}
       </p>

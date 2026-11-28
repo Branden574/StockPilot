@@ -96,8 +96,8 @@ describe('follow-up 1: hidden characters are cleaned, and the person sees the cl
     });
     expect(box.value).toBe('The vendor sent a signed letter today.\nChecked.');
     // The joiner and the selector are taken out; the line separator becomes a
-    // line break (counted too: it was changed).
-    expect(screen.getByRole('status').textContent).toMatch(/We took out 3 hidden characters/);
+    // line break and is not counted (it was kept, not taken out).
+    expect(screen.getByRole('status').textContent).toMatch(/We took out 2 hidden characters/);
     expect(screen.getByRole('status').textContent).toMatch(/read it again/);
   });
 
@@ -418,6 +418,29 @@ describe('follow-up 4: names in <bdi>, and text as text', () => {
     expect(form.textContent).not.toContain('no longer an owner or admin');
   });
 
+  it('an owner whose account was deleted stays selected, and an untouched save sends no owner', async () => {
+    h.update.mockResolvedValue({ ok: true, data: { item: item() } });
+    render(
+      <SupplierRiskItems
+        reviewId="r"
+        items={[item({ ownerUserId: null, ownerName: 'Gone Example', status: 'open' })]}
+        people={[{ userId: ME, name: 'Avery Example' }]}
+        canWrite
+        orgToday="2026-11-27"
+        timeZone="America/Los_Angeles"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Change the item/ }));
+    const form = screen.getByRole('form', { name: 'Change this item' });
+    const owner = within(form).getByLabelText(/^Owner/) as HTMLSelectElement;
+    expect(owner.selectedOptions[0]?.textContent).toBe('Gone Example (account deleted)');
+    expect(owner.selectedOptions[0]?.disabled).toBe(true);
+    fireEvent.click(within(form).getByRole('button', { name: 'Save the item' }));
+    await act(async () => {});
+    expect(h.update).toHaveBeenCalledTimes(1);
+    expect(h.update.mock.calls[0]![0]).toMatchObject({ ownerUserId: null });
+  });
+
   it('no Change control without the right to write; one per item with it', () => {
     const { rerender } = render(
       <SupplierRiskItems
@@ -707,7 +730,7 @@ describe("the history: the database's record, every value as text", () => {
     const li = container.querySelector('[data-event="risk_acceptance_withdrawn"]')!;
     expect(li.textContent).toMatch(/Risk acceptance withdrawn/);
     expect(li.querySelector('bdi')?.textContent).toBe('Rami \u202eExample');
-    expect(li.textContent).toContain('(account since deleted)');
+    expect(li.textContent).toContain('(account deleted)');
   });
 
   it('an owner whose account was deleted renders as a deleted account, never an id', () => {

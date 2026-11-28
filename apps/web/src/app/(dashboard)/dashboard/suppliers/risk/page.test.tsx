@@ -221,7 +221,7 @@ describe('what an owner or admin sees', () => {
     const { container } = await page();
     expect(container.querySelector('tbody img')).toBeNull();
     const names = Array.from(container.querySelectorAll('tbody bdi')).map((b) => b.textContent);
-    expect(names).toEqual(['<img src=x onerror=alert(1)>', 'Old \u202eName']);
+    expect(names).toEqual(['<img src=x onerror=alert(1)>', 'Old Name']);
     expect(container.textContent).toMatch(/Reviewed as/);
   });
 
@@ -233,8 +233,8 @@ describe('what an owner or admin sees', () => {
     const { container } = await page();
     const link = container.querySelector('tbody a')!;
     expect(link.getAttribute('aria-label')).toBe('Open the vendor review of Example Supply Co');
-    // On screen the name is shown as typed, isolated in <bdi>.
-    expect(container.querySelector('tbody bdi')?.textContent).toBe('Example\nSupply \u202eCo\u0007');
+    // On screen the name is drawn cleaned (no direction mark that reverses it), in <bdi>.
+    expect(container.querySelector('tbody bdi')?.textContent).toBe('Example Supply Co');
   });
 
   it('a result an admin set is marked in its badge, with what the rules gave (S6)', async () => {

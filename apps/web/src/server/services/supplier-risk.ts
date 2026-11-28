@@ -523,7 +523,14 @@ export function supplierRiskRefusalOf(error: RpcError): ServiceError | null {
         reason: VENDOR_RISK_ACT_AS_REFUSAL,
       });
     }
-    return new ServiceError('forbidden', SUPPLIER_RISK_FORBIDDEN);
+    // 0481's "not an owner or admin of this organization" (every admin function).
+    if (word === 'supplier_risk_not_allowed') {
+      return new ServiceError('forbidden', SUPPLIER_RISK_FORBIDDEN);
+    }
+    // Any other 42501 (for example "permission denied for function", which is
+    // what a missing grant gives) is not a known refusal: the caller reports
+    // it and says the reviews could not be checked.
+    return null;
   }
   if (code === '22023' && isRefusalWord(word)) {
     return new ServiceError('validation_error', VENDOR_RISK_REFUSAL_WORDS[word], { refusal: word });

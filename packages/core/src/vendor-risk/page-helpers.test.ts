@@ -47,7 +47,12 @@ describe('vendorRiskCleanText', () => {
   it('a line separator becomes a line break, not nothing', () => {
     expect(vendorRiskCleanText(`first line${LSEP}second line`)).toEqual({
       text: 'first line\nsecond line',
-      removed: 1,
+      removed: 0,
+    });
+    // Only characters actually taken out are counted (the separator is kept as a break).
+    expect(vendorRiskCleanText(`a${LSEP}b${ZWSP}c${SHY}d`)).toEqual({
+      text: 'a\nbcd',
+      removed: 2,
     });
   });
 
@@ -62,7 +67,8 @@ describe('vendorRiskCleanText', () => {
         const dirty = `note ${String.fromCodePoint(cp)} text`;
         expect(vendorRiskTextOk(dirty, 1, 1000), cp.toString(16)).toBe(false);
         const { text, removed } = vendorRiskCleanText(dirty);
-        expect(removed, cp.toString(16)).toBe(1);
+        // The line and paragraph separators become a line break: kept, not counted.
+        expect(removed, cp.toString(16)).toBe(cp === 0x2028 || cp === 0x2029 ? 0 : 1);
         expect(vendorRiskTextOk(text, 1, 1000), cp.toString(16)).toBe(true);
       }
     }

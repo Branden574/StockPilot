@@ -606,22 +606,17 @@ const LINE_SEPARATORS = /[\u2028\u2029]/gu;
  * or a reason BEFORE it is sent and to show the person the cleaned text. A
  * phone's emoji keyboard adds U+FE0F and joiners; pasted text carries U+00AD,
  * U+200B, U+FEFF and U+2028. The line and paragraph separators become a line
- * feed; every other hidden character is removed. `removed`: how many were
- * taken out (0: the text is unchanged). The result passes the hidden part of
- * the text rule (vendorRiskTextOk can still refuse its length or a text of
- * spaces only).
+ * feed (not counted: nothing is lost); every other hidden character is
+ * removed. `removed`: how many were taken out (a separator turned into a
+ * line break is not counted). The result passes the hidden part of the text
+ * rule (vendorRiskTextOk can still refuse its length or a text of spaces only).
  */
 export function vendorRiskCleanText(text: string): { text: string; removed: number } {
   let removed = 0;
-  const cleaned = text
-    .replace(LINE_SEPARATORS, () => {
-      removed += 1;
-      return '\n';
-    })
-    .replace(HIDDEN_ALL, () => {
-      removed += 1;
-      return '';
-    });
+  const cleaned = text.replace(LINE_SEPARATORS, '\n').replace(HIDDEN_ALL, () => {
+    removed += 1;
+    return '';
+  });
   return { text: cleaned, removed };
 }
 

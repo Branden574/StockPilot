@@ -157,6 +157,12 @@ describe('the Risk column and the Review link', () => {
     ).toBe(`/dashboard/suppliers/${A}/risk`);
   });
 
+  it('the Risk cell is not pinned to the top of its row (it sits like its neighbours)', () => {
+    render(<SuppliersManager initial={ROWS} view="active" canManage risk={OK} />);
+    const cell = document.querySelector('[data-slot="supplier-risk-cell"]')!;
+    expect(cell.className).not.toContain('align-top');
+  });
+
   it('a result an admin set is marked, never a bare green result (S6)', () => {
     render(
       <SuppliersManager

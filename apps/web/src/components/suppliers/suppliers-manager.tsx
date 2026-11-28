@@ -249,7 +249,7 @@ export function SuppliersManager({
                       )}
                     </TableCell>
                     {riskColumn ? (
-                      <TableCell className="align-top" data-slot="supplier-risk-cell">
+                      <TableCell data-slot="supplier-risk-cell">
                         {risk?.state === 'could_not_check' ? (
                           <span className="text-muted-foreground">
                             {SUPPLIER_RISK_COULD_NOT_CHECK_CELL}

@@ -459,7 +459,7 @@ describe("the history section: the database's record of this supplier's reviews"
 });
 
 describe("the supplier's name in the questions for the vendor (S4)", () => {
-  it('is cleaned of line breaks, control and direction characters; on screen it is in <bdi> as typed', async () => {
+  it('is cleaned of line breaks, control and direction characters; on screen it is in <bdi>, cleaned', async () => {
     useStub({
       register: {
         data: [registerRow({ supplier_name: 'Example\nSupply \u202eCo\u0007\u200b' })],
@@ -472,7 +472,7 @@ describe("the supplier's name in the questions for the vendor (S4)", () => {
     expect(first).toBe('Questions for Example Supply Co about the data of ours you hold');
     expect(questions.value).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/);
     const header = container.querySelector('header') ?? container;
-    expect(header.querySelector('bdi')?.textContent).toBe('Example\nSupply \u202eCo\u0007\u200b');
+    expect(header.querySelector('bdi')?.textContent).toBe('Example Supply Co');
   });
 });
 

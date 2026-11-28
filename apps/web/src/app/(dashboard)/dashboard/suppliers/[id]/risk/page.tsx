@@ -269,11 +269,13 @@ export default async function SupplierRiskReviewPage({
         titleId="supplier-risk-title"
         subline={
           <>
-            <bdi className="text-foreground font-medium">{row.supplierName}</bdi>
+            <bdi className="text-foreground font-medium">
+              {supplierNameAsText(row.supplierName)}
+            </bdi>
             {row.nameChanged && row.reviewedAsName ? (
               <>
                 {' · Reviewed as '}
-                <bdi>{row.reviewedAsName}</bdi>
+                <bdi>{supplierNameAsText(row.reviewedAsName)}</bdi>
               </>
             ) : null}
           </>
