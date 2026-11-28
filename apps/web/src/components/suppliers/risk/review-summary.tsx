@@ -16,6 +16,7 @@ import {
   SUPPLIER_RISK_REVIEW_DUE_WORDS,
   supplierRiskDay,
   supplierRiskHardStopWords,
+  supplierRiskResultLabel,
   supplierRiskResultTone,
   supplierRiskResultWords,
 } from '@/lib/supplier-risk/words';
@@ -85,7 +86,7 @@ export function SupplierRiskReviewSummary({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-muted-foreground text-[13px]">Result</span>
           <Badge variant={supplierRiskResultTone(review.result)} data-slot="supplier-risk-result">
-            {supplierRiskResultWords(review.result)}
+            {supplierRiskResultLabel(review.result, overridden)}
           </Badge>
         </div>
         {overridden ? (

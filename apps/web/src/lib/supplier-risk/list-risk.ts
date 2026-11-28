@@ -22,6 +22,8 @@ export interface SupplierRiskListCell {
   nextReviewOn: string | null;
   /** A draft is waiting to be finished. */
   draft: boolean;
+  /** The result was set by an admin over the rules: the cell says so. */
+  overridden: boolean;
 }
 
 /**
@@ -75,6 +77,7 @@ export async function loadSuppliersRiskView(
         reviewDue: row.reviewDue,
         nextReviewOn: row.nextReviewOn,
         draft: row.draftReviewId !== null,
+        overridden: row.overridden,
       };
     }
     return { state: 'ok', seat, bySupplier };

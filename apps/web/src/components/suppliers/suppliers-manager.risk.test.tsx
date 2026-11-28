@@ -61,6 +61,7 @@ const OK: SuppliersRiskView = {
       reviewDue: 'overdue',
       nextReviewOn: '2026-10-01',
       draft: false,
+      overridden: false,
     },
     [B]: {
       result: null,
@@ -68,6 +69,7 @@ const OK: SuppliersRiskView = {
       reviewDue: 'not_reviewed',
       nextReviewOn: null,
       draft: true,
+      overridden: false,
     },
   },
 };
@@ -153,5 +155,32 @@ describe('the Risk column and the Review link', () => {
     expect(
       screen.getByRole('link', { name: 'Vendor review of Example Supply Co' }).getAttribute('href'),
     ).toBe(`/dashboard/suppliers/${A}/risk`);
+  });
+
+  it('a result an admin set is marked, never a bare green result (S6)', () => {
+    render(
+      <SuppliersManager
+        initial={ROWS}
+        view="active"
+        canManage
+        risk={{
+          state: 'ok',
+          seat: 'member',
+          bySupplier: {
+            [A]: {
+              result: 'approve',
+              residualRisk: 'low',
+              reviewDue: 'scheduled',
+              nextReviewOn: '2027-11-27',
+              draft: false,
+              overridden: true,
+            },
+          },
+        }}
+      />,
+    );
+    const cell = document.querySelector('[data-slot="supplier-risk-cell"]')!;
+    expect(cell.textContent).toContain('Approve (set by an admin)');
+    expect(screen.queryByText('Approve', { exact: true })).toBeNull();
   });
 });

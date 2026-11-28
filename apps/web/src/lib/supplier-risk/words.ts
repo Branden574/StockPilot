@@ -89,6 +89,21 @@ export function supplierRiskResultWords(result: VendorRiskResult | string | null
   return (VENDOR_RISK_RESULT_WORDS as Record<string, string>)[result] ?? result;
 }
 
+/**
+ * A result's words where it is shown on its own (a badge, a cell): a result
+ * an admin set over the rules says so, so it never stands as a bare result
+ * (an overridden Approve is never a plain green Approve).
+ */
+export function supplierRiskResultLabel(
+  result: VendorRiskResult | string | null,
+  overridden: boolean,
+): string {
+  const words = supplierRiskResultWords(result);
+  return words && overridden ? `${words} (${SUPPLIER_RISK_SET_BY_ADMIN})` : words;
+}
+
+export const SUPPLIER_RISK_SET_BY_ADMIN = 'set by an admin';
+
 /** A hard stop's words, or the database's own word for one core does not know (never hidden). */
 export function supplierRiskHardStopWords(stop: string): string {
   return (VENDOR_RISK_HARD_STOP_WORDS as Record<string, string>)[stop] ?? stop;

@@ -41,8 +41,8 @@ import {
   SUPPLIER_RISK_NOT_REVIEWED,
   SUPPLIER_RISK_REVIEW_DUE_WORDS,
   supplierRiskDay,
+  supplierRiskResultLabel,
   supplierRiskResultTone,
-  supplierRiskResultWords,
 } from '@/lib/supplier-risk/words';
 import {
   archiveSupplierAction,
@@ -373,7 +373,7 @@ function SupplierRiskCellView({ cell }: { cell: SupplierRiskListCell | null }) {
   return (
     <div className="space-y-1">
       <Badge variant={supplierRiskResultTone(cell.result)}>
-        {supplierRiskResultWords(cell.result)}
+        {supplierRiskResultLabel(cell.result, cell.overridden)}
       </Badge>
       {cell.residualRisk ? (
         <span className="text-ink-2 block text-[12px]">

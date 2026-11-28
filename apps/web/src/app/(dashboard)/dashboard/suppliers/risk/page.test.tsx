@@ -227,4 +227,16 @@ describe('what an owner or admin sees', () => {
     // On screen the name is shown as typed, isolated in <bdi>.
     expect(container.querySelector('tbody bdi')?.textContent).toBe('Example\nSupply \u202eCo\u0007');
   });
+
+  it('a result an admin set is marked in its badge, with what the rules gave (S6)', async () => {
+    useRegister({
+      data: [registerRow(1, { overridden: true, computed_result: 'do_not_use' })],
+      error: null,
+    });
+    const { container } = await page();
+    const cell = container.querySelectorAll('tbody tr td')[1]!;
+    expect(cell.textContent).toContain('Approve (set by an admin)');
+    expect(cell.textContent).toMatch(/The rules gave: Do not use/);
+    expect(screen.queryByText('Approve', { exact: true })).toBeNull();
+  });
 });

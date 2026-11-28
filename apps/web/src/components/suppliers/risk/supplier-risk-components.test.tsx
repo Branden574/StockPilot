@@ -681,3 +681,14 @@ describe("the history: the database's record, every value as text", () => {
     expect(container.textContent).not.toMatch(/No change recorded/);
   });
 });
+
+describe('a result an admin set is marked where it is shown (S6)', () => {
+  it('the summary badge says so', () => {
+    const { container } = render(
+      <SupplierRiskReviewSummary review={review()} title="Current review" timeZone="UTC" />,
+    );
+    expect(container.querySelector('[data-slot="supplier-risk-result"]')?.textContent).toBe(
+      'More information needed (set by an admin)',
+    );
+  });
+});

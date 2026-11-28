@@ -22,6 +22,7 @@ import {
   SUPPLIER_RISK_SUPPLIER_STATE_WORDS,
   supplierRiskDay,
   supplierRiskHardStopWords,
+  supplierRiskResultLabel,
   supplierRiskResultTone,
   supplierRiskResultWords,
 } from '@/lib/supplier-risk/words';
@@ -89,12 +90,11 @@ export function SupplierRiskRegisterTable({
               {row.result ? (
                 <>
                   <Badge variant={supplierRiskResultTone(row.result)}>
-                    {supplierRiskResultWords(row.result)}
+                    {supplierRiskResultLabel(row.result, row.overridden)}
                   </Badge>
                   {row.overridden ? (
                     <span className="text-muted-foreground block text-[12px]">
-                      Set by an admin. The rules gave: {supplierRiskResultWords(row.computedResult)}
-                      .
+                      The rules gave: {supplierRiskResultWords(row.computedResult)}.
                     </span>
                   ) : null}
                   {row.hardStops.length > 0 ? (

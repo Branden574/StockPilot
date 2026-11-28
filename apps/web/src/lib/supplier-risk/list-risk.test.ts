@@ -103,11 +103,21 @@ describe('loadSuppliersRiskView', () => {
           reviewDue: 'due_soon',
           nextReviewOn: '2026-12-20',
           draft: false,
+          overridden: false,
         },
       },
     });
     expect(stub.rpcCalls).toEqual([
       { name: 'supplier_risk_register', args: { p_organization_id: ORG } },
     ]);
+  });
+
+  it('a result an admin set carries the mark to the cell (S6)', async () => {
+    const { ctx } = ctxWith({
+      data: [{ ...ROW, overridden: true, computed_result: 'do_not_use' }],
+      error: null,
+    });
+    const view = await loadSuppliersRiskView(ctx);
+    expect(view?.state === 'ok' ? view.bySupplier[A.toLowerCase()]?.overridden : null).toBe(true);
   });
 });
