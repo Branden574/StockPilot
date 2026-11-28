@@ -123,7 +123,9 @@ import SchedulePage from './schedule/page';
 import IntegrationsPage from './settings/integrations/page';
 import PublicLinkPage from './settings/public-requests/[linkId]/page';
 import PublicRequestsPage from './settings/public-requests/page';
+import SupplierRiskReviewPage from './suppliers/[id]/risk/page';
 import SuppliersPage from './suppliers/page';
+import SupplierRiskRegisterPage from './suppliers/risk/page';
 import ZendeskPage from './zendesk/page';
 
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -212,6 +214,13 @@ const PAGES: Array<[string, Page, ModuleId, () => Record<string, unknown>]> = [
   ['A public request link', PublicLinkPage, 'public_requests', () => linkId],
   ['Public requests', PublicRequestsPage, 'public_requests', () => ({})],
   ['Suppliers', SuppliersPage, 'suppliers', () => ({ searchParams: Promise.resolve({}) })],
+  [
+    'A vendor review',
+    SupplierRiskReviewPage,
+    'suppliers',
+    () => ({ ...id, searchParams: Promise.resolve({}) }),
+  ],
+  ['Vendor risk register', SupplierRiskRegisterPage, 'suppliers', () => ({})],
   ['Zendesk', ZendeskPage, 'zendesk', () => ({})],
 ];
 

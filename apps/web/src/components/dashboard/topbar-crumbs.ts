@@ -318,6 +318,25 @@ const CRUMBS: Array<[RegExp, Crumb[]]> = [
     /^\/dashboard\/suppliers$/,
     [SECTION_PURCHASING, { label: 'Suppliers', href: '/dashboard/suppliers' }],
   ],
+  // Vendor risk reviews (security tools part 7): the register, and one
+  // supplier's review under it.
+  [
+    /^\/dashboard\/suppliers\/risk$/,
+    [
+      SECTION_PURCHASING,
+      { label: 'Suppliers', href: '/dashboard/suppliers' },
+      tail('Vendor risk register'),
+    ],
+  ],
+  [
+    /^\/dashboard\/suppliers\/[^/]+\/risk$/,
+    [
+      SECTION_PURCHASING,
+      { label: 'Suppliers', href: '/dashboard/suppliers' },
+      { label: 'Vendor risk register', href: '/dashboard/suppliers/risk' },
+      tail('Vendor review'),
+    ],
+  ],
 
   // Insights. Reports: the hub, then each report under it by its own name.
   ...REPORT_PAGES.map(([segment, label]): [RegExp, Crumb[]] => [
