@@ -1497,10 +1497,11 @@ function resultOf<C extends string>(
   if (v === null) return null;
   need(isBag(v) && Object.keys(v).length > 0, where);
   const out: Partial<Record<C, number>> = {};
+  // The place it differs names the field, never the answer's own key (data stays out of a report).
   for (const [k, n] of Object.entries(v)) {
-    const code = oneOf(k, codes, `${where}.${k}`);
-    const c = countOf(n, `${where}.${k}`);
-    need(c <= ALERT_RESULT_MOST, `${where}.${k}`);
+    const code = oneOf(k, codes, where);
+    const c = countOf(n, where);
+    need(c <= ALERT_RESULT_MOST, where);
     out[code] = c;
   }
   return out;

@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 
 import { env } from '@/lib/env';
-import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  alertWhereCode,
+  reportAlertJob,
+  type AlertJobReportData,
+  type AlertJobReportTag,
+} from '@/server/security/alerts-reports';
 import { secretsEqual } from '@/server/services/lib/system-context';
 
 import { readSecurityAlertBaseline } from '@stockpilot/core';
@@ -31,8 +36,6 @@ const MIN_CALL_MS = 1_000;
 /** The report's own limit: a reporter that hangs never holds the run. */
 const REPORT_MAX_MS = 4_000;
 
-const FN = 'platform_security_alert_baseline';
-
 type Outcome =
   { kind: 'answer'; data: unknown } | { kind: 'failed'; code: string; timedOut: boolean };
 
@@ -47,18 +50,16 @@ function codeOf(error: unknown): string {
   return typeof code === 'string' && /^[A-Za-z0-9_]{1,16}$/.test(code) ? code : 'no_code';
 }
 
-/** One report, bounded in time. Never throws. */
-async function report(
-  message: string,
-  level: 'error' | 'warning',
-  extra: Record<string, string | number>,
-): Promise<void> {
+/**
+ * One report, bounded in time, through the alert jobs' one way to report
+ * (server/security/alerts-reports.ts: a fixed tag, counts and codes, each tag
+ * at most once in 6 hours on an instance). Never throws.
+ */
+async function report(tag: AlertJobReportTag, data: AlertJobReportData): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      Promise.resolve(reportError(new Error(message), { tag: TAG, level, extra })).catch(
-        () => undefined,
-      ),
+      Promise.resolve(reportAlertJob(tag, data)).catch(() => undefined),
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, REPORT_MAX_MS);
       }),
@@ -109,9 +110,9 @@ async function callBaseline(ms: number): Promise<Outcome> {
  *
  * A baseline that could not be computed (the function missing, a timeout,
  * the database's own cancel, a refused state, a week too full to read, an
- * answer this build does not know) is reported once, as a warning (no_state,
- * a deployment problem, as an error), with its code or word only, and
- * answered 500; the alert job keeps the spike rule held while there is no
+ * answer this build does not know) is reported, as a warning (no_state, a
+ * deployment problem, as an error), with its code or word only (each kind at
+ * most once in 6 hours on an instance), and answered 500; the alert job keeps the spike rule held while there is no
  * baseline. computed_recently is an answer, not a failure.
  *
  * Auth: Bearer ${CRON_SECRET}, compared in constant time, FAIL-CLOSED when
@@ -150,21 +151,17 @@ export async function GET(req: Request) {
   let ok = false;
   if (outcome.kind === 'failed') {
     line = { baseline: 'failed', code: outcome.code, calls };
-    await report(
-      `The security alerts' baseline could not be computed (${outcome.code})`,
-      'warning',
-      {
-        code: outcome.code,
-        calls,
-      },
-    );
+    await report('cron.security-summary.baseline_failed', {
+      counts: { calls },
+      codes: { code: outcome.code },
+    });
   } else {
     const read = readSecurityAlertBaseline(outcome.data);
     if (!read.ok) {
       line = { baseline: 'unreadable', calls };
-      await report(`${FN} answered a shape this build does not know (${read.where})`, 'warning', {
-        where: read.where.slice(0, 80),
-        calls,
+      await report('cron.security-summary.baseline_unreadable', {
+        counts: { calls },
+        codes: { where: alertWhereCode(read.where) },
       });
     } else if (read.refused === 'computed_recently') {
       ok = true;
@@ -172,9 +169,10 @@ export async function GET(req: Request) {
     } else if (read.refused !== null) {
       line = { baseline: 'refused', refused: read.refused, calls };
       await report(
-        `The security alerts' baseline was refused (${read.refused})`,
-        read.refused === 'no_state' ? 'error' : 'warning',
-        { refused: read.refused, calls },
+        read.refused === 'no_state'
+          ? 'cron.security-summary.baseline_no_state'
+          : 'cron.security-summary.baseline_refused',
+        { counts: { calls }, codes: { refused: read.refused } },
       );
     } else {
       ok = true;

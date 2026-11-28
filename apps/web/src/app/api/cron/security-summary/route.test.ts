@@ -40,6 +40,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 }));
 
 import * as route from './route';
+import { __resetAlertJobReportsForTests } from '@/server/security/alerts-reports';
 
 const AUTH = { authorization: 'Bearer cron-secret-for-tests' };
 const req = (headers: Record<string, string> = AUTH) =>
@@ -70,6 +71,7 @@ beforeEach(() => {
   h.answer = vi.fn(() => ({ data: COMPUTED, error: null }));
   h.report.mockReset();
   h.report.mockResolvedValue(undefined);
+  __resetAlertJobReportsForTests();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
 });
 
@@ -180,7 +182,10 @@ describe('every other answer is reported once and answers 500', () => {
       expect(body).toEqual({ error: 'internal_error' });
       expect(h.report).toHaveBeenCalledTimes(1);
       expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-        tag: 'cron.security-summary',
+        tag:
+          word === 'no_state'
+            ? 'cron.security-summary.baseline_no_state'
+            : 'cron.security-summary.baseline_refused',
         level: word === 'no_state' ? 'error' : 'warning',
         extra: { refused: word, calls: 1 },
       });
@@ -201,7 +206,7 @@ describe('every other answer is reported once and answers 500', () => {
     expect(status).toBe(500);
     expect(h.report).toHaveBeenCalledTimes(1);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-      tag: 'cron.security-summary',
+      tag: 'cron.security-summary.baseline_failed',
       level: 'warning',
       extra: { code, calls: 1 },
     });
@@ -256,7 +261,7 @@ describe('every other answer is reported once and answers 500', () => {
     expect(status).toBe(500);
     expect(h.calls).toHaveLength(2);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-      tag: 'cron.security-summary',
+      tag: 'cron.security-summary.baseline_failed',
       level: 'warning',
       extra: { code: '55P03', calls: 2 },
     });
@@ -278,7 +283,7 @@ describe('time, and never throwing', () => {
     expect(status).toBe(500);
     expect(endedAt - started).toBe(25_000);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-      tag: 'cron.security-summary',
+      tag: 'cron.security-summary.baseline_failed',
       level: 'warning',
       extra: { code: 'timeout', calls: 1 },
     });
@@ -290,7 +295,7 @@ describe('time, and never throwing', () => {
     });
     expect((await run()).status).toBe(500);
     expect(h.report).toHaveBeenLastCalledWith(expect.any(Error), {
-      tag: 'cron.security-summary',
+      tag: 'cron.security-summary.baseline_failed',
       level: 'warning',
       extra: { code: 'ECONNRESET', calls: 1 },
     });
@@ -299,11 +304,31 @@ describe('time, and never throwing', () => {
     expect(logLine()).toMatchObject({ sent: 'nothing', baseline: 'failed' });
   });
 
+  it('a baseline that fails on every call is reported once in 6 hours on this instance', async () => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 10, 24, 15), toFake: ['Date'] });
+    h.answer = vi.fn(() => ({ data: null, error: { code: 'XX000', message: 'boom' } }));
+    for (let i = 0; i < 5; i += 1) expect((await run()).status).toBe(500);
+    expect(h.report).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.UTC(2026, 10, 24, 21));
+    await run();
+    expect(h.report).toHaveBeenCalledTimes(2);
+    for (const [e, c] of h.report.mock.calls) {
+      expect(String((e as Error).message)).not.toContain('boom');
+      expect(c).toEqual({
+        tag: 'cron.security-summary.baseline_failed',
+        level: 'warning',
+        extra: { code: 'XX000', calls: 1 },
+      });
+    }
+  });
+
   it('a report that throws or hangs still answers, inside 4 s', async () => {
     h.answer = vi.fn(() => ({ data: refusedWith('no_state'), error: null }));
     h.report.mockRejectedValue(new Error('webhook down'));
     expect((await run()).status).toBe(500);
     vi.useFakeTimers();
+    // A new instance: the tag was sent above, and is held for 6 hours on this one.
+    __resetAlertJobReportsForTests();
     h.report.mockImplementation(() => new Promise(() => undefined));
     const started = Date.now();
     let endedAt = 0;

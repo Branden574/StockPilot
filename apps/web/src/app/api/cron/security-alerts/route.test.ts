@@ -60,6 +60,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 }));
 
 import * as route from './route';
+import { __resetAlertJobReportsForTests } from '@/server/security/alerts-reports';
 
 const AUTH = { authorization: 'Bearer cron-secret-for-tests' };
 const req = (headers: Record<string, string> = AUTH) =>
@@ -214,7 +215,7 @@ class FakeDb {
   handOut = { push: false, email: false };
   /** A new claim's answer carries a held notice. */
   notice: { push: boolean; email: boolean } | null = null;
-  reportNowAt: 'start' | 'finish' | null = null;
+  reportNowAt: 'start' | 'finish' | 'both' | null = null;
   rows = new Map<string, Row>();
   latestRun: string | null = null;
   finished = new Set<string>();
@@ -256,8 +257,9 @@ class FakeDb {
               },
               last_ok_at: null,
               missed_runs: 0,
-              failures_in_a_row: this.reportNowAt === 'start' ? 3 : 0,
-              report_now: this.reportNowAt === 'start',
+              failures_in_a_row:
+                this.reportNowAt === 'start' || this.reportNowAt === 'both' ? 3 : 0,
+              report_now: this.reportNowAt === 'start' || this.reportNowAt === 'both',
               marked_not_sent: 0,
             },
             error: null,
@@ -273,7 +275,7 @@ class FakeDb {
             step: 'finish',
             refused: null,
             failures_in_a_row: a.p_ok ? 0 : 3,
-            report_now: this.reportNowAt === 'finish',
+            report_now: this.reportNowAt === 'finish' || this.reportNowAt === 'both',
           },
           error: null,
         };
@@ -410,6 +412,7 @@ beforeEach(() => {
   h.answer = vi.fn((fn: string, args: unknown) => db.answer(fn, args as Record<string, unknown>));
   h.report.mockReset();
   h.report.mockResolvedValue(undefined);
+  __resetAlertJobReportsForTests();
   vi.spyOn(console, 'info').mockImplementation(() => undefined);
 });
 
@@ -632,7 +635,7 @@ describe('record only: nothing is sent, and what is handed out is closed', () =>
     // Once per run: a switch is on and this release sends nothing. Counts only.
     expect(h.report).toHaveBeenCalledTimes(1);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-      tag: 'cron.security-alerts',
+      tag: 'cron.security-alerts.channel_on',
       level: 'warning',
       extra: { closed: 1, notices: 0 },
     });
@@ -767,9 +770,9 @@ describe('every refusal of the claim is an answer', () => {
     if (!expected) {
       expect(body.unexpected).toEqual({ [`claim_${word}`]: 2 });
       expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-        tag: 'cron.security-alerts',
+        tag: 'cron.security-alerts.unexpected',
         level: 'warning',
-        extra: { answers: `claim_${word}:2` },
+        extra: { [`claim_${word}`]: 2 },
       });
     }
   });
@@ -904,7 +907,7 @@ describe('the start', () => {
       expect(labels()).toEqual(['heartbeat start']);
       expect(body).toMatchObject({ ran: false, skipped: 'start_refused' });
       expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-        tag: 'cron.security-alerts',
+        tag: 'cron.security-alerts.start_refused',
         level: 'error',
         extra: { refused: word },
       });
@@ -975,8 +978,10 @@ describe('the inputs', () => {
     expect(labels()).toEqual(['heartbeat start', 'inputs', 'heartbeat finish']);
     expect(body).toMatchObject({ ok: false, stop: 'unreadable' });
     expect(
-      h.report.mock.calls.some(([e]) =>
-        String((e as Error).message).includes('could not read its inputs'),
+      h.report.mock.calls.some(
+        ([, c]) =>
+          (c as { tag: string }).tag === 'cron.security-alerts.inputs_unreadable' &&
+          (c as { extra: Record<string, unknown> }).extra.where === 'answer.buckets',
       ),
     ).toBe(true);
   });
@@ -1066,7 +1071,7 @@ describe('the finish, always closed once the start answered', () => {
     await run();
     expect(h.report).toHaveBeenCalledTimes(1);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-      tag: 'cron.security-alerts',
+      tag: 'cron.security-alerts.failing',
       level: 'error',
       extra: { failuresInARow: 3, step: 'start' },
     });
@@ -1077,10 +1082,95 @@ describe('the finish, always closed once the start answered', () => {
     await run();
     expect(h.report).toHaveBeenCalledTimes(1);
     expect(h.report).toHaveBeenCalledWith(expect.any(Error), {
-      tag: 'cron.security-alerts',
+      tag: 'cron.security-alerts.failing',
       level: 'error',
       extra: { failuresInARow: 3, step: 'finish' },
     });
+  });
+
+  it('the failing report goes once in a run, even when the start and the finish both say report_now', async () => {
+    db.reportNowAt = 'both';
+    await run();
+    expect(h.report).toHaveBeenCalledTimes(1);
+  });
+
+  it('a deployment problem on every run is reported once in 6 hours on this instance, not every 10 minutes', async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    h.answer = vi.fn((fn: string, args: unknown) =>
+      fn === 'platform_security_alert_inputs'
+        ? { data: null, error: { code: 'PGRST202', message: 'not found' } }
+        : db.answer(fn, args as Record<string, unknown>),
+    );
+    for (let i = 0; i < 36; i += 1) {
+      vi.setSystemTime(NOW + i * 10 * MIN);
+      expect((await run()).body).toMatchObject({ ran: true, ok: false, stop: 'inputs_failed' });
+    }
+    expect(h.report).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(NOW + 6 * HOUR);
+    await run();
+    expect(h.report).toHaveBeenCalledTimes(2);
+  });
+
+  it('a refusal it does not expect and a channel on, on every run: each reported once in 6 hours', async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    db.handOut = { push: true, email: false };
+    db.inputs = rawInputs(EVERYTHING);
+    h.answer = vi.fn((fn: string, args: unknown) => {
+      const a = db.answer(fn, args as Record<string, unknown>);
+      const r = args as Record<string, unknown>;
+      return fn === 'platform_security_alert_claim' && r.p_rule === 'record_trouble'
+        ? {
+            data: {
+              outcome: 'refused',
+              refused: 'not_a_key',
+              id: null,
+              disposition: null,
+              push: false,
+              email: false,
+              attempt: null,
+              open_key: null,
+              notice: null,
+            },
+            error: null,
+          }
+        : a;
+    });
+    for (let i = 0; i < 6; i += 1) {
+      vi.setSystemTime(NOW + i * 10 * MIN);
+      db.rows.clear();
+      await run();
+    }
+    const tags = h.report.mock.calls.map(([, c]) => (c as { tag: string }).tag);
+    expect(tags.filter((t) => t.endsWith('.channel_on'))).toHaveLength(1);
+    expect(tags.filter((t) => t.endsWith('.unexpected'))).toHaveLength(1);
+  });
+
+  it('every report holds nothing but a fixed tag, counts and codes', async () => {
+    db.handOut = { push: true, email: false };
+    db.reportNowAt = 'start';
+    db.inputs = rawInputs(EVERYTHING);
+    db.seedRetries(EVERYTHING);
+    h.answer = vi.fn((fn: string, args: unknown) => {
+      const a = db.answer(fn, args as Record<string, unknown>);
+      const r = args as Record<string, unknown>;
+      if (fn === 'platform_security_alert_claim' && r.p_rule === 'record_trouble')
+        return { data: { ...(a.data as object), outcome: 'maybe' }, error: null };
+      return a;
+    });
+    await run();
+    expect(h.report.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const [e, c] of h.report.mock.calls) {
+      const ctx = c as { tag: string; level: string; extra: Record<string, unknown> };
+      expect(ctx.tag).toMatch(/^cron\.security-alerts\.[a-z_]+$/);
+      expect(String((e as Error).message)).not.toMatch(/0a0a|0b0b|example|\|/);
+      for (const v of Object.values(ctx.extra)) {
+        expect(
+          typeof v === 'number' ? Number.isSafeInteger(v) : /^[A-Za-z0-9_.]{1,64}$/.test(String(v)),
+          `${ctx.tag}: ${String(v)}`,
+        ).toBe(true);
+      }
+      expect(JSON.stringify(ctx)).not.toMatch(/0a0a0a0a|0b0b0b0b|example\.test/);
+    }
   });
 
   it('a report that throws or hangs never holds the run past its limit', async () => {

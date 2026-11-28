@@ -1,8 +1,13 @@
 import 'server-only';
 
 import { env } from '@/lib/env';
-import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
+import {
+  alertWhereCode,
+  reportAlertJob,
+  type AlertJobReportData,
+  type AlertJobReportTag,
+} from '@/server/security/alerts-reports';
 
 import {
   ADMIN_EMAILS_MOST,
@@ -28,15 +33,15 @@ import {
  * THE SECURITY ALERT JOB (security tools part 5, stage 4a: RECORD ONLY). The
  * cron route app/api/cron/security-alerts calls runSecurityAlerts every 10
  * minutes. NOTHING IS SENT: this module has no email sender, no push sender
- * and no way to turn a switch on (alerts-job.guard.test.ts pins that it
- * imports none and calls none of the functions that would).
+ * and no way to turn a switch on (alerts-record-only.guard.test.ts pins the
+ * modules it may import and the only database functions it may call).
  *
  * THE ORDER, exactly as the database half's contract gives it
  * (part-5-alerts-db CONTRACT.md, "What the job does, in order"):
  *   1. heartbeat('start'): the run's id. 55P03: another run is mid-way, stop
  *      without a finish. no_state: a deployment bug, reported. report_now:
- *      three runs in a row were missed or failed, reported once through the
- *      app's error reporter (the database says it at most once in 6 hours).
+ *      three runs in a row were missed or failed, reported once (the
+ *      database says it at most once in 6 hours, and is the authority).
  *   2. inputs(). Refused, failed or 57014: finish(false) and stop.
  *   3. SERIOUS FLAGS FIRST, one at a time, each claimed and closed before the
  *      next: (a) every serious retry, (b) every serious flag. Nothing of the
@@ -76,6 +81,10 @@ import {
  *
  * NEVER THROWS, and what it answers and logs is counts and fixed words only:
  * never the run's id, an organization, a key's subject or a database's text.
+ * EVERY REPORT goes through server/security/alerts-reports.ts: a fixed tag,
+ * counts and codes only, each tag at most once in 6 hours on an instance
+ * (the failing report when the database's report_now says so), so a
+ * deployment problem is not posted every 10 minutes.
  */
 
 export const SECURITY_ALERTS_TAG = 'cron.security-alerts';
@@ -239,18 +248,19 @@ function failureOf(error: unknown): Failure {
 }
 
 interface Report {
-  message: string;
-  level: 'error' | 'warning';
-  extra: Record<string, string | number | boolean>;
+  tag: AlertJobReportTag;
+  data: AlertJobReportData;
+  /** The heartbeat's report_now (the failing report only): the database's word. */
+  databaseSaysReportNow?: boolean;
 }
 
 /** Sends a run's reports at once and waits SECURITY_ALERTS_REPORTS_MAX_MS at most. Never throws. */
 async function flushReports(reports: readonly Report[]): Promise<void> {
   if (reports.length === 0) return;
   const sent = Promise.all(
-    reports.map(async ({ message, level, extra }) => {
+    reports.map(async ({ tag, data, databaseSaysReportNow }) => {
       try {
-        await reportError(new Error(message), { tag: SECURITY_ALERTS_TAG, level, extra });
+        await reportAlertJob(tag, data, databaseSaysReportNow === true);
       } catch {
         // A report that could not be sent is dropped: the run still answers.
       }
@@ -336,9 +346,8 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
         if ((failure.kind === 'missing' || failure.kind === 'not_allowed') && !deployment.has(fn)) {
           deployment.add(fn);
           reports.push({
-            message: `The security alert job cannot call ${fn} (${failure.code}): a deployment problem`,
-            level: 'error',
-            extra: { fn, code: failure.code },
+            tag: 'cron.security-alerts.cannot_call',
+            data: { codes: { fn, code: failure.code } },
           });
         }
         return { ok: false, failure };
@@ -369,9 +378,9 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
     if (reportedFailing) return;
     reportedFailing = true;
     reports.push({
-      message: `The security alert job has missed or failed ${failures} runs in a row`,
-      level: 'error',
-      extra: { failuresInARow: failures, step },
+      tag: 'cron.security-alerts.failing',
+      data: { counts: { failuresInARow: failures }, codes: { step } },
+      databaseSaysReportNow: true,
     });
   };
 
@@ -392,18 +401,16 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
     if (!start.ok) {
       summary.skipped = 'start_failed';
       reports.push({
-        message: `The security alert job could not read its heartbeat's start (${start.where})`,
-        level: 'error',
-        extra: { where: start.where.slice(0, 80) },
+        tag: 'cron.security-alerts.start_unreadable',
+        data: { codes: { where: alertWhereCode(start.where) } },
       });
       return summary;
     }
     if (start.refused !== null) {
       summary.skipped = 'start_refused';
       reports.push({
-        message: `The security alert job's start was refused (${start.refused}): a deployment problem`,
-        level: 'error',
-        extra: { refused: start.refused },
+        tag: 'cron.security-alerts.start_refused',
+        data: { codes: { refused: start.refused } },
       });
       return summary;
     }
@@ -428,18 +435,15 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
         summary.stop = 'unreadable';
         unexpected('inputs_unreadable');
         reports.push({
-          message: `The security alert job could not read its inputs (${parsed.where})`,
-          level: 'warning',
-          extra: { where: parsed.where.slice(0, 80) },
+          tag: 'cron.security-alerts.inputs_unreadable',
+          data: { codes: { where: alertWhereCode(parsed.where) } },
         });
       } else if (parsed.refused !== null) {
         summary.stop = 'inputs_refused';
         if (parsed.refused === 'no_state') {
           reports.push({
-            message:
-              "The security alert job's inputs were refused (no_state): a deployment problem",
-            level: 'error',
-            extra: { refused: parsed.refused },
+            tag: 'cron.security-alerts.inputs_no_state',
+            data: { codes: { refused: parsed.refused } },
           });
         }
       } else {
@@ -649,22 +653,14 @@ export async function runSecurityAlerts(): Promise<SecurityAlertsRunSummary> {
     }
     if (summary.closedRecordOnly > 0 || summary.notices > 0) {
       reports.push({
-        message: `A security alert channel is on, but this release sends nothing: ${summary.closedRecordOnly} handed-out alerts were recorded as skipped`,
-        level: 'warning',
-        extra: { closed: summary.closedRecordOnly, notices: summary.notices },
+        tag: 'cron.security-alerts.channel_on',
+        data: { counts: { closed: summary.closedRecordOnly, notices: summary.notices } },
       });
     }
-    const unexpectedWords = Object.entries(summary.unexpected);
-    if (unexpectedWords.length > 0) {
+    if (Object.keys(summary.unexpected).length > 0) {
       reports.push({
-        message: 'The security alert job had answers it does not expect',
-        level: 'warning',
-        extra: {
-          answers: unexpectedWords
-            .map(([w, n]) => `${w}:${n}`)
-            .join(',')
-            .slice(0, 300),
-        },
+        tag: 'cron.security-alerts.unexpected',
+        data: { counts: summary.unexpected },
       });
     }
     await flushReports(reports);
