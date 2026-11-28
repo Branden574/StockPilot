@@ -124,3 +124,22 @@ describe("PoImportsService.parseImport stores the app's words for a file it coul
     );
   });
 });
+
+describe('the parse reads the stored file with a signal of its own (review round 3, R3-6)', () => {
+  it('the download is handed a signal, aborted once it has answered, so no second copy is kept', async () => {
+    const handed: unknown[][] = [];
+    const stub = parseStub({
+      sourceType: 'pdf',
+      download: async (...args: unknown[]) => {
+        handed.push(args);
+        return { data: bytes('PK\u0003\u0004 a zip, not a pdf'), error: null };
+      },
+    });
+    await new PoImportsService(makeServiceContext(stub.client) as never).parseImport(IMPORT_ID);
+    expect(handed).toHaveLength(1);
+    const [path, , parameters] = handed[0] as [string, unknown, { signal?: AbortSignal } | undefined];
+    expect(path).toBe('org-test/po-imports/imp.pdf');
+    expect(parameters?.signal).toBeInstanceOf(AbortSignal);
+    expect(parameters!.signal!.aborted).toBe(true);
+  });
+});

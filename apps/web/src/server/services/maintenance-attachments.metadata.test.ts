@@ -80,6 +80,10 @@ vi.mock('@/lib/image-reencode', async (importOriginal) => {
 const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn(() => adminHolder.client) }));
 
+import { recordSecurityEvent } from '@/server/security/events';
+import { expectOneRefusal, HTML_PAGE, withArchiveAfter } from '@/test/upload-fixtures';
+
+import { audit } from './audit';
 import { MaintenanceAttachmentsService } from './maintenance-attachments';
 
 const ORG = '0a0a0a0a-0000-4000-8000-000000000001';
@@ -185,6 +189,8 @@ class FakeBucket {
     upload: [] as Array<{ path: string; contentType: string | undefined; upsert: boolean | undefined }>,
     remove: [] as string[][],
   };
+  /** The signal each download() was handed (storage-js passes it to fetch). */
+  downloadSignals: Array<AbortSignal | null> = [];
 
   put(path: string, bytes: Uint8Array, contentType: string) {
     this.objects.set(path, { bytes: new Uint8Array(bytes), contentType });
@@ -199,8 +205,9 @@ class FakeBucket {
       error: null,
     };
   }
-  async download(path: string) {
+  async download(path: string, _options?: unknown, parameters?: { signal?: AbortSignal }) {
     this.calls.download.push(path);
+    this.downloadSignals.push(parameters?.signal ?? null);
     const obj = this.objects.get(path);
     if (this.failDownload || !obj) return { data: null, error: { message: 'Object not found' } };
     const bytes = this.downloadOverride ?? obj.bytes;
@@ -218,7 +225,8 @@ class FakeBucket {
   async remove(paths: string[]) {
     this.calls.remove.push([...paths]);
     for (const p of paths) this.objects.delete(p);
-    return { data: [], error: null };
+    // As storage answers: the objects it deleted.
+    return { data: paths.map((name) => ({ name })), error: null };
   }
   async createSignedUrls() {
     return { data: [], error: null };
@@ -389,6 +397,19 @@ describe('finalize stores the photo without its metadata (real sharp)', () => {
       expect(res).toEqual({ id: 'att-1', width: 60, height: 30 });
     },
   );
+
+  it('the whole read is a download with a signal of its own, aborted once it has answered, so no second copy is kept (review round 3, R3-6)', async () => {
+    const photo = await phonePhoto('jpeg', { width: 320, height: 240, noise: true });
+    bucket.put(`${stem}.jpg`, photo, 'image/jpeg');
+    const { svc } = setup();
+
+    await svc.finalize(REQ, finalizeArgs('jpeg'));
+
+    expect(bucket.calls.download).toEqual([`${stem}.jpg`]);
+    expect(bucket.downloadSignals).toHaveLength(1);
+    expect(bucket.downloadSignals[0]).toBeInstanceOf(AbortSignal);
+    expect(bucket.downloadSignals[0]!.aborted).toBe(true);
+  });
 
   it('a photo larger than the 4 KB range window is read whole and stored clean', async () => {
     const photo = await phonePhoto('jpeg', { width: 320, height: 240, noise: true });
@@ -793,6 +814,9 @@ describe('one finalize per upload at a time', () => {
     });
     expect(bucket.calls.remove).toEqual([[`${stem}.png`]]);
     expect(bucket.objects.has(THUMB)).toBe(true);
+    // Part 6: that removal leaves one audit line too.
+    const lines = vi.mocked(audit).mock.calls.filter(([e]) => e.event === 'security.upload_refused_removed');
+    expect(lines.map(([e]) => e.extra)).toEqual([{ surface: 'maintenance_photo', why: 'path_refusal', objects: 1 }]);
   });
 
   it("a duplicate refused by the person's minute limit no longer deletes the upload the first finalize is saving", async () => {
@@ -1253,5 +1277,71 @@ describe('a refusal never deletes the files of a photo another finalize recorded
     const { svc, looks } = setup();
     await svc.finalize(REQ, finalizeArgs('jpeg'));
     expect(looks()).toBe(1);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Security invariant (part 6, stage 6a): the finalize's sniff, declared type
+// and a whole-file look for a file hidden after the picture are the one
+// upload check's. A refusal answers invalid_image as before, deletes the
+// upload and the thumbnail name (unless the "is it recorded" look fails,
+// which deletes nothing, as before), records nothing in the table, tells the
+// uploader, and records exactly ONE malware / blocked event in the
+// organization with no path. The size, pixel and re-encode refusals above
+// are this path's own and record no security event.
+describe('the upload check (part 6)', () => {
+  const record = vi.mocked(recordSecurityEvent);
+  beforeEach(() => {
+    record.mockImplementation(async () => undefined);
+  });
+
+  it('a clean photo: stored and recorded as before, and no event', async () => {
+    bucket.put(`${stem}.jpg`, await phonePhoto('jpeg'), 'image/jpeg');
+    const { svc, inserted } = setup();
+    await svc.finalize(REQ, finalizeArgs('jpeg'));
+    expect(inserted).toHaveLength(1);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a web page declared as a JPEG', async () => HTML_PAGE, 'jpeg' as const, 'upload_wrong_type'],
+    ['a PNG declared as a JPEG', async () => phonePhoto('png'), 'jpeg' as const, 'upload_wrong_type'],
+    ['a real photo with an archive after it', async () => withArchiveAfter(await phonePhoto('jpeg')), 'jpeg' as const, 'upload_hidden_file'],
+  ])('%s: invalid_image, both names deleted, nothing recorded, the uploader told, one event', async (_what, make, kind, reason) => {
+    const path = `${stem}.${EXT[kind]}`;
+    bucket.put(path, await make(), MIME[kind]);
+    bucket.put(THUMB, clientThumb, 'image/jpeg');
+    const { svc, inserted } = setup();
+    await expect(svc.finalize(REQ, finalizeArgs(kind))).rejects.toMatchObject({
+      code: 'validation_error',
+      message: 'invalid_image',
+    });
+    expect(bucket.objects.has(path)).toBe(false);
+    expect(bucket.objects.has(THUMB)).toBe(false);
+    expect(inserted).toHaveLength(0);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ event: 'photo_rejected' }));
+    expectOneRefusal(record, { reason, organizationId: ORG }, [path, FILE, 'leak.']);
+    // The removal leaves one audit line, with no path.
+    const lines = vi.mocked(audit).mock.calls.filter(([e]) => e.event === 'security.upload_refused_removed');
+    expect(lines.map(([e]) => e.extra)).toEqual([{ surface: 'maintenance_photo', why: 'path_refusal', objects: 2 }]);
+    expect(JSON.stringify(lines)).not.toContain(FILE);
+  });
+
+  it('a refusal when the "is it recorded" look fails: one event, and nothing deleted (as before)', async () => {
+    bucket.put(`${stem}.jpg`, HTML_PAGE, 'image/jpeg');
+    const { svc } = setup({ lookFailsFrom: 2 });
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({ message: 'invalid_image' });
+    expect(bucket.objects.has(`${stem}.jpg`)).toBe(true);
+    expectOneRefusal(record, { reason: 'upload_wrong_type', organizationId: ORG });
+    expect(vi.mocked(audit).mock.calls.some(([e]) => e.event === 'security.upload_refused_removed')).toBe(false);
+  });
+
+  it('a recorder that fails: still refused, still deleted, still nothing recorded', async () => {
+    record.mockRejectedValue(new Error('recorder down'));
+    bucket.put(`${stem}.jpg`, HTML_PAGE, 'image/jpeg');
+    const { svc, inserted } = setup();
+    await expect(svc.finalize(REQ, finalizeArgs('jpeg'))).rejects.toMatchObject({ message: 'invalid_image' });
+    expect(bucket.objects.has(`${stem}.jpg`)).toBe(false);
+    expect(inserted).toHaveLength(0);
   });
 });

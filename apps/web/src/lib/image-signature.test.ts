@@ -352,6 +352,12 @@ describe('sniffer coverage vs the bucket allowlists it gates', () => {
       'image/webp',
       'image/avif',
     ]);
+    expect(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['user-avatars']).toEqual([
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/avif',
+    ]);
     expect(SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS['maintenance-photos']).toEqual([
       'image/png',
       'image/jpeg',

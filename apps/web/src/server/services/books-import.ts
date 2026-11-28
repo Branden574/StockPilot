@@ -11,6 +11,7 @@ import { reportError } from '@/lib/error-reporter';
 import { asReportableError } from '@/lib/error-text';
 import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
+import { checkUploadBytes } from '@/server/security/upload-checks';
 
 import { PLANS, bookCoverPath, isbnSearchKeys, isUnlimited, type PlanId } from '@stockpilot/core';
 
@@ -39,8 +40,8 @@ const MAX_COVER_BYTES = 5 * 1024 * 1024;
  *  server's `content-type` is attacker-influenced input, and Supabase
  *  Storage serves back whatever we upload it with — echoing e.g.
  *  `text/html` would turn our own storage origin into a stored-XSS host.
- *  Anything unrecognized is stored as a jpeg, matching the previous
- *  `ext` fallback. */
+ *  The kind is read from the cover's bytes (part 6); anything that is not
+ *  one of these three is not stored at all. */
 const COVER_MIME_BY_EXT = {
   png: 'image/png',
   webp: 'image/webp',
@@ -141,10 +142,22 @@ async function rehostCover(
 
     const arr = await readBoundedBody(res, MAX_COVER_BYTES);
     if (!arr || arr.byteLength === 0) return null;
-    const remoteType = res.headers.get('content-type') ?? '';
-    const ext =
-      remoteType.includes('png') ? 'png' :
-      remoteType.includes('webp') ? 'webp' : 'jpg';
+    // Part 6: the cover's type comes from its BYTES, never from the remote
+    // server's content-type (which used to pick the extension, with anything
+    // unrecognised stored as a JPEG). The one upload check reads the kind and
+    // looks for a file hidden after the picture. A refused cover is skipped
+    // like any other failed cover (the book keeps its original link) and is
+    // recorded nowhere: nobody sent it, so it is not a refused upload (a
+    // cover host answers a missing cover with a small placeholder picture of
+    // another kind). The backfill's own count of failed covers includes it.
+    const checked = await checkUploadBytes(arr, {
+      surface: 'book_cover',
+      accept: ['png', 'webp', 'jpeg'],
+      organizationId: ctx.organizationId,
+      notRecorded: 'server_fetched_cover',
+    });
+    if (!checked.ok) return null;
+    const ext = checked.kind === 'png' ? 'png' : checked.kind === 'webp' ? 'webp' : 'jpg';
     const contentType = COVER_MIME_BY_EXT[ext];
     // The books-import shape the database (0381) accepts: {org}/{item}/cover.{ext}.
     const path = bookCoverPath(ctx.organizationId, itemId, ext);

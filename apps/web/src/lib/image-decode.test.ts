@@ -1070,6 +1070,12 @@ describe('pngPassesUnchanged', () => {
     expect(await pngPassesUnchanged(PNG_8X8, LIMITS)).toBe(true);
   });
 
+  it('refused (re-made instead): any byte after the end chunk (part 6)', async () => {
+    const tail = Buffer.concat([Buffer.from(PNG_8X8), Buffer.from([0x50, 0x4b, 0x03, 0x04])]);
+    expect(await pngPassesUnchanged(tail, LIMITS)).toBe(false);
+    expect(await pngPassesUnchanged(Buffer.concat([Buffer.from(PNG_8X8), Buffer.from([0])]), LIMITS)).toBe(false);
+  });
+
   it.each(Object.entries(MALFORMED_PNGS))('refused: %s', async (_label, bytes) => {
     expect(await pngPassesUnchanged(bytes, LIMITS)).toBe(false);
   });
@@ -1218,6 +1224,12 @@ describe('jpegPassesUnchanged', () => {
     expect(jpegPassesUnchanged(progressive, LIMITS)).toBe(true);
   });
 
+  it('refused (re-made instead): any byte after the end marker (part 6)', async () => {
+    const baseline = await rgb(40, 30).jpeg().toBuffer();
+    expect(jpegPassesUnchanged(Buffer.concat([baseline, Buffer.from([0x50, 0x4b, 0x03, 0x04])]), LIMITS)).toBe(false);
+    expect(jpegPassesUnchanged(Buffer.concat([baseline, Buffer.from([0])]), LIMITS)).toBe(false);
+  });
+
   it.each(Object.entries(EXIF_JPEGS))('refused: %s', (_label, bytes) => {
     expect(jpegPassesUnchanged(bytes, LIMITS)).toBe(false);
   });
@@ -1307,10 +1319,11 @@ describe('jpegPassesUnchanged', () => {
     }
   });
 
-  it('bytes after EOI, which jay-peg skips, do not count', async () => {
+  it('bytes after EOI, which jay-peg skips, are never walked: the file is re-made, not passed on (part 6)', async () => {
     const plain = await rgb(40, 30).jpeg().toBuffer();
     const trailed = Buffer.concat([plain, repeated(JPEG_EMPTY_COMMENT, 1000), Buffer.alloc(64)]);
-    expect(jpegPassesUnchanged(trailed, LIMITS)).toBe(true);
+    expect(jpegPassesUnchanged(plain, LIMITS)).toBe(true);
+    expect(jpegPassesUnchanged(trailed, LIMITS)).toBe(false);
   });
 
   it('refused: a segment jay-peg would read at another length than it states', () => {

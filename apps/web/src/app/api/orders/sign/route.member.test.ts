@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { sha256Hex } from '@/lib/token-hash';
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
+import { TINY_PNG } from '@/test/upload-fixtures';
 
 /**
  * Migrations 0389 and 0392 (slices B and C, order secrets): how POST
@@ -65,7 +66,8 @@ const ORDER_ID = '0a000000-0000-4000-8000-000000000389';
 const ORG = 'org-l4l';
 const OTHER_ORG = 'org-other';
 const DRIVER = 'driver-1';
-const SIGNATURE = 'data:image/png;base64,' + 'A'.repeat(80);
+// A real (tiny, made-up) PNG: the upload check (part 6) reads the picture.
+const SIGNATURE = 'data:image/png;base64,' + Buffer.from(TINY_PNG).toString('base64');
 /** What the sign page's collector sends (signature-collector.tsx): a same-origin fetch. */
 const SIGN_PAGE = { origin: 'https://test.local', 'sec-fetch-site': 'same-origin' };
 

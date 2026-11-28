@@ -371,7 +371,9 @@ describe('the card in the panel', () => {
       );
       const words = dialog().textContent ?? '';
       expect(words.replace(/\/[a-z/<>?=.-]+/gi, ''), card.id).not.toMatch(/\d/);
-      expect(words, card.id).not.toMatch(/phishing|malware/i);
+      expect(words, card.id).not.toMatch(/phishing/i);
+      // Part 6: only the malware kind's own card says the word, to say what it means here.
+      if (card.id !== 'upload-checks') expect(words, card.id).not.toMatch(/malware/i);
       unmount();
     }
   });

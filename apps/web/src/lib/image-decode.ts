@@ -726,6 +726,9 @@ export async function pngPassesUnchanged(
     }
   }
   if (!ended || idat.length === 0) return false;
+  // Nothing may follow the end chunk of a PNG passed on as it is (part 6): a
+  // file with bytes after its end is re-made instead.
+  if (at !== bytes.length) return false;
   const rowBytes = Math.ceil((ihdr.width * ihdr.bitDepth * PNG_CHANNELS[ihdr.colourType]!) / 8);
   const expected = ihdr.height * (1 + rowBytes);
   let rows: Buffer;
@@ -791,7 +794,10 @@ function jpegFrameAsJayPegReadsIt(bytes: Uint8Array): JpegFrame | null {
     if (at + 2 > bytes.length || bytes[at] !== 0xff) return null;
     const marker = bytes[at + 1]!;
     parts += 1;
-    if (marker === 0xd9) return frame && scans > 0 && parts <= JPEG_MAX_PARSED_PARTS ? frame : null;
+    // Nothing may follow the end marker of a JPEG passed on as it is (part 6).
+    if (marker === 0xd9) {
+      return frame && scans > 0 && parts <= JPEG_MAX_PARSED_PARTS && at + 2 === bytes.length ? frame : null;
+    }
     if (at + 4 > bytes.length) return null;
     const length = (bytes[at + 2]! << 8) | bytes[at + 3]!;
     const end = at + 2 + length;

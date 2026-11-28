@@ -121,6 +121,25 @@ export const PASSKEY_SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, strin
   passkey_unexplained_sign_in: 'Passkey step passed without a passkey (found by the hourly check)',
 };
 
+/**
+ * The upload refusals the web records (part 6 of the security tools, apps/web
+ * server/security/upload-checks.ts): category malware, outcome blocked, one
+ * reason for each kind of verdict of the app's own file checks; and, outcome
+ * flagged, a refused file kept because a record the organization already had
+ * still points at it (review round 2). Never a file
+ * name, a path or any of the file's bytes: a row has no column for one. These
+ * words are read on the platform console and by an organization's owners and
+ * admins on its Blocked activity page, so they say what happened in plain
+ * words and never which check a file met.
+ */
+export const UPLOAD_SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
+  upload_wrong_type: 'A file of the wrong kind was refused',
+  upload_active_content: 'A file that could run something when opened was refused',
+  upload_hidden_file: 'A file with another file hidden inside it was refused',
+  upload_could_not_check: 'A file that could not be checked was refused',
+  upload_refused_in_use: 'A refused file that an earlier record still uses',
+};
+
 /** The reason codes this build writes, with the words admins read. */
 export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // Password guessing.
@@ -193,6 +212,8 @@ export const SECURITY_EVENT_REASON_LABELS: Readonly<Record<string, string>> = {
   // buffer (the web server) could list one by one: counted, not itemised.
   over_minute_cap: 'More events than could be listed',
   over_buffer_cap: 'More events than could be listed',
+  // Malware: a file the app's own checks refused at upload (part 6).
+  ...UPLOAD_SECURITY_EVENT_REASON_LABELS,
 };
 
 /** The words for a reason this build does not know. */
@@ -228,6 +249,24 @@ export function securityConsoleCategoryLabel(
   form: 'one' | 'kind' = 'one',
 ): string {
   if (category === 'phishing') return form === 'kind' ? 'Sign-in alerts' : 'Sign-in alert';
+  return securityEventCategoryLabel(category);
+}
+
+/**
+ * AN ORGANIZATION'S OWN PAGES' name for a category (part 6; the coordinator,
+ * 2026-11-24), the console's rule the other way round. The category whose code
+ * is malware holds files the app's own upload checks refused or could not
+ * check. Those checks are not an antivirus and a renamed file is not malware,
+ * so a member reads "Refused file" for one entry's kind and "Refused files"
+ * for the kind as a whole; every other category is securityEventCategoryLabel's.
+ * The platform console keeps "Malware" (securityConsoleCategoryLabel).
+ * console-category-label.guard.test.ts in the web pins who may call which.
+ */
+export function securityMemberCategoryLabel(
+  category: unknown,
+  form: 'one' | 'kind' = 'one',
+): string {
+  if (category === 'malware') return form === 'kind' ? 'Refused files' : 'Refused file';
   return securityEventCategoryLabel(category);
 }
 

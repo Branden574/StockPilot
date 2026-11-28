@@ -53,7 +53,7 @@
  * a global find-and-replace of `#xx` would let an innocuous run of text
  * assemble into a marker it never contained.
  */
-import { inflateSync } from 'node:zlib';
+import { constants as zlibConstants, inflateSync } from 'node:zlib';
 
 import type { SniffedFile } from './file-signature';
 
@@ -64,7 +64,10 @@ export type DocumentThreatCode =
   | 'pdf_rich_media'
   | 'pdf_encrypted'
   | 'pdf_scan_limit'
-  | 'appended_payload';
+  | 'appended_payload'
+  // The scan's own time or total-work budget ran out (part 6): the file could
+  // not be checked, which is refused like every other bound below.
+  | 'scan_budget';
 
 export type DocumentThreat = {
   code: DocumentThreatCode;
@@ -72,31 +75,12 @@ export type DocumentThreat = {
   detail: string;
 };
 
-/**
- * What the person who tried to upload actually sees.
- *
- * Every one of these names the specific problem AND the way out, because the
- * uploader is a warehouse manager holding a real invoice they need attached,
- * not an attacker. "Failed our security checks" with no route forward turns a
- * safe refusal into a support ticket. The one exception is the appended-payload
- * case, where there is no innocent explanation to offer.
+/*
+ * No sentence for a person lives here (lab walk 5, F3): what a person is told
+ * is one of three plain sentences in server/security/upload-checks.ts, none
+ * of which says what this scan looks for. The code above stays in the
+ * security event's reason (by its family), for admins and the console.
  */
-export const THREAT_MESSAGES: Record<DocumentThreatCode, string> = {
-  pdf_javascript:
-    'This PDF contains embedded JavaScript, which we do not accept. Open it and use Print to PDF to save a flat copy, then upload that.',
-  pdf_launch_action:
-    'This PDF contains an action that launches an external program, which we do not accept. Open it and use Print to PDF to save a flat copy, then upload that.',
-  pdf_embedded_file:
-    'This PDF has another file embedded inside it, which we do not accept. Open it and use Print to PDF to save a flat copy, then upload that.',
-  pdf_rich_media:
-    'This PDF contains embedded media, which we do not accept. Open it and use Print to PDF to save a flat copy, then upload that.',
-  pdf_encrypted:
-    'This PDF is password-protected, so we cannot check what is inside it. Open it, use Print to PDF to save an unprotected copy, then upload that.',
-  pdf_scan_limit:
-    'This PDF is too large or too complex for us to check safely. Open it and use Print to PDF to save a simpler copy, then upload that.',
-  appended_payload:
-    'This file has extra data hidden after the end of the image and could not be uploaded.',
-};
 
 // ───────────────────────── bounds ─────────────────────────
 //
@@ -125,6 +109,62 @@ const MAX_INFLATED_BYTES_PER_STREAM = 32 * 1024 * 1024;
 const MAX_TOTAL_INFLATED_BYTES = 256 * 1024 * 1024;
 
 /**
+ * The scan's TIME budget (part 6). Every bound above caps an amount; none
+ * capped the clock, and inflateSync is synchronous, so a hostile document
+ * could hold the request for as long as its streams took to inflate and
+ * read. The clock is read between steps (before each stream, before each
+ * trailer signature), so one step can run past it by at most what one step
+ * costs. Running out is a verdict (`scan_budget`), never a shrug, for the
+ * reason scanFlateStreams gives below. An honest document inside our upload
+ * limits is checked in milliseconds.
+ */
+export const SCAN_TIME_BUDGET_MS = 4_000;
+
+/**
+ * The scan's TOTAL-WORK budget (part 6): every byte any step reads counts
+ * once for each pass over it (the document's own text for each of its three
+ * passes, each stream's compressed bytes and what it inflated to, each
+ * image's bytes and its trailer once for each signature). Sized above what
+ * the bounds above already allow for the largest file any upload path takes
+ * (three passes over 25 MB, its streams, and the whole inflate budget), so
+ * it never refuses a document those bounds accept; it is the one ceiling on
+ * the whole scan whatever the file, the size or the caller. Running out is
+ * `scan_budget`.
+ */
+export const SCAN_WORK_BUDGET_BYTES = 512 * 1024 * 1024;
+
+/** What one scan may still spend, and the clock it reads. */
+interface ScanBudget {
+  deadline: number;
+  workLeft: number;
+  now: () => number;
+}
+
+/** Overrides for the two budgets and the clock: for tests, never for callers. */
+export interface ScanBudgetOptions {
+  timeBudgetMs?: number;
+  workBudgetBytes?: number;
+  now?: () => number;
+}
+
+function budgetOf(options: ScanBudgetOptions | undefined): ScanBudget {
+  const now = options?.now ?? (() => performance.now());
+  return {
+    deadline: now() + (options?.timeBudgetMs ?? SCAN_TIME_BUDGET_MS),
+    workLeft: options?.workBudgetBytes ?? SCAN_WORK_BUDGET_BYTES,
+    now,
+  };
+}
+
+/** Spends `units` of work and reads the clock: a verdict when either is spent, else null. */
+function spend(budget: ScanBudget, units: number): DocumentThreat | null {
+  budget.workLeft -= units;
+  if (budget.workLeft < 0) return { code: 'scan_budget', detail: 'total work budget spent' };
+  if (budget.now() > budget.deadline) return { code: 'scan_budget', detail: 'time budget spent' };
+  return null;
+}
+
+/**
  * PDF name tokens that mean active content, keyed by the DECODED name.
  *
  * DELIBERATELY NOT LISTED, and each for a reason:
@@ -139,6 +179,9 @@ const MAX_TOTAL_INFLATED_BYTES = 256 * 1024 * 1024;
  *    frequent, confusing refusal.
  *  - `/SubmitForm` and `/ImportData` move data rather than execute; they are a
  *    different (and much weaker) concern than the brief's "execution path".
+ *  - The script entry's short name. Three bytes of it turn up by chance in
+ *    compressed data, so it refused honest files in proportion to their size
+ *    (part 6 review); the actions that run a script are listed instead.
  *
  * The bar for this table is: no legitimate purchase order, invoice, packing
  * slip or delivery photo has any business containing it.
@@ -147,10 +190,6 @@ const PDF_ACTIVE_CONTENT: ReadonlyArray<
   readonly [name: string, code: DocumentThreatCode, detail: string]
 > = [
   ['JavaScript', 'pdf_javascript', '/JavaScript action'],
-  // The JS action's script entry. Not an abbreviation anything benign uses as
-  // a name: font subset tags are always six letters plus '+', so `/JS` cannot
-  // be one.
-  ['JS', 'pdf_javascript', '/JS script entry'],
   ['Launch', 'pdf_launch_action', '/Launch action'],
   ['EmbeddedFile', 'pdf_embedded_file', '/EmbeddedFile stream'],
   // The catalog-level name tree. Matched separately because the comparison is
@@ -159,6 +198,8 @@ const PDF_ACTIVE_CONTENT: ReadonlyArray<
   ['RichMedia', 'pdf_rich_media', '/RichMedia annotation'],
   ['Movie', 'pdf_rich_media', '/Movie annotation'],
   ['Sound', 'pdf_rich_media', '/Sound annotation'],
+  // The action that plays a media clip (part 6).
+  ['Rendition', 'pdf_rich_media', '/Rendition action'],
 ];
 
 /**
@@ -205,14 +246,21 @@ const APPENDED_PAYLOAD_SIGNATURES: ReadonlyArray<{
 export function scanDocumentBytes(
   data: Uint8Array,
   kind: SniffedFile['kind'],
+  options?: ScanBudgetOptions,
 ): DocumentThreat | null {
-  if (kind === 'pdf') return scanPdf(data);
-  return scanImageTrailer(data, kind);
+  const budget = budgetOf(options);
+  if (kind === 'pdf') return scanPdf(data, budget);
+  return scanImageTrailer(data, kind, budget);
 }
 
 // ───────────────────────── PDF ─────────────────────────
 
-function scanPdf(data: Uint8Array): DocumentThreat | null {
+function scanPdf(data: Uint8Array, budget: ScanBudget): DocumentThreat | null {
+  // The document's text is read twice below (the /Encrypt look and the
+  // active-content look), and the stream search walks it once more.
+  const over = spend(budget, data.byteLength * 3);
+  if (over) return over;
+
   // latin1 maps each byte to exactly one code unit and back, so the string is
   // a lossless view of the bytes. utf8 would MANGLE high bytes into U+FFFD and
   // silently destroy the very stream offsets we go on to slice.
@@ -231,7 +279,7 @@ function scanPdf(data: Uint8Array): DocumentThreat | null {
   if (direct) return direct;
 
   // …and again on what the compressed objects were hiding.
-  return scanFlateStreams(data, text);
+  return scanFlateStreams(data, text, budget);
 }
 
 function findActiveContent(text: string): DocumentThreat | null {
@@ -302,12 +350,15 @@ function decodePdfNameEscapes(raw: string): string {
  * Streams are located by their `stream` / `endstream` keywords rather than by
  * parsing the cross-reference table, because a PDF built to hide something is
  * exactly the PDF whose xref lies. Keyword scanning sees what is physically in
- * the file. It over-matches — the word "endstream" can occur inside binary
- * data — but an over-match yields a slice that is not Flate, which is the skip
- * case above. Under-matching is the failure mode that would matter, and this
- * does not under-match.
+ * the file. A stream is read as far as its data goes (a run that ends early
+ * is read up to where it ends, and a stream with no `endstream` up to the end
+ * of the file), and a stream written in hex or ASCII85 text is decoded first.
  */
-function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null {
+function scanFlateStreams(
+  data: Uint8Array,
+  text: string,
+  scanBudget: ScanBudget,
+): DocumentThreat | null {
   let budget = MAX_TOTAL_INFLATED_BYTES;
   let searchFrom = 0;
 
@@ -319,62 +370,255 @@ function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null
       return { code: 'pdf_scan_limit', detail: `more than ${MAX_STREAMS_INFLATED} streams` };
     }
 
-    // Skip the EOL the spec requires between `stream` and the data: CRLF or
-    // LF, never a bare CR. Starting one byte late corrupts the zlib header,
-    // the inflate throws Z_DATA_ERROR, and the stream is dropped as "not
-    // Flate" — a scanner reporting clean because it fed itself garbage.
+    // The clock, before each stream (part 6).
+    const late = spend(scanBudget, 0);
+    if (late) return late;
+
+    // The data starts after the line end that follows the keyword, and any
+    // white space before it is skipped: no Flate, hex or ASCII85 data starts
+    // with a white-space byte, so nothing of a stream is lost by it.
     let start = kw + 'stream'.length;
-    if (text.charCodeAt(start) === 0x0d && text.charCodeAt(start + 1) === 0x0a) start += 2;
-    else if (text.charCodeAt(start) === 0x0a) start += 1;
+    while (start < text.length && PDF_WHITE_SPACE.has(text.charCodeAt(start))) start += 1;
 
     const end = text.indexOf('endstream', start);
-    searchFrom = end === -1 ? kw + 'stream'.length : end + 'endstream'.length;
-    if (end === -1 || end <= start) continue;
+    // No `endstream` after this keyword, so none after any later one either:
+    // this stream is read to the end of the file, and it is the last.
+    const last = end === -1;
+    const stop = last ? data.length : end;
+    searchFrom = stop + 'endstream'.length;
 
-    // ═══ THE BUDGET IS A VERDICT BEFORE IT IS A NUMBER ═══
-    //
-    // Once the total inflate budget is spent, any further Flate stream is
-    // content we would not see. Refuse HERE, before touching zlib: passing
-    // `maxOutputLength: 0` to inflateSync throws ERR_OUT_OF_RANGE (Node
-    // requires >= 1), and the previous shape of this loop caught that in the
-    // generic "not Flate" branch below — so a document made of eight
-    // cap-sized streams followed by a /JavaScript stream scanned CLEAN: the
-    // payload was skipped as if it were a JPEG. Reproduced 2026-09-02 against
-    // the real module; the regression test builds exactly that file.
-    if (budget <= 0) {
-      return { code: 'pdf_scan_limit', detail: 'total inflate budget exhausted' };
+    if (stop > start) {
+      // ═══ THE BUDGET IS A VERDICT BEFORE IT IS A NUMBER ═══
+      //
+      // Once the total inflate budget is spent, any further Flate stream is
+      // content we would not see. Refuse HERE, before touching zlib: passing
+      // `maxOutputLength: 0` to inflateSync throws ERR_OUT_OF_RANGE (Node
+      // requires >= 1), and the previous shape of this loop caught that in the
+      // generic "not Flate" branch below — so a document made of eight
+      // cap-sized streams followed by a /JavaScript stream scanned CLEAN: the
+      // payload was skipped as if it were a JPEG. Reproduced 2026-09-02 against
+      // the real module; the regression test builds exactly that file.
+      if (budget <= 0) {
+        return { code: 'pdf_scan_limit', detail: 'total inflate budget exhausted' };
+      }
+
+      const raw = data.subarray(start, stop);
+      let inflated: Buffer | null = null;
+      const first = inflateBounded(raw, budget);
+      if ('threat' in first) return first.threat;
+      if ('bytes' in first) {
+        inflated = first.bytes;
+      } else {
+        // Not Flate as it stands: a stream written as hex or ASCII85 text
+        // (alone, or before a Flate filter) is decoded, its text scanned, and
+        // what it decodes to inflated in turn.
+        const decoded = decodeTextFilter(text, start, stop);
+        if (decoded && 'threat' in decoded) return decoded.threat;
+        if (decoded) {
+          const cost = spend(scanBudget, (stop - start) + decoded.bytes.byteLength);
+          if (cost) return cost;
+          const hit = findActiveContent(Buffer.from(decoded.bytes).toString('latin1'));
+          if (hit) return { ...hit, detail: `${hit.detail} (inside an encoded stream)` };
+          const second = inflateBounded(decoded.bytes, budget);
+          if ('threat' in second) return second.threat;
+          if ('bytes' in second) inflated = second.bytes;
+        }
+      }
+
+      if (inflated) {
+        budget -= inflated.byteLength;
+        // What this stream cost: its compressed bytes, and what it inflated to,
+        // read by the name scan below.
+        const over = spend(scanBudget, stop - start + inflated.byteLength);
+        if (over) return over;
+        const hit = findActiveContent(inflated.toString('latin1'));
+        if (hit) return { ...hit, detail: `${hit.detail} (inside a compressed stream)` };
+      }
     }
 
-    let inflated: Buffer;
-    try {
-      inflated = inflateSync(Buffer.from(data.subarray(start, end)), {
+    if (last) {
+      // The keywords still ahead are counted once (a file of keywords must not
+      // cost the square of its size), and as many as the stream ceiling refuse
+      // the document as they always did.
+      const ahead = MAX_STREAMS_INFLATED - n;
+      return countKeywordsFrom(text, kw + 'stream'.length, ahead) >= ahead
+        ? { code: 'pdf_scan_limit', detail: `more than ${MAX_STREAMS_INFLATED} streams` }
+        : null;
+    }
+  }
+}
+
+/** PDF white space: NUL, tab, line feed, form feed, carriage return, space. */
+const PDF_WHITE_SPACE: ReadonlySet<number> = new Set([0x00, 0x09, 0x0a, 0x0c, 0x0d, 0x20]);
+
+/**
+ * One bounded inflate. A run that ends early is read up to where it ends
+ * (what a reader would show of it). The two zlib answers that mean "these
+ * bytes are not Flate" are the skip; any other failure means content we did
+ * not see, and is a refusal.
+ */
+function inflateBounded(
+  bytes: Uint8Array,
+  budget: number,
+): { bytes: Buffer } | { skip: true } | { threat: DocumentThreat } {
+  try {
+    return {
+      bytes: inflateSync(Buffer.from(bytes), {
         maxOutputLength: Math.min(MAX_INFLATED_BYTES_PER_STREAM, budget),
-      });
-    } catch (e) {
-      const code = (e as { code?: string }).code;
-      // Only two outcomes mean "these bytes are not a Flate stream we could
-      // read": Z_DATA_ERROR (garbage / a JPEG / a font) and Z_BUF_ERROR (a
-      // truncated deflate run). Both are the honest skip. EVERYTHING else —
-      // ERR_BUFFER_TOO_LARGE (we chose to stop reading), ERR_OUT_OF_RANGE (an
-      // option we should never have produced), or a future zlib code — means
-      // content existed that we did not inspect, and a scanner that shrugs at
-      // its own errors reports clean on what it never looked at. Fail closed.
-      if (code === 'Z_DATA_ERROR' || code === 'Z_BUF_ERROR') {
-        continue; // not Flate — nothing was concealed here
-      }
-      return {
+        finishFlush: zlibConstants.Z_SYNC_FLUSH,
+      }),
+    };
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === 'Z_DATA_ERROR' || code === 'Z_BUF_ERROR') return { skip: true };
+    return {
+      threat: {
         code: 'pdf_scan_limit',
         detail:
           code === 'ERR_BUFFER_TOO_LARGE'
             ? 'a stream larger than we will decompress'
             : `decompression stopped (${code ?? 'unknown error'})`,
-      };
-    }
-
-    budget -= inflated.byteLength;
-    const hit = findActiveContent(inflated.toString('latin1'));
-    if (hit) return { ...hit, detail: `${hit.detail} (inside a compressed stream)` };
+      },
+    };
   }
+}
+
+/**
+ * A stream written as ASCIIHexDecode or ASCII85Decode text, decoded; null
+ * when the bytes from `from` are not that (the first character that is not
+ * the filter's alphabet or white space ends the attempt, so binary data costs
+ * one byte). The decoded size is held to the per-stream ceiling.
+ */
+function decodeTextFilter(
+  text: string,
+  from: number,
+  to: number,
+): { bytes: Uint8Array } | { threat: DocumentThreat } | null {
+  const first = text.charCodeAt(from);
+  const isHex = (c: number) => (c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
+  if (isHex(first)) {
+    const hex = decodeAsciiHex(text, from, to);
+    if (hex) return hex;
+  }
+  // ASCII85's alphabet holds the hex digits too, so a stream that was not
+  // hex is still tried as ASCII85.
+  if ((first >= 0x21 && first <= 0x75) || first === 0x7a) return decodeAscii85(text, from, to);
+  return null;
+}
+
+const TOO_LARGE_DECODED: DocumentThreat = {
+  code: 'pdf_scan_limit',
+  detail: 'a stream larger than we will decompress',
+};
+
+/** A byte buffer that grows as it is written, up to the per-stream ceiling. */
+class DecodedBytes {
+  private buf = new Uint8Array(4096);
+  length = 0;
+  /** False when one more byte would pass the ceiling. */
+  push(byte: number): boolean {
+    if (this.length >= this.buf.length) {
+      if (this.buf.length >= MAX_INFLATED_BYTES_PER_STREAM) return false;
+      const grown = new Uint8Array(Math.min(this.buf.length * 2, MAX_INFLATED_BYTES_PER_STREAM));
+      grown.set(this.buf);
+      this.buf = grown;
+    }
+    this.buf[this.length++] = byte;
+    return true;
+  }
+  bytes(): Uint8Array {
+    return this.buf.subarray(0, this.length);
+  }
+}
+
+/** ASCIIHexDecode: hex digit pairs up to `>`, white space ignored. */
+function decodeAsciiHex(
+  text: string,
+  from: number,
+  to: number,
+): { bytes: Uint8Array } | { threat: DocumentThreat } | null {
+  const out = new DecodedBytes();
+  let high = -1;
+  for (let i = from; i < to; i += 1) {
+    const c = text.charCodeAt(i);
+    if (PDF_WHITE_SPACE.has(c)) continue;
+    if (c === 0x3e /* > */) {
+      if (high >= 0 && !out.push(high << 4)) return { threat: TOO_LARGE_DECODED };
+      return out.length > 0 ? { bytes: out.bytes() } : null;
+    }
+    const v =
+      c >= 0x30 && c <= 0x39 ? c - 0x30 : c >= 0x41 && c <= 0x46 ? c - 0x37 : c >= 0x61 && c <= 0x66 ? c - 0x57 : -1;
+    if (v < 0) return null;
+    if (high < 0) {
+      high = v;
+    } else {
+      if (!out.push((high << 4) | v)) return { threat: TOO_LARGE_DECODED };
+      high = -1;
+    }
+  }
+  return null;
+}
+
+/** ASCII85Decode: an optional `<~`, groups of five up to `~>`, `z` for four zeros, white space ignored. */
+function decodeAscii85(
+  text: string,
+  from: number,
+  to: number,
+): { bytes: Uint8Array } | { threat: DocumentThreat } | null {
+  let i = from;
+  if (text.charCodeAt(i) === 0x3c && text.charCodeAt(i + 1) === 0x7e) i += 2;
+  const out = new DecodedBytes();
+  const group: number[] = [];
+  /** The group's value as `count` bytes (a short group is padded with `u`). */
+  const emit = (count: number): 'ok' | 'not_ascii85' | 'too_large' => {
+    let v = 0;
+    for (let k = 0; k < 5; k += 1) v = v * 85 + (group[k] ?? 84);
+    if (v > 0xffffffff) return 'not_ascii85';
+    for (let k = 0; k < count; k += 1) if (!out.push((v >>> (24 - 8 * k)) & 0xff)) return 'too_large';
+    return 'ok';
+  };
+  for (; i < to; i += 1) {
+    const c = text.charCodeAt(i);
+    if (PDF_WHITE_SPACE.has(c)) continue;
+    if (c === 0x7e /* ~ */) {
+      if (text.charCodeAt(i + 1) !== 0x3e || group.length === 1) return null;
+      if (group.length > 0) {
+        const tail = emit(group.length - 1);
+        if (tail === 'too_large') return { threat: TOO_LARGE_DECODED };
+        if (tail === 'not_ascii85') return null;
+      }
+      return out.length > 0 ? { bytes: out.bytes() } : null;
+    }
+    if (c === 0x7a /* z */ && group.length === 0) {
+      for (let k = 0; k < 4; k += 1) if (!out.push(0)) return { threat: TOO_LARGE_DECODED };
+      continue;
+    }
+    if (c < 0x21 || c > 0x75) return null;
+    group.push(c - 0x21);
+    if (group.length === 5) {
+      const full = emit(4);
+      if (full === 'too_large') return { threat: TOO_LARGE_DECODED };
+      if (full === 'not_ascii85') return null;
+      group.length = 0;
+    }
+  }
+  return null;
+}
+
+/**
+ * How many `stream` keywords start at or after `from`, counting at most
+ * `cap` (one pass, never more than the text once).
+ */
+function countKeywordsFrom(text: string, from: number, cap: number): number {
+  let count = 0;
+  let at = from;
+  while (count < cap) {
+    const kw = text.indexOf('stream', at);
+    if (kw === -1) break;
+    count += 1;
+    at = kw + 'stream'.length;
+  }
+  return count;
 }
 
 // ───────────────────────── images ─────────────────────────
@@ -391,7 +635,11 @@ function scanFlateStreams(data: Uint8Array, text: string): DocumentThreat | null
 function scanImageTrailer(
   data: Uint8Array,
   kind: Exclude<SniffedFile['kind'], 'pdf'>,
+  budget: ScanBudget,
 ): DocumentThreat | null {
+  // Finding the image's end reads it once, back from its last byte.
+  const over = spend(budget, data.byteLength);
+  if (over) return over;
   const end = imageDataEnd(data, kind);
   // null = we do not know where this format ends, so we cannot say anything
   // about what follows it. Reporting "clean" would be a guess; reporting a
@@ -401,6 +649,9 @@ function scanImageTrailer(
 
   const trailer = data.subarray(end);
   for (const sig of APPENDED_PAYLOAD_SIGNATURES) {
+    // Each signature reads the trailer once more (part 6).
+    const spent = spend(budget, trailer.byteLength);
+    if (spent) return spent;
     const at = sig.atStartOnly
       ? startsWith(trailer, sig.magic)
         ? 0
