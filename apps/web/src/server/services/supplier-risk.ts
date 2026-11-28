@@ -124,6 +124,24 @@ export const SUPPLIER_RISK_INVALID_REQUEST =
 /** A read's answer: the value, or that it could not be checked (never "nothing"). */
 export type SupplierRiskRead<T> = { state: 'ok'; value: T } | { state: 'could_not_check' };
 
+/**
+ * The register, read page by page: every row (`complete`), or, past
+ * SUPPLIER_RISK_REGISTER_MAX_PAGES pages, the rows read and `complete` false,
+ * which every page says out loud. Never a register cut without a word.
+ */
+export type SupplierRiskRegisterRead =
+  | { state: 'ok'; value: SupplierRiskRegisterRow[]; complete: boolean }
+  | { state: 'could_not_check' };
+
+/**
+ * Rows per page of the register read: the API's own cap on one answer
+ * (supabase/config.toml max_rows = 1000; POSTGREST_MAX_ROWS in
+ * server/loaders/inventory-list.ts). A page shorter than this is the last.
+ */
+export const SUPPLIER_RISK_REGISTER_PAGE_ROWS = 1000;
+/** Pages read at most (20,000 suppliers): past that, the register says it shows the first ones. */
+export const SUPPLIER_RISK_REGISTER_MAX_PAGES = 20;
+
 export type SupplierRiskSeat = 'member' | 'support' | 'unknown';
 export type SupplierState = 'active' | 'archived' | 'deleted';
 export type SupplierDueReminder = 'claimed' | 'sent' | 'not_sent';
@@ -836,26 +854,53 @@ export class SupplierRiskService {
     }
   }
 
-  /** The register: every active supplier, and every archived or deleted one with a review. */
-  async register(): Promise<SupplierRiskRead<SupplierRiskRegisterRow[]>> {
+  /**
+   * The register: every active supplier, and every archived or deleted one
+   * with a review. Read in pages of SUPPLIER_RISK_REGISTER_PAGE_ROWS by
+   * supplier id (each page after the last id of the one before), because the
+   * API answers at most that many rows at once: one read would cut a large
+   * register without a word (a reviewed supplier then read "Not reviewed").
+   * A page that fails makes the whole read could_not_check, never the pages
+   * before it shown as the register.
+   */
+  async register(): Promise<SupplierRiskRegisterRead> {
     assertMayUseSupplierRisk(this.ctx);
-    const read = await this.settleRead(
-      'supplier_risk_register',
-      this.ctx.supabase.rpc('supplier_risk_register', {
+    const rows: SupplierRiskRegisterRow[] = [];
+    const seen = new Set<string>();
+    let after: string | null = null;
+    for (let page = 0; page < SUPPLIER_RISK_REGISTER_MAX_PAGES; page += 1) {
+      let query = this.ctx.supabase.rpc('supplier_risk_register', {
         p_organization_id: this.ctx.organizationId,
-      }),
-    );
-    if (read.state !== 'ok') return read;
-    if (!Array.isArray(read.value)) {
-      report('supplier_risk_register', 'not_a_list', this.ctx.organizationId, 'error');
-      return { state: 'could_not_check' };
+      });
+      if (after !== null) query = query.gt('supplier_id', after);
+      const read = await this.settleRead(
+        'supplier_risk_register',
+        query.order('supplier_id', { ascending: true }).limit(SUPPLIER_RISK_REGISTER_PAGE_ROWS),
+      );
+      if (read.state !== 'ok') return read;
+      if (!Array.isArray(read.value)) {
+        report('supplier_risk_register', 'not_a_list', this.ctx.organizationId, 'error');
+        return { state: 'could_not_check' };
+      }
+      const raw = read.value as Array<Record<string, unknown>>;
+      for (const r of raw) {
+        const row = registerRowOf(r);
+        if (row && !seen.has(row.supplierId)) {
+          seen.add(row.supplierId);
+          rows.push(row);
+        }
+      }
+      if (raw.length < SUPPLIER_RISK_REGISTER_PAGE_ROWS) {
+        return { state: 'ok', value: rows, complete: true };
+      }
+      const last = text(raw[raw.length - 1]?.supplier_id);
+      if (!last) {
+        report('supplier_risk_register', 'no_page_key', this.ctx.organizationId, 'error');
+        return { state: 'could_not_check' };
+      }
+      after = last;
     }
-    return {
-      state: 'ok',
-      value: (read.value as Array<Record<string, unknown>>)
-        .map(registerRowOf)
-        .filter((r): r is SupplierRiskRegisterRow => r !== null),
-    };
+    return { state: 'ok', value: rows, complete: false };
   }
 
   /** Every version of this organization's reviews of one supplier, newest first. */

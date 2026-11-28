@@ -254,6 +254,12 @@ export function SuppliersManager({
                           <span className="text-muted-foreground">
                             {SUPPLIER_RISK_COULD_NOT_CHECK_CELL}
                           </span>
+                        ) : risk?.state === 'ok' && !risk.complete && riskCell === null ? (
+                          // Past the rows the register could read: not known,
+                          // never "Not reviewed".
+                          <span className="text-muted-foreground">
+                            {SUPPLIER_RISK_COULD_NOT_CHECK_CELL}
+                          </span>
                         ) : (
                           <SupplierRiskCellView cell={riskCell} />
                         )}

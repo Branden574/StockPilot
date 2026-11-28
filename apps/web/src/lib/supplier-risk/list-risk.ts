@@ -29,7 +29,8 @@ export interface SupplierRiskListCell {
 /**
  * The Suppliers list's view of the vendor reviews, for an owner or admin:
  *   - ok: one cell per supplier in the register (a supplier missing from it
- *     has no cell, and the list says "Not reviewed" only for an active one);
+ *     has no cell, and the list says "Not reviewed" only for an active one,
+ *     and only when the register was read whole: else "Could not check");
  *   - could_not_check: the register could not be read (0481 not there yet,
  *     a failed read): every cell says so, never "Not reviewed";
  *   - step_up: the authenticator step is owed, so nothing was read; the
@@ -37,7 +38,13 @@ export interface SupplierRiskListCell {
  * Null for everyone else: no column and no Review control.
  */
 export type SuppliersRiskView =
-  | { state: 'ok'; seat: SupplierRiskSeat; bySupplier: Record<string, SupplierRiskListCell> }
+  | {
+      state: 'ok';
+      seat: SupplierRiskSeat;
+      /** The register was read whole: a supplier missing from it was not reviewed. */
+      complete: boolean;
+      bySupplier: Record<string, SupplierRiskListCell>;
+    }
   | { state: 'could_not_check' }
   | { state: 'step_up' };
 
@@ -80,7 +87,7 @@ export async function loadSuppliersRiskView(
         overridden: row.overridden,
       };
     }
-    return { state: 'ok', seat, bySupplier };
+    return { state: 'ok', seat, complete: read.complete, bySupplier };
   } catch (e) {
     if (stepUpOwed(e)) return { state: 'step_up' };
     if (e instanceof ServiceError && e.code === 'forbidden') return null;

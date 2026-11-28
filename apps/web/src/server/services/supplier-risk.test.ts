@@ -17,6 +17,7 @@ import {
   makeSupabaseStub,
   type MockCall,
   type QueryResult,
+  servedLikePostgrest,
 } from '@/test/supabase-mock';
 
 /**
@@ -54,6 +55,8 @@ import {
   SUPPLIER_RISK_DRAFT_MOVED,
   SUPPLIER_RISK_FORBIDDEN,
   SUPPLIER_RISK_NOTHING_SAVED,
+  SUPPLIER_RISK_REGISTER_MAX_PAGES,
+  SUPPLIER_RISK_REGISTER_PAGE_ROWS,
   SUPPLIER_RISK_SEAT_UNKNOWN,
   SupplierRiskService,
   supplierRiskRefusalOf,
@@ -303,7 +306,7 @@ describe('the gate: the module, then the authenticator step, then owners and adm
         { 'rpc:supplier_risk_register': { data: [], error: null } },
         { role },
       );
-      expect(await svc.register()).toEqual({ state: 'ok', value: [] });
+      expect(await svc.register()).toEqual({ state: 'ok', value: [], complete: true });
       expect(stub.rpcCalls).toEqual([
         { name: 'supplier_risk_register', args: { p_organization_id: ORG } },
       ]);
@@ -949,5 +952,64 @@ describe("the history: the database's own record of a supplier's reviews, newest
   it('an answer that is not a list is could_not_check', async () => {
     const { svc } = setup({ 'rpc:supplier_risk_events': { data: { rows: [] }, error: null } });
     expect(await svc.listEvents(SUPPLIER, null)).toEqual({ state: 'could_not_check' });
+  });
+});
+
+describe('the register past the API row cap: every page is read, never cut silently (S7)', () => {
+  /** n register rows; supplier ids in order, as the database's uuids compare. */
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      supplier_id: `5a5a5a5a-0000-4000-8000-${String(i + 1).padStart(12, '0')}`,
+      supplier_name: `Example Supply Co ${i + 1}`,
+      supplier_state: 'active',
+      review_due: 'not_reviewed',
+    }));
+
+  it('2,500 suppliers: three pages by supplier id, every row, complete', async () => {
+    const all = rows(2500);
+    const { stub, svc } = setup({ 'rpc:supplier_risk_register': servedLikePostgrest(all) });
+    const read = await svc.register();
+    if (read.state !== 'ok') throw new Error('expected ok');
+    expect(read.complete).toBe(true);
+    expect(read.value).toHaveLength(2500);
+    expect(new Set(read.value.map((r) => r.supplierId)).size).toBe(2500);
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual([
+      'supplier_risk_register',
+      'supplier_risk_register',
+      'supplier_risk_register',
+    ]);
+    for (const c of stub.rpcCalls) expect(c.args).toEqual({ p_organization_id: ORG });
+  });
+
+  it('exactly one full page: the next page is read and found empty', async () => {
+    const { stub, svc } = setup({
+      'rpc:supplier_risk_register': servedLikePostgrest(rows(SUPPLIER_RISK_REGISTER_PAGE_ROWS)),
+    });
+    const read = await svc.register();
+    expect(read.state === 'ok' && read.value.length).toBe(SUPPLIER_RISK_REGISTER_PAGE_ROWS);
+    expect(read.state === 'ok' && read.complete).toBe(true);
+    expect(stub.rpcCalls).toHaveLength(2);
+  });
+
+  it('more than the pages it reads: the rows read, said to be incomplete', async () => {
+    const most = SUPPLIER_RISK_REGISTER_MAX_PAGES * SUPPLIER_RISK_REGISTER_PAGE_ROWS;
+    const { stub, svc } = setup({ 'rpc:supplier_risk_register': servedLikePostgrest(rows(most + 1)) });
+    const read = await svc.register();
+    if (read.state !== 'ok') throw new Error('expected ok');
+    expect(read.complete).toBe(false);
+    expect(read.value).toHaveLength(most);
+    expect(stub.rpcCalls).toHaveLength(SUPPLIER_RISK_REGISTER_MAX_PAGES);
+  });
+
+  it('a later page that fails is could_not_check: never the first pages shown as the whole', async () => {
+    const all = rows(1500);
+    const served = servedLikePostgrest(all);
+    const { svc } = setup({
+      'rpc:supplier_risk_register': (call: MockCall) =>
+        call.methods.includes('gt')
+          ? { data: null, error: { message: 'boom', code: '57014' } }
+          : served(call),
+    });
+    expect(await svc.register()).toEqual({ state: 'could_not_check' });
   });
 });

@@ -53,7 +53,7 @@ import {
   type SupplierRiskHistoryRow,
   type SupplierRiskPerson,
   type SupplierRiskRead,
-  type SupplierRiskRegisterRow,
+  type SupplierRiskRegisterRead,
   type SupplierRiskReview,
   type SupplierRiskSeat,
 } from '@/server/services/supplier-risk';
@@ -129,7 +129,7 @@ export default async function SupplierRiskReviewPage({
   // The history page to read ('<when>~<event id>', the service's cursor), or the newest.
   const historyParam = typeof query.history === 'string' ? query.history : null;
 
-  let register: SupplierRiskRead<SupplierRiskRegisterRow[]>;
+  let register: SupplierRiskRegisterRead;
   let history: SupplierRiskRead<SupplierRiskHistoryRow[]>;
   let seat: SupplierRiskSeat;
   try {
@@ -173,6 +173,20 @@ export default async function SupplierRiskReviewPage({
     );
   }
   const row = register.value.find((r) => r.supplierId.toLowerCase() === supplierId);
+  if (!row && !register.complete) {
+    // Past the rows the register could read: not known, so never Page not found.
+    return (
+      <div className={PAGE} data-glass-page="ops" data-glass-view="suppliers">
+        {header('Vendor review')}
+        <StatePanel
+          kind="failed"
+          live="polite"
+          title={SUPPLIER_RISK_COULD_NOT_CHECK}
+          description={`This supplier is not among the first ${register.value.length.toLocaleString('en-US')} suppliers this page could read of the register, so its review cannot be shown here.`}
+        />
+      </div>
+    );
+  }
   if (!row) notFound();
 
   const versions = history.value;

@@ -9,7 +9,7 @@ import {
   type VendorRiskSeverity,
 } from '@stockpilot/core';
 
-import { csvFilename, toCsv } from '@/lib/csv';
+import { csvFilename, csvMetaLine, toCsv } from '@/lib/csv';
 
 import {
   SUPPLIER_RISK_DUE_REMINDER_NOT_SENT,
@@ -34,6 +34,18 @@ import {
 export interface SupplierRiskCsvOptions {
   /** The organization's zone (resolved). */
   timeZone: string;
+  /**
+   * The register was read whole. When it was not (past the pages the server
+   * reads), the file's FIRST line says it holds only the first rows.
+   */
+  complete: boolean;
+}
+
+/** The first line of a CSV that does not hold every supplier. */
+export function supplierRiskCsvIncompleteLine(shown: number): string {
+  return csvMetaLine(
+    `This file holds the first ${shown.toLocaleString('en-US')} suppliers only: the register has more than the page could read.`,
+  );
 }
 
 export interface SupplierRiskCsvRow {
@@ -81,7 +93,7 @@ export function supplierRiskRegisterCsv(
   rows: readonly SupplierRiskCsvRow[],
   options: SupplierRiskCsvOptions,
 ): string {
-  return toCsv(
+  const table = toCsv(
     [...SUPPLIER_RISK_CSV_HEADER],
     rows.map((r) => ({
       Supplier: r.supplierName,
@@ -105,6 +117,7 @@ export function supplierRiskRegisterCsv(
       Version: r.version ?? '',
     })),
   );
+  return options.complete ? table : `${supplierRiskCsvIncompleteLine(rows.length)}\n${table}`;
 }
 
 export function supplierRiskRegisterCsvFilename(): string {

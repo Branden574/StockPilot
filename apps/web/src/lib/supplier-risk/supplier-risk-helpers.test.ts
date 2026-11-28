@@ -101,7 +101,7 @@ describe('the register CSV', () => {
           nameChanged: true,
         }),
       ],
-      { timeZone: 'UTC' },
+      { timeZone: 'UTC', complete: true },
     );
     const [header, a, b] = cells(csv);
     expect(header).toEqual([...SUPPLIER_RISK_CSV_HEADER]);
@@ -129,7 +129,7 @@ describe('the register CSV', () => {
             reviewedAsName: 'Old Co',
           }),
         ],
-        { timeZone: 'UTC' },
+        { timeZone: 'UTC', complete: true },
       ),
     );
     expect(row?.[4]).toBe('Not reviewed');
@@ -140,15 +140,36 @@ describe('the register CSV', () => {
     const [, tokyo] = cells(
       supplierRiskRegisterCsv([csvRow({ reviewedAt: '2026-11-27T16:30:00Z' })], {
         timeZone: 'Asia/Tokyo',
+        complete: true,
       }),
     );
     expect(tokyo?.[14]).toBe('2026-11-28');
     const [, pacific] = cells(
       supplierRiskRegisterCsv([csvRow({ reviewedAt: '2026-11-28T03:00:00Z' })], {
         timeZone: 'America/Los_Angeles',
+        complete: true,
       }),
     );
     expect(pacific?.[14]).toBe('2026-11-27');
+  });
+});
+
+describe('a register cut at what the page could read (S7)', () => {
+  it('the CSV says so on its first line, then the header', () => {
+    const csv = supplierRiskRegisterCsv([csvRow(), csvRow()], {
+      timeZone: 'UTC',
+      complete: false,
+    });
+    const [first, header] = csv.split('\n');
+    expect(first).toBe(
+      '"# This file holds the first 2 suppliers only: the register has more than the page could read."',
+    );
+    expect(header).toBe(SUPPLIER_RISK_CSV_HEADER.join(','));
+  });
+
+  it('a complete register: the header is the first line', () => {
+    const csv = supplierRiskRegisterCsv([csvRow()], { timeZone: 'UTC', complete: true });
+    expect(csv.split('\n')[0]).toBe(SUPPLIER_RISK_CSV_HEADER.join(','));
   });
 });
 

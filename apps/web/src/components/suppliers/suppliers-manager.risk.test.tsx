@@ -54,6 +54,7 @@ const ROWS = [row(A, 'Example Supply Co'), row(B, 'Sample Paper Ltd')];
 const OK: SuppliersRiskView = {
   state: 'ok',
   seat: 'member',
+  complete: true,
   bySupplier: {
     [A]: {
       result: 'approve_with_conditions',
@@ -135,6 +136,7 @@ describe('the Risk column and the Review link', () => {
         risk={{
           state: 'ok',
           seat: 'member',
+          complete: true,
           bySupplier: { [A]: OK.state === 'ok' ? OK.bySupplier[A]! : null! },
         }}
       />,
@@ -166,6 +168,7 @@ describe('the Risk column and the Review link', () => {
         risk={{
           state: 'ok',
           seat: 'member',
+          complete: true,
           bySupplier: {
             [A]: {
               result: 'approve',
@@ -182,5 +185,23 @@ describe('the Risk column and the Review link', () => {
     const cell = document.querySelector('[data-slot="supplier-risk-cell"]')!;
     expect(cell.textContent).toContain('Approve (set by an admin)');
     expect(screen.queryByText('Approve', { exact: true })).toBeNull();
+  });
+
+  it('a supplier missing from a register that was not read whole is "Could not check", never Not reviewed (S7)', () => {
+    render(
+      <SuppliersManager
+        initial={ROWS}
+        view="active"
+        canManage
+        risk={{
+          state: 'ok',
+          seat: 'member',
+          complete: false,
+          bySupplier: { [A]: OK.state === 'ok' ? OK.bySupplier[A]! : null! },
+        }}
+      />,
+    );
+    const cells = Array.from(document.querySelectorAll('[data-slot="supplier-risk-cell"]'));
+    expect(cells[1]?.textContent).toBe('Could not check');
   });
 });

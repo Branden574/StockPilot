@@ -1,10 +1,17 @@
 import { render, screen } from '@testing-library/react';
 import * as React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AUTHENTICATOR_SET_UP_URL } from '@stockpilot/core';
 
-import { makeServiceContext, makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
+import {
+  makeServiceContext,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type MockCall,
+  type QueryResult,
+} from '@/test/supabase-mock';
 
 /**
  * Security invariant: the vendor risk register (/dashboard/suppliers/risk),
@@ -78,7 +85,9 @@ function registerRow(n: number, over: Record<string, unknown> = {}) {
   };
 }
 
-function useRegister(answer: QueryResult, over: Parameters<typeof makeServiceContext>[1] = {}) {
+function useRegister(
+  answer: QueryResult | ((call: MockCall) => QueryResult),
+  over: Parameters<typeof makeServiceContext>[1] = {}) {
   const stub = makeSupabaseStub({ 'rpc:supplier_risk_register': answer });
   h.ctx = makeServiceContext(stub.client, { organizationId: ORG, role: 'admin', ...over });
   return stub;
@@ -238,5 +247,17 @@ describe('what an owner or admin sees', () => {
     expect(cell.textContent).toContain('Approve (set by an admin)');
     expect(cell.textContent).toMatch(/The rules gave: Do not use/);
     expect(screen.queryByText('Approve', { exact: true })).toBeNull();
+  });
+
+  it('a register past what the page reads says "Showing the first N suppliers" (S7)', async () => {
+    const many = Array.from({ length: 20_001 }, (_, i) => registerRow(i + 1));
+    useRegister(servedLikePostgrest(many));
+    // 20,000 rows: rendered to markup (a DOM of that size is too slow for a unit test).
+    const html = renderToStaticMarkup(await SupplierRiskRegisterPage());
+    const box = document.createElement('div');
+    box.innerHTML = html.slice(0, html.indexOf('<table'));
+    const note = box.querySelector('[data-slot="supplier-risk-register-incomplete"]');
+    expect(note?.textContent).toMatch(/^Showing the first 20,000 suppliers\./);
+    expect(note?.querySelector('a')?.getAttribute('href')).toBe('/dashboard/suppliers');
   });
 });

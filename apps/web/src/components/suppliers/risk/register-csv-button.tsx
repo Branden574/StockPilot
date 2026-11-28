@@ -17,13 +17,16 @@ import {
 export function RegisterCsvButton({
   rows,
   timeZone,
+  complete,
 }: {
   rows: SupplierRiskCsvRow[];
   /** The organization's zone (resolved): "Reviewed on" is its day. */
   timeZone: string;
+  /** Every supplier was read; when not, the file's first line says so. */
+  complete: boolean;
 }) {
   function download() {
-    const blob = new Blob([supplierRiskRegisterCsv(rows, { timeZone })], {
+    const blob = new Blob([supplierRiskRegisterCsv(rows, { timeZone, complete })], {
       type: 'text/csv;charset=utf-8',
     });
     const url = URL.createObjectURL(blob);

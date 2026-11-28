@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 
 import { resolveOrgTimezone } from '@stockpilot/core';
 
@@ -19,8 +20,7 @@ import {
   assertMayUseSupplierRisk,
   SUPPLIER_RISK_COULD_NOT_CHECK,
   SupplierRiskService,
-  type SupplierRiskRead,
-  type SupplierRiskRegisterRow,
+  type SupplierRiskRegisterRead,
 } from '@/server/services/supplier-risk';
 
 // The Liquid Glass operations composition (every page under suppliers draws
@@ -58,7 +58,7 @@ export default async function SupplierRiskRegisterPage() {
     sendSupplierRiskRefusalAway(e, THIS_PAGE);
   }
 
-  let read: SupplierRiskRead<SupplierRiskRegisterRow[]>;
+  let read: SupplierRiskRegisterRead;
   let timezone: string | null | undefined;
   try {
     let org;
@@ -84,9 +84,28 @@ export default async function SupplierRiskRegisterPage() {
         subline="Every supplier's vendor review: the result, the risk left, the open items and when the next review is due. Overdue first."
         back={<PageHeaderBackLink href="/dashboard/suppliers">← Suppliers</PageHeaderBackLink>}
         actions={
-          read.state === 'ok' ? <RegisterCsvButton rows={rows} timeZone={timeZone} /> : null
+          read.state === 'ok' ? (
+            <RegisterCsvButton rows={rows} timeZone={timeZone} complete={read.complete} />
+          ) : null
         }
       />
+
+      {read.state === 'ok' && !read.complete ? (
+        // Past the pages the server reads: said, never cut without a word.
+        <p
+          role="status"
+          className="border-warning/40 bg-warning-wash text-foreground rounded-md border px-3 py-2 text-[13px]"
+          data-slot="supplier-risk-register-incomplete"
+        >
+          Showing the first {rows.length.toLocaleString('en-US')} suppliers. The register holds more
+          than this page can read at once, so the others are not shown here or in the CSV (its first
+          line says so). Find a supplier on the{' '}
+          <Link href="/dashboard/suppliers" className="text-accent underline-offset-4 hover:underline">
+            Suppliers list
+          </Link>{' '}
+          and open its review from there.
+        </p>
+      ) : null}
 
       {read.state === 'could_not_check' ? (
         <StatePanel

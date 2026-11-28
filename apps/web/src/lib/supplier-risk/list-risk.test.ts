@@ -96,6 +96,7 @@ describe('loadSuppliersRiskView', () => {
     expect(await loadSuppliersRiskView(ctx)).toEqual({
       state: 'ok',
       seat: 'member',
+      complete: true,
       bySupplier: {
         [A.toLowerCase()]: {
           result: 'approve',

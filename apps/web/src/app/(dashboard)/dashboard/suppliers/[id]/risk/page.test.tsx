@@ -7,6 +7,7 @@ import { VENDOR_RISK_ACT_AS_REFUSAL_WORDS, vendorRiskQuestionsFor } from '@stock
 import {
   makeServiceContext,
   makeSupabaseStub,
+  servedLikePostgrest,
   type MockCall,
   type QueryResult,
 } from '@/test/supabase-mock';
@@ -139,7 +140,7 @@ const reviewRow = (id: string, over: Record<string, unknown> = {}) => ({
 });
 
 interface Setup {
-  register?: QueryResult;
+  register?: QueryResult | ((call: MockCall) => QueryResult);
   history?: QueryResult;
   review?: (id: string) => QueryResult;
   seat?: QueryResult;
@@ -459,5 +460,19 @@ describe("the supplier's name in the questions for the vendor (S4)", () => {
     expect(questions.value).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/);
     const header = container.querySelector('header') ?? container;
     expect(header.querySelector('bdi')?.textContent).toBe('Example\nSupply \u202eCo\u0007\u200b');
+  });
+});
+
+describe('a register past what the page reads (S7)', () => {
+  it('a supplier not among the rows read is "could not check", never Page not found', async () => {
+    // 20,000 suppliers whose ids sort before this one: it is past the last page read.
+    const before = Array.from({ length: 20_000 }, (_, i) =>
+      registerRow({ supplier_id: `1a5a5a5a-0000-4000-8000-${String(i).padStart(12, '0')}` }),
+    );
+    useStub({ register: servedLikePostgrest([...before, registerRow()]) });
+    expect(await thrown()).toBe('rendered');
+    await page();
+    expect(screen.getByText(/is not among the first 20,000 suppliers this page could read/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Save draft' })).toBeNull();
   });
 });
