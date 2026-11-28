@@ -189,6 +189,8 @@ class FakeBucket {
     upload: [] as Array<{ path: string; contentType: string | undefined; upsert: boolean | undefined }>,
     remove: [] as string[][],
   };
+  /** The signal each download() was handed (storage-js passes it to fetch). */
+  downloadSignals: Array<AbortSignal | null> = [];
 
   put(path: string, bytes: Uint8Array, contentType: string) {
     this.objects.set(path, { bytes: new Uint8Array(bytes), contentType });
@@ -203,8 +205,9 @@ class FakeBucket {
       error: null,
     };
   }
-  async download(path: string) {
+  async download(path: string, _options?: unknown, parameters?: { signal?: AbortSignal }) {
     this.calls.download.push(path);
+    this.downloadSignals.push(parameters?.signal ?? null);
     const obj = this.objects.get(path);
     if (this.failDownload || !obj) return { data: null, error: { message: 'Object not found' } };
     const bytes = this.downloadOverride ?? obj.bytes;
@@ -394,6 +397,19 @@ describe('finalize stores the photo without its metadata (real sharp)', () => {
       expect(res).toEqual({ id: 'att-1', width: 60, height: 30 });
     },
   );
+
+  it('the whole read is a download with a signal of its own, aborted once it has answered, so no second copy is kept (review round 3, R3-6)', async () => {
+    const photo = await phonePhoto('jpeg', { width: 320, height: 240, noise: true });
+    bucket.put(`${stem}.jpg`, photo, 'image/jpeg');
+    const { svc } = setup();
+
+    await svc.finalize(REQ, finalizeArgs('jpeg'));
+
+    expect(bucket.calls.download).toEqual([`${stem}.jpg`]);
+    expect(bucket.downloadSignals).toHaveLength(1);
+    expect(bucket.downloadSignals[0]).toBeInstanceOf(AbortSignal);
+    expect(bucket.downloadSignals[0]!.aborted).toBe(true);
+  });
 
   it('a photo larger than the 4 KB range window is read whole and stored clean', async () => {
     const photo = await phonePhoto('jpeg', { width: 320, height: 240, noise: true });

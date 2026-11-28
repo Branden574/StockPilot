@@ -30,6 +30,7 @@ import {
   exceptionEvidenceUploadNames,
   isValidStoragePath,
 } from '@/lib/storage-path';
+import { withOwnSignal } from '@/lib/storage-steps';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
 import { checkUploadBytes, removeAndAudit } from '@/server/security/upload-checks';
@@ -600,9 +601,13 @@ export function normalizeCapturedAt(
   return new Date(at).toISOString();
 }
 
+/**
+ * The whole object, or null when it cannot be read. With a signal of its own,
+ * so Next's fetch keeps no second copy of it (review round 3, R3-6).
+ */
 async function downloadWhole(store: AdminStore, path: string): Promise<Uint8Array | null> {
   try {
-    const { data, error } = await store.download(path);
+    const { data, error } = await withOwnSignal((signal) => store.download(path, undefined, { signal }));
     if (error || !data) return null;
     return new Uint8Array(await data.arrayBuffer());
   } catch {

@@ -15,6 +15,7 @@ import { reencodeWithoutMetadata } from '@/lib/image-reencode';
 import { MIME_FOR_KIND, SNIFFER_GATED_BUCKET_MIME_ALLOWLISTS, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
+import { withOwnSignal } from '@/lib/storage-steps';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { uploadKindsForMimes } from '@/lib/upload-inspect';
 import { checkUploadBytes, checkUploadPrefix, removeAndAudit } from '@/server/security/upload-checks';
@@ -108,10 +109,13 @@ const ALREADY_RECORDED = 'This photo was already recorded.';
 type AdminClient = ReturnType<typeof createAdminClient>;
 type AdminBucket = ReturnType<AdminClient['storage']['from']>;
 
-/** The whole object, or null when it cannot be read. */
+/**
+ * The whole object, or null when it cannot be read. With a signal of its own,
+ * so Next's fetch keeps no second copy of it (review round 3, R3-6).
+ */
 async function downloadWhole(store: AdminBucket, path: string): Promise<Uint8Array | null> {
   try {
-    const { data, error } = await store.download(path);
+    const { data, error } = await withOwnSignal((signal) => store.download(path, undefined, { signal }));
     if (error || !data) return null;
     return new Uint8Array(await data.arrayBuffer());
   } catch {

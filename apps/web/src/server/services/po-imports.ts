@@ -54,6 +54,7 @@ import {
 import { parsePoFile, type ParseSourceType } from '@/lib/po-parser';
 import { extractPoFromMedia, SCAN_MODEL_NAME } from '@/lib/po-scan/extract';
 import { isValidStoragePath, poImportPathShape } from '@/lib/storage-path';
+import { withOwnSignal } from '@/lib/storage-steps';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { auditRemoval, checkUploadBytes, removeAndAudit } from '@/server/security/upload-checks';
 import {
@@ -1349,9 +1350,13 @@ export class PoImportsService {
     let rawText: string | null = null;
     const sourceType: ParseSourceType = (header.source_type as string) === 'pdf' ? 'pdf' : 'csv';
     try {
-      const { data: blob, error: dlErr } = await this.ctx.supabase.storage
-        .from('po-imports')
-        .download(header.storage_path as string);
+      // With a signal of its own, so Next's fetch keeps no second copy of
+      // the file (review round 3, R3-6).
+      const { data: blob, error: dlErr } = await withOwnSignal((signal) =>
+        this.ctx.supabase.storage
+          .from('po-imports')
+          .download(header.storage_path as string, undefined, { signal }),
+      );
       if (dlErr || !blob) {
         throw new Error(dlErr?.message ?? 'storage download failed');
       }

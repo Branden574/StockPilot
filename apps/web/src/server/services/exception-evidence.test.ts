@@ -438,6 +438,20 @@ describe('finalize', () => {
     );
   });
 
+  it('the whole read is a download with a signal of its own, aborted once it has answered, so no second copy is kept (review round 3, R3-6)', async () => {
+    const { svc, storage } = setup();
+    await svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg', capturedAt: '2026-09-27T11:50:00Z', note: 'x' });
+    expect(storage.download).toHaveBeenCalledTimes(1);
+    const [path, , parameters] = storage.download.mock.calls[0] as unknown as [
+      string,
+      unknown,
+      { signal?: AbortSignal } | undefined,
+    ];
+    expect(path).toBe(PATH);
+    expect(parameters?.signal).toBeInstanceOf(AbortSignal);
+    expect(parameters!.signal!.aborted).toBe(true);
+  });
+
   it('each finalize names its own thumbnail: two uploads never share one', async () => {
     const a = setup();
     await a.svc.finalize(OCC, { path: PATH, declaredMime: 'image/jpeg' });

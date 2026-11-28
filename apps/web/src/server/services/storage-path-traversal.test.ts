@@ -426,7 +426,10 @@ describe('ExceptionEvidenceService.finalize — HI-8', () => {
     // (absent) upload removed; no row can follow. No thumbnail was written,
     // so none is removed, and never a name derived from the upload's uuid
     // (review finding 2026-09-27).
-    expect(download).toHaveBeenCalledWith(`${ORG}/${ENTITY}/${FILE}.png`);
+    // With a signal of its own (review round 3, R3-6).
+    expect(download).toHaveBeenCalledWith(`${ORG}/${ENTITY}/${FILE}.png`, undefined, {
+      signal: expect.any(AbortSignal),
+    });
     expect((err as ServiceError).code).toBe('validation_error');
     expect(spy.remove).toHaveBeenCalledWith([`${ORG}/${ENTITY}/${FILE}.png`]);
     expect(spy.remove.mock.calls.flat(2)).not.toContain(`${ORG}/${ENTITY}/${FILE}-thumb.webp`);
