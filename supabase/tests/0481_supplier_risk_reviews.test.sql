@@ -89,7 +89,7 @@
 
 begin;
 
-select plan(200);
+select plan(201);
 
 set local timezone = 'UTC';
 
@@ -2708,14 +2708,22 @@ select is(
 select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb, null, 'more_information', %L)::text$$,
   :'orgA', :'supE2', pg_temp.answers('staff'), :'rOvr')) as fin_e2 \gset
 select pg_temp.ev_new() as ev_e2 \gset
+-- The same supplier finished again, with no override: version 2.
+select pg_temp.as_user(:'ownerA', format($$select public.supplier_risk_finalise(%L, %L, 'staff', %L::jsonb)::text$$,
+  :'orgA', :'supE2', pg_temp.answers('staff'))) as fin_e2_v2 \gset
+select pg_temp.ev_new() as ev_e2_v2 \gset
 select is(
   array[jsonb_array_length(:'ev_e2'::jsonb)::text, :'ev_e2'::jsonb -> 0 ->> 'event',
         (:'ev_e2'::jsonb -> 0 ->> 'review_id' = pg_temp.j(:'fin_e2') ->> 'review_id')::text,
-        :'ev_e2'::jsonb -> 0 ->> 'actor_user_id', :'ev_e2'::jsonb -> 0 ->> 'actor_name', (:'ev_e2'::jsonb -> 0 -> 'detail')::text],
+        :'ev_e2'::jsonb -> 0 ->> 'actor_user_id', :'ev_e2'::jsonb -> 0 ->> 'actor_name', (:'ev_e2'::jsonb -> 0 -> 'detail')::text,
+        jsonb_array_length(:'ev_e2_v2'::jsonb)::text, :'ev_e2_v2'::jsonb -> 0 ->> 'event',
+        (:'ev_e2_v2'::jsonb -> 0 ->> 'review_id' = pg_temp.j(:'fin_e2_v2') ->> 'review_id')::text,
+        (:'ev_e2_v2'::jsonb -> 0 -> 'detail')::text],
   array['1', 'result_overridden', 'true', :'ownerA', 'Made-up Owner A',
         jsonb_build_object('version', 1, 'rules_version', 1, 'computed_result', 'approve', 'chosen_result', 'more_information',
-                           'reason', :'rOvr')::text],
-  '0481/181: a finish with an override keeps one row instead: result_overridden, with what the rules gave, what was chosen and the reason as written');
+                           'reason', :'rOvr')::text,
+        '1', 'review_finished', 'true', jsonb_build_object('version', 2, 'result', 'approve', 'rules_version', 1)::text],
+  '0481/181: a finish with an override keeps one row instead: result_overridden, with what the rules gave, what was chosen and the reason as written; the next finish of that supplier, with no override, keeps review_finished with version 2');
 -- A draft save keeps none; its discard keeps one; a discard of nothing none.
 select pg_temp.as_user(:'adminA', format($$select public.supplier_risk_draft_save(%L, %L, 'staff', '{}')::text$$, :'orgA', :'supE1')) as draft_e1 \gset
 select pg_temp.ev_new() as ev_draft_e1 \gset
@@ -2935,11 +2943,14 @@ select is(
         pg_temp.try(format($$update public.supplier_risk_events set supplier_id = %L where id = %L$$, :'supE2', :'ev_fin_e1')),
         pg_temp.try(format($$update public.supplier_risk_events set organization_id = %L where id = %L$$, :'orgB', :'ev_fin_e1')),
         pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null, actor_name = 'Someone Else' where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null, detail = '{"version": 1, "result": "approve", "rules_version": 1}'
+                               where id = %L$$, :'ev_fin_e1')),
+        pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null, happened_at = happened_at - interval '1 day' where id = %L$$, :'ev_fin_e1')),
         pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null where id = %L$$, :'ev_leaver')),
         pg_temp.try(format($$update public.supplier_risk_events set actor_user_id = null where id = %L$$, :'ev_fin_e1')),
         pg_temp.try(format($$delete from public.supplier_risk_events where id = %L$$, :'ev_fin_e1')),
         pg_temp.try(format($$delete from public.supplier_risk_events where organization_id = %L$$, :'orgA'))],
-  array_fill('55000:supplier_risk_event_is_kept'::text, array[10]) || array['ok']
+  array_fill('55000:supplier_risk_event_is_kept'::text, array[12]) || array['ok']
   || array_fill('55000:supplier_risk_event_is_kept'::text, array[2]),
   '0481/194: no row of the history changes or goes, even for the table''s owner: not its detail, who, when, kind, review, supplier or organization; the one update allowed empties a live actor link and nothing else (what an account deletion does); no delete while the organization exists');
 select is(
@@ -3052,6 +3063,16 @@ select is(
   array['draft_discarded,review_finished', 'deleted', '0', '0', '8'],
   '0481/198: an organization''s deletion succeeds and takes its history with it, as it takes its reviews; another organization''s rows stay');
 
+-- The actor's name as plain text: a profile whose full name is only hidden
+-- characters (section 13's) is named by its email.
+select pg_temp.as_user(:'onlyHid', format($$select public.supplier_risk_draft_discard(%L, %L)::text$$, :'orgA', :'supV2')) as disc_v2 \gset
+select pg_temp.ev_new() as ev_disc_v2 \gset
+select is(
+  array[:'disc_v2', jsonb_array_length(:'ev_disc_v2'::jsonb)::text, :'ev_disc_v2'::jsonb -> 0 ->> 'event', :'ev_disc_v2'::jsonb -> 0 ->> 'actor_name',
+        :'ev_disc_v2'::jsonb -> 0 ->> 'actor_user_id'],
+  array['true', '1', 'draft_discarded', 'vr-only-hidden@test.local', :'onlyHid'],
+  '0481/199: the name kept beside the actor is plain text, as every name these tables keep: a profile whose full name is only hidden characters is named by its email');
+
 -- Across every row this file's writes kept.
 select is(
   (select count(*)::int from public.supplier_risk_events e
@@ -3074,7 +3095,7 @@ select is(
   + (select count(*)::int from public.supplier_risk_events e
       where e.event = 'draft_discarded' and exists (select 1 from public.supplier_risk_reviews r where r.id = e.review_id)),
   0,
-  '0481/199: across this file, every finish row matches its review (organization, supplier, version, rules version, the result or the override and its reason, the reviewer, the time it was finished) and no review has two; every item row names its item''s review and supplier; every discarded draft is gone');
+  '0481/200: across this file, every finish row matches its review (organization, supplier, version, rules version, the result or the override and its reason, the reviewer, the time it was finished) and no review has two; every item row names its item''s review and supplier; every discarded draft is gone');
 select is(
   array[(select count(*)::int from public.supplier_risk_events e
           where e.detail ?| array['answer', 'answers', 'note', 'notes', 'finding', 'findings', 'action', 'question_key', 'severity', 'items']
@@ -3082,7 +3103,7 @@ select is(
         (select count(distinct e.event)::int from public.supplier_risk_events e where e.actor_name <> 'Made-up Fixture'),
         (select (count(*) > 40)::int from public.supplier_risk_events e where e.actor_name <> 'Made-up Fixture')],
   array[0, 6, 1],
-  '0481/200: across this file, no row''s detail holds an answer, a note, a finding, an action or a question key; the functions wrote every kind');
+  '0481/201: across this file, no row''s detail holds an answer, a note, a finding, an action or a question key; the functions wrote every kind');
 
 select * from finish();
 rollback;
